@@ -565,6 +565,7 @@ void PearSynthesizeTapCGEvent(CGFloat nx, CGFloat ny) {
 // synthesis can be verified against a running game.
 __attribute__((constructor))
 static void PearTouchSynthesizerInit(void) {
+    PEAR_MODULE_GUARD();
     BOOL testTap = NSProcessInfo.processInfo.environment[@"PEAR_TEST_TAP"] != nil;
     BOOL dumpHID = NSProcessInfo.processInfo.environment[@"PEAR_DUMP_HIDEVENT"] != nil;
     if (!testTap && !dumpHID) return;

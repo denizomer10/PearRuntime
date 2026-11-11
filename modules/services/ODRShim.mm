@@ -354,6 +354,7 @@ static void PearInstallODRShim(void) {
 
 __attribute__((constructor))
 static void PearODRShimInit(void) {
+    PEAR_MODULE_GUARD();
     @autoreleasepool {
         PearInstallODRShim();
     }

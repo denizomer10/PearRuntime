@@ -110,6 +110,7 @@ static void PearRefreshPointerPreference(void) {
 
 __attribute__((constructor))
 static void PearPointerLockShimInit(void) {
+    PEAR_MODULE_GUARD();
     @autoreleasepool {
         if (NSProcessInfo.processInfo.environment[@"PEAR_ALLOW_POINTER_LOCK"].boolValue) return;
 

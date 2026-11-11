@@ -234,6 +234,7 @@ static void PearInstallWebInputShim(void) {
 
 __attribute__((constructor))
 static void PearWebInputShimInit(void) {
+    PEAR_MODULE_GUARD();
     @autoreleasepool {
         PearInstallWebInputShim();
     }

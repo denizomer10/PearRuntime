@@ -317,6 +317,7 @@ static void PearInstallNetworkShim(void) {
 
 __attribute__((constructor))
 static void PearNetworkShimInit(void) {
+    PEAR_MODULE_GUARD();
     if (getenv("PEAR_NO_NETWORK_SHIM")) return;
     @autoreleasepool {
         PearInstallNetworkShim();

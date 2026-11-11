@@ -767,6 +767,7 @@ static void PearScheduleConsentShim(void) {
 
 __attribute__((constructor))
 static void PearConsentShimInit(void) {
+    PEAR_MODULE_GUARD();
     @autoreleasepool {
         // Walking the IL2CPP class table is only safe for an app that actually
         // ships the consent module. Check the app's own binaries first so a

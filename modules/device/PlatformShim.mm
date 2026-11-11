@@ -372,6 +372,7 @@ static void PearInstallPlatformShims(void) {
 
 __attribute__((constructor))
 static void PearPlatformShimInit(void) {
+    PEAR_MODULE_GUARD();
     if (PearPlatformDisabled()) return;
     @autoreleasepool {
         PearInstallPlatformShims();

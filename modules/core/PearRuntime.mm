@@ -539,6 +539,47 @@ static void InstallHandlerChaining(void) {
 static NSMutableSet<GCController *> *gKnownControllers;
 static NSMutableDictionary<NSValue *, NSDate *> *gControllerConnectDates;
 
+// Controllers the application has already learned about, either from a
+// `+controllers`/`+current` query or from a connect notification. A controller
+// is only ever replayed to an observer that cannot have seen it yet: engines
+// such as Unreal and Unity enumerate the existing pads *and* observe connects,
+// and a duplicate connect makes them assign the same pad to a second player
+// slot, after which a single-player game ignores all of its input.
+static NSHashTable<GCController *> *gAppSeenControllers;
+static NSUInteger gRuntimeControllerQueryDepth = 0;  // main-thread only
+static CFAbsoluteTime gControllerBootstrapTime = 0;
+// Set once the app shows it drives controllers itself (observes connects,
+// installs element handlers or queries the controller list). Its own input
+// path then owns the pad, and the automatic pad→touch fallback stays off.
+static BOOL gAppHasNativeControllerSupport = NO;
+
+static NSArray<GCController *> *PearRuntimeControllers(void) {
+    gRuntimeControllerQueryDepth++;
+    NSArray<GCController *> *controllers = [GCController controllers];
+    gRuntimeControllerQueryDepth--;
+    return controllers ?: @[];
+}
+
+static void PearMarkNativeControllerSupport(const char *reason) {
+    if (gAppHasNativeControllerSupport) return;
+    gAppHasNativeControllerSupport = YES;
+    PearLog(@"[PearRuntime][input] app drives controllers natively (%s); pad->touch fallback off", reason);
+}
+
+static void PearMarkControllersSeen(NSArray<GCController *> *controllers) {
+    if (controllers.count == 0) return;
+    @synchronized (gKnownControllers) {
+        if (!gAppSeenControllers) gAppSeenControllers = [NSHashTable weakObjectsHashTable];
+        for (GCController *controller in controllers) [gAppSeenControllers addObject:controller];
+    }
+}
+
+static BOOL PearControllerSeenByApp(GCController *controller) {
+    @synchronized (gKnownControllers) {
+        return [gAppSeenControllers containsObject:controller];
+    }
+}
+
 // Some games only accept the controller families the vendor documents (for
 // example Xbox and DualShock on an iOS build). Normalize other controllers to
 // an Xbox identity on request so those games enable their controller path.
@@ -559,7 +600,13 @@ static void InstallControllerCompatibility(void) {
                     || [lower containsString:@"sony"]) {
                     return name;
                 }
-                PearLog(@"[PearRuntime][input] controller '%@' reported as Xbox Wireless Controller", name ?: @"?");
+                // Engines read vendorName every frame; log once per controller
+                // so the log file does not turn into per-frame disk I/O.
+                static const void *kLoggedKey = &kLoggedKey;
+                if (!objc_getAssociatedObject(self, kLoggedKey)) {
+                    objc_setAssociatedObject(self, kLoggedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    PearLog(@"[PearRuntime][input] controller '%@' reported as Xbox Wireless Controller", name ?: @"?");
+                }
                 return @"Xbox Wireless Controller";
             }));
         }
@@ -610,7 +657,13 @@ static void InstallIOSOnMacCompatibility(void) {
 // translation stops, so native controller games are not double-driven.
 typedef void (^PearGamepadChangedBlock)(GCExtendedGamepad *gamepad, GCControllerElement *element);
 static IMP gOriginalSetGamepadChanged = NULL;
-static PearGamepadChangedBlock gGameGamepadChanged = nil;
+// The game's own handler is stored per gamepad: a game that installs handlers
+// on several pads (or clears one on disconnect) must not lose the others.
+static const void *kPearGameGamepadHandlerKey = &kPearGameGamepadHandlerKey;
+static PearGamepadChangedBlock PearGameGamepadHandler(GCExtendedGamepad *gamepad) {
+    return gamepad ? objc_getAssociatedObject(gamepad, kPearGameGamepadHandlerKey) : nil;
+}
+static BOOL gForceControllerKeymap;
 static PearGamepadChangedBlock gCombinedGamepadChanged = nil;
 static BOOL gGamepadKeymapEnabled = NO;
 static BOOL gHasControllerBindings = NO;
@@ -680,9 +733,10 @@ static void StartControllerLookTimer(void) {
                                   dispatch_time(DISPATCH_TIME_NOW, interval),
                                   interval, interval / 4);
         dispatch_source_set_event_handler(gControllerLookTimer, ^{
-            if (!gGamepadKeymapEnabled || gGameGamepadChanged) return;
+            if (!gGamepadKeymapEnabled) return;
             GCExtendedGamepad *pad = gCurrentController.extendedGamepad;
-            if (!pad) return;
+            if (!pad || PearGameGamepadHandler(pad)) return;
+            if (gAppHasNativeControllerSupport && !gControllerLookBinding && !gForceControllerKeymap) return;
             // An explicit right-stick binding customizes the region and
             // sensitivity; without one, use the default right-hand region so
             // adding a single button binding does not disable the camera.
@@ -767,7 +821,13 @@ static void PadSetKey(GCKeyCode code, BOOL pressed, BOOL *state) {
 }
 
 static void TranslateGamepad(GCExtendedGamepad *gamepad) {
-    if (!gGamepadKeymapEnabled || gGameGamepadChanged) return;
+    if (!gGamepadKeymapEnabled || PearGameGamepadHandler(gamepad)) return;
+    // A game with its own controller path reads the pad directly (Unity and
+    // Unreal poll it). Synthesized touches on top of that make those games
+    // flip their input mode back to touchscreen on every frame, so the pad
+    // appears dead. Only explicit user bindings, or a forced keymap, still
+    // translate in that case.
+    if (gAppHasNativeControllerSupport && !gHasControllerBindings && !gForceControllerKeymap) return;
     if (gHasControllerBindings) {
         TranslateControllerBindings(gamepad);
         return;
@@ -795,7 +855,8 @@ static void PearSetGamepadChanged(id self, SEL _cmd, PearGamepadChangedBlock han
         ((void (*)(id, SEL, PearGamepadChangedBlock))gOriginalSetGamepadChanged)(self, _cmd, handler);
         return;
     }
-    gGameGamepadChanged = handler;
+    objc_setAssociatedObject(self, kPearGameGamepadHandlerKey, handler, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    if (handler) PearMarkNativeControllerSupport("gamepad valueChangedHandler");
     ((void (*)(id, SEL, PearGamepadChangedBlock))gOriginalSetGamepadChanged)(
         self, _cmd, gCombinedGamepadChanged
     );
@@ -817,7 +878,8 @@ static void PadAttach(GCController *controller) {
 
 static void InstallGamepadKeymapper(void) {
     NSString *setting = NSProcessInfo.processInfo.environment[@"PEAR_CONTROLLER_KEYMAP"];
-    gGamepadKeymapEnabled = gBindings.count > 0 && (!setting || setting.boolValue);
+    gForceControllerKeymap = [setting.lowercaseString isEqualToString:@"force"];
+    gGamepadKeymapEnabled = gBindings.count > 0 && (!setting || setting.boolValue || gForceControllerKeymap);
     gHasControllerBindings = NO;
     gControllerJoystick = nil;
     gControllerLookBinding = nil;
@@ -839,7 +901,7 @@ static void InstallGamepadKeymapper(void) {
     }
     if (!gCombinedGamepadChanged) {
         gCombinedGamepadChanged = ^(GCExtendedGamepad *gamepad, GCControllerElement *element) {
-            PearGamepadChangedBlock game = gGameGamepadChanged;
+            PearGamepadChangedBlock game = PearGameGamepadHandler(gamepad);
             if (game) {
                 game(gamepad, element);
                 return;
@@ -853,12 +915,99 @@ static void InstallGamepadKeymapper(void) {
         gOriginalSetGamepadChanged = method_setImplementation(setter, (IMP)PearSetGamepadChanged);
     }
     StartControllerLookTimer();
-    for (GCController *controller in [GCController controllers]) {
+    NSArray<GCController *> *attached = PearRuntimeControllers();
+    for (GCController *controller in attached) {
         PadAttach(controller);
     }
     PearLog(@"[PearRuntime][input] gamepad keymapper installed (controllers=%lu, custom=%d, look=%d)",
-            (unsigned long)[GCController controllers].count, gHasControllerBindings,
+            (unsigned long)attached.count, gHasControllerBindings,
             gControllerLookBinding != nil);
+}
+
+// Targeted connect replay. A game that registers its connect observer after
+// the pad was discovered (and never queried the list) would otherwise never
+// learn about it. Deliver the missed connect to that one observer only, and
+// only for pads the app has not seen, so no observer ever gets a duplicate.
+static NSUInteger gAppConnectObservers = 0;
+static BOOL gRuntimeRegisteringObservers = NO;
+static BOOL gTargetedReplayEnabled = YES;
+
+static NSArray<GCController *> *PearControllersUnseenByApp(void) {
+    NSMutableArray<GCController *> *unseen = [NSMutableArray array];
+    @synchronized (gKnownControllers) {
+        for (GCController *controller in gKnownControllers) {
+            if (![gAppSeenControllers containsObject:controller]) [unseen addObject:controller];
+        }
+    }
+    return unseen;
+}
+
+static void PearNoteAppConnectObserver(void (^deliver)(NSNotification *)) {
+    gAppConnectObservers++;
+    PearMarkNativeControllerSupport("observes controller connects");
+    if (!gTargetedReplayEnabled) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSArray<GCController *> *missed = PearControllersUnseenByApp();
+        if (missed.count == 0) return;
+        PearMarkControllersSeen(missed);
+        for (GCController *controller in missed) {
+            PearLog(@"[PearRuntime][input] delivering missed controller connect to late observer: %@",
+                    controller.vendorName ?: @"?");
+            deliver([NSNotification notificationWithName:GCControllerDidConnectNotification
+                                                  object:controller]);
+        }
+    });
+}
+
+static IMP gOriginalAddObserverSelector = NULL;
+static IMP gOriginalAddObserverBlock = NULL;
+
+static void PearAddObserverSelector(id self, SEL _cmd, id observer, SEL selector,
+                                    NSNotificationName name, id object) {
+    ((void (*)(id, SEL, id, SEL, NSNotificationName, id))gOriginalAddObserverSelector)(
+        self, _cmd, observer, selector, name, object);
+    if (gRuntimeRegisteringObservers || object != nil || observer == nil
+        || ![name isEqualToString:GCControllerDidConnectNotification]) return;
+    __weak id weakObserver = observer;
+    PearNoteAppConnectObserver(^(NSNotification *note) {
+        id strongObserver = weakObserver;
+        if (strongObserver && [strongObserver respondsToSelector:selector]) {
+            ((void (*)(id, SEL, NSNotification *))objc_msgSend)(strongObserver, selector, note);
+        }
+    });
+}
+
+static id PearAddObserverBlock(id self, SEL _cmd, NSNotificationName name, id object,
+                               NSOperationQueue *queue, void (^block)(NSNotification *)) {
+    id token = ((id (*)(id, SEL, NSNotificationName, id, NSOperationQueue *, void (^)(NSNotification *)))
+                gOriginalAddObserverBlock)(self, _cmd, name, object, queue, block);
+    if (gRuntimeRegisteringObservers || object != nil || block == nil
+        || ![name isEqualToString:GCControllerDidConnectNotification]) return token;
+    void (^copied)(NSNotification *) = [block copy];
+    __weak id weakToken = token;
+    PearNoteAppConnectObserver(^(NSNotification *note) {
+        if (!weakToken) return;  // the app already removed its observer
+        if (queue && queue != NSOperationQueue.currentQueue) {
+            [queue addOperationWithBlock:^{ copied(note); }];
+        } else {
+            copied(note);
+        }
+    });
+    return token;
+}
+
+static void InstallControllerObserverTracking(void) {
+    NSString *replay = NSProcessInfo.processInfo.environment[@"PEAR_CONTROLLER_REPLAY"];
+    gTargetedReplayEnabled = !replay || replay.boolValue;
+    Class cls = NSNotificationCenter.class;
+    Method bySelector = class_getInstanceMethod(cls, @selector(addObserver:selector:name:object:));
+    if (bySelector) {
+        gOriginalAddObserverSelector = method_setImplementation(bySelector, (IMP)PearAddObserverSelector);
+    }
+    Method byBlock = class_getInstanceMethod(cls, @selector(addObserverForName:object:queue:usingBlock:));
+    if (byBlock) {
+        gOriginalAddObserverBlock = method_setImplementation(byBlock, (IMP)PearAddObserverBlock);
+    }
 }
 
 static void InstallGameControllerBridge(void) {
@@ -866,7 +1015,10 @@ static void InstallGameControllerBridge(void) {
     dispatch_once(&once, ^{
         gKnownControllers = [NSMutableSet new];
         gControllerConnectDates = [NSMutableDictionary new];
+        gControllerBootstrapTime = CFAbsoluteTimeGetCurrent();
         NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+        InstallControllerObserverTracking();
+        gRuntimeRegisteringObservers = YES;
 
         [center addObserverForName:GCControllerDidConnectNotification object:nil
                              queue:NSOperationQueue.mainQueue
@@ -877,6 +1029,8 @@ static void InstallGameControllerBridge(void) {
                 [gKnownControllers addObject:controller];
                 gControllerConnectDates[[NSValue valueWithNonretainedObject:controller]] = [NSDate date];
             }
+            // The app's own observers receive this real notification as well.
+            if (gAppConnectObservers > 0) PearMarkControllersSeen(@[controller]);
             PearLog(@"[PearRuntime][input] game controller connected: %@ extended=%d micro=%d",
                     controller.vendorName ?: @"?", controller.extendedGamepad != nil,
                     controller.microGamepad != nil);
@@ -896,7 +1050,8 @@ static void InstallGameControllerBridge(void) {
             if (gCurrentController == controller) gCurrentController = nil;
         }];
 
-        NSArray<GCController *> *existing = [GCController controllers];
+        gRuntimeRegisteringObservers = NO;
+        NSArray<GCController *> *existing = PearRuntimeControllers();
         @synchronized (gKnownControllers) {
             for (GCController *controller in existing) {
                 [gKnownControllers addObject:controller];
@@ -931,29 +1086,47 @@ static void InstallGameControllerBridge(void) {
 
         // GameController discovers pads asynchronously, often about a second
         // after first access. A game that snapshots `controllers` during launch
-        // can conclude that no pad exists and never look again. The first empty
-        // query (after bootstrap started discovery) pumps the run loop for a
-        // bounded time so the result is stable. Apps without pads only pay this
-        // when they ask for controllers.
-        if (!NSProcessInfo.processInfo.environment[@"PEAR_CONTROLLER_NATIVE"].boolValue) {
+        // can conclude that no pad exists and never look again. During the
+        // discovery window only, the first empty main-thread query pumps the
+        // run loop until discovery settles. Later queries never block: games
+        // that poll the list every frame must not stall when no pad is
+        // connected. Every app query also records which pads the app knows.
+        {
             Method queryMethod = class_getClassMethod(GCController.class, @selector(controllers));
             if (queryMethod) {
                 IMP originalQuery = method_getImplementation(queryMethod);
-                __block BOOL waiting = NO;
-                method_setImplementation(queryMethod, imp_implementationWithBlock(^NSArray *(id cls, SEL cmd) {
-                    NSArray *result = ((NSArray *(*)(id, SEL))originalQuery)(cls, cmd);
-                    if (result.count > 0 || waiting) return result;
-                    waiting = YES;
-                    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:1.2];
-                    while (result.count == 0 && deadline.timeIntervalSinceNow > 0) {
-                        [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode
-                                               beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
-                        result = ((NSArray *(*)(id, SEL))originalQuery)(cls, cmd);
+                BOOL allowWait = !NSProcessInfo.processInfo.environment[@"PEAR_CONTROLLER_NATIVE"].boolValue;
+                __block BOOL waited = NO;
+                method_setImplementation(queryMethod, imp_implementationWithBlock(^NSArray *(id cls) {
+                    NSArray *result = ((NSArray *(*)(id, SEL))originalQuery)(cls, @selector(controllers));
+                    BOOL internal = NSThread.isMainThread && gRuntimeControllerQueryDepth > 0;
+                    if (internal) return result;
+                    if (result.count == 0 && allowWait && !waited && NSThread.isMainThread) {
+                        waited = YES;
+                        CFAbsoluteTime windowEnd = gControllerBootstrapTime + 1.5;
+                        while (result.count == 0 && CFAbsoluteTimeGetCurrent() < windowEnd) {
+                            [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode
+                                                   beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+                            result = ((NSArray *(*)(id, SEL))originalQuery)(cls, @selector(controllers));
+                        }
+                        PearLog(@"[PearRuntime][input] first controller query settled -> %lu",
+                                (unsigned long)result.count);
                     }
-                    waiting = NO;
-                    PearLog(@"[PearRuntime][input] controller query waited -> %lu",
-                            (unsigned long)result.count);
+                    PearMarkNativeControllerSupport("queried controllers");
+                    PearMarkControllersSeen(result);
                     return result;
+                }));
+            }
+            Method currentMethod = class_getClassMethod(GCController.class, NSSelectorFromString(@"current"));
+            if (currentMethod) {
+                IMP originalCurrent = method_getImplementation(currentMethod);
+                method_setImplementation(currentMethod, imp_implementationWithBlock(^GCController *(id cls) {
+                    GCController *current = ((GCController *(*)(id, SEL))originalCurrent)(cls, NSSelectorFromString(@"current"));
+                    if (current && !(NSThread.isMainThread && gRuntimeControllerQueryDepth > 0)) {
+                        PearMarkNativeControllerSupport("queried current controller");
+                        PearMarkControllersSeen(@[current]);
+                    }
+                    return current;
                 }));
             }
         }
@@ -983,16 +1156,14 @@ static void InstallGameControllerBridge(void) {
         }
 
         NSString *controllerReplay = NSProcessInfo.processInfo.environment[@"PEAR_CONTROLLER_REPLAY"];
-        if (!controllerReplay || controllerReplay.boolValue) {
-            // One replay after the app's own observers are installed. Repeating
-            // it would make handlers that are not idempotent register twice.
+        if ([controllerReplay.lowercaseString isEqualToString:@"broadcast"]) {
+            // Legacy behaviour, opt-in only: re-post connects to everyone.
+            // This duplicates the connect for engines that enumerate pads at
+            // launch and moves the pad to a second player slot.
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
-                NSArray<GCController *> *controllers = [GCController controllers];
-                PearLog(@"[PearRuntime][input] replay tick: %lu controller(s)",
-                        (unsigned long)controllers.count);
-                for (GCController *controller in controllers) {
-                    PearLog(@"[PearRuntime][input] replaying controller connect: %@",
+                for (GCController *controller in PearRuntimeControllers()) {
+                    PearLog(@"[PearRuntime][input] broadcast replay of controller connect: %@",
                             controller.vendorName ?: @"?");
                     [NSNotificationCenter.defaultCenter
                         postNotificationName:GCControllerDidConnectNotification object:controller];
@@ -1414,9 +1585,13 @@ static void WatchKeymap(NSString *path) {
         unsetenv("PEAR_LAUNCHER_INJECTION");
     }
 
-    PearInstallLegacyWindowFix();
-    if (!PearVirtualGamepadEnabled()) PearInstallMouseToTouchFallback();
-    PearInstallFPSHUD();
+    const BOOL inputModule = PearRuntimeModuleEnabled("input");
+    const BOOL graphicsModule = PearRuntimeModuleEnabled("graphics");
+    PearLog(@"[PearRuntime] version %s modules=%s", PearRuntimeVersion(), PearRuntimeEnabledModules());
+
+    if (graphicsModule) PearInstallLegacyWindowFix();
+    if (inputModule && !PearVirtualGamepadEnabled()) PearInstallMouseToTouchFallback();
+    if (graphicsModule) PearInstallFPSHUD();
     ActivateMainWindow();
 
     // Skip this bootstrap for input debugging. Other shims have independent
@@ -1427,6 +1602,11 @@ static void WatchKeymap(NSString *path) {
     }
 
     InstallIOSOnMacCompatibility();
+
+    if (!inputModule) {
+        PearLog(@"[PearRuntime] input module disabled; keymapper and controller bridge off");
+        return;
+    }
 
     NSString *keymapPath = PearVirtualGamepadEnabled() ? nil : NSProcessInfo.processInfo.environment[@"PEAR_KEYMAP"];
     ApplyKeymap(keymapPath);

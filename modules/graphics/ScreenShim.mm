@@ -218,6 +218,7 @@ static void PearInstallScreenShim(void) {
 
 __attribute__((constructor))
 static void PearScreenShimInit(void) {
+    PEAR_MODULE_GUARD();
     @autoreleasepool {
         PearInstallScreenShim();
     }

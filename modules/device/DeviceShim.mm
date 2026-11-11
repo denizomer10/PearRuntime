@@ -987,6 +987,7 @@ static void PearInstallAssetIdiomFallback(void) {
 
 __attribute__((constructor))
 static void PearDeviceShimInit(void) {
+    PEAR_MODULE_GUARD();
     if (PearDeviceShimDisabled()) return;
     @autoreleasepool {
         PearInstallDeviceProperties();

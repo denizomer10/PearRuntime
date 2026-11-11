@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds libPearRuntime.dylib for the Catalyst target (arm64).
+# Builds PearRuntime (libPearRuntime.dylib) for the Catalyst target (arm64).
 #
 # The dylib must match the host process, which is an iOS binary, so it is
 # compiled for the Catalyst target. The iOS frameworks ship inside the macOS
@@ -7,7 +7,7 @@
 # as well as with a full toolchain.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")" && pwd)"
 OUT_DIR="${PEAR_BUILD_DIR:-$ROOT/build}"
 case "$OUT_DIR" in /*) ;; *) OUT_DIR="$ROOT/$OUT_DIR" ;; esac
 OUT="$OUT_DIR/libPearRuntime.dylib"
@@ -26,118 +26,75 @@ fi
 
 CXX="$(xcrun --find clang++)"
 mkdir -p "$OUT_DIR"
+OBJ_DIR="$OUT_DIR/PearRuntimeObjects"
+rm -rf "$OBJ_DIR"
+mkdir -p "$OBJ_DIR"
+VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION" 2>/dev/null || echo dev)"
+
+# Apple silicon tuning. `apple-m1` is the baseline every Apple silicon Mac
+# implements (M1 through current M-series and A-series Macs), so the code is
+# scheduled for Apple's cores without emitting instructions a newer chip
+# alone has. PEAR_RUNTIME_CPU overrides it for experiments.
+CPU="${PEAR_RUNTIME_CPU:-apple-m1}"
+OPT="${PEAR_RUNTIME_OPT:--O2}"
+TARGET="arm64-apple-ios15.0-macabi"
+COMMON=(-target "$TARGET" -isysroot "$SDK" -iframework "$IOS_FRAMEWORKS"
+        -I"$ROOT/include" -std=c++17 -fobjc-arc "$OPT" -mcpu="$CPU"
+        -fno-omit-frame-pointer -DPEAR_RUNTIME_VERSION="\"$VERSION\"")
+
+# Module layout: modules/<module>/*.mm. Every file is compiled with its module
+# name so its initializer can be switched off at launch (PEAR_RUNTIME_DISABLE).
+MODULES=(core input graphics device storage services)
 
 # Emit a compilation database so editors/clangd resolve UIKit for these files.
-# The iOS frameworks live under iOSSupport inside the macOS SDK, so the same
-# -iframework the build uses must be present here or clangd reports a false
-# "'UIKit/UIKit.h' file not found".
-cat > "$ROOT/runtime/compile_commands.json" <<JSON
-[
-  {
-    "directory": "$ROOT/runtime",
-    "file": "$ROOT/runtime/PearRuntime.mm",
-    "command": "$CXX -target arm64-apple-ios15.0-macabi -isysroot $SDK -iframework $SDK/System/iOSSupport/System/Library/Frameworks -std=c++17 -fobjc-arc -I$ROOT/runtime/include -include PearRuntime.h -c PearRuntime.mm"
-  },
-  {
-    "directory": "$ROOT/runtime",
-    "file": "$ROOT/runtime/TouchSynthesizer.mm",
-    "command": "$CXX -target arm64-apple-ios15.0-macabi -isysroot $SDK -iframework $SDK/System/iOSSupport/System/Library/Frameworks -std=c++17 -fobjc-arc -I$ROOT/runtime/include -include PearRuntime.h -c TouchSynthesizer.mm"
-  },
-  {
-    "directory": "$ROOT/runtime",
-    "file": "$ROOT/runtime/PointerLockShim.mm",
-    "command": "$CXX -target arm64-apple-ios15.0-macabi -isysroot $SDK -iframework $SDK/System/iOSSupport/System/Library/Frameworks -std=c++17 -fobjc-arc -I$ROOT/runtime/include -include PearRuntime.h -c PointerLockShim.mm"
-  },
-  {
-    "directory": "$ROOT/runtime",
-    "file": "$ROOT/runtime/MouseTouchShim.mm",
-    "command": "$CXX -target arm64-apple-ios15.0-macabi -isysroot $SDK -iframework $SDK/System/iOSSupport/System/Library/Frameworks -std=c++17 -fobjc-arc -I$ROOT/runtime/include -include PearRuntime.h -c MouseTouchShim.mm"
-  },
-  {
-    "directory": "$ROOT/runtime",
-    "file": "$ROOT/runtime/VirtualGamepadShim.mm",
-    "command": "$CXX -target arm64-apple-ios15.0-macabi -isysroot $SDK -iframework $SDK/System/iOSSupport/System/Library/Frameworks -std=c++17 -fobjc-arc -I$ROOT/runtime/include -include PearRuntime.h -c VirtualGamepadShim.mm"
-  },
-  {
-    "directory": "$ROOT/runtime",
-    "file": "$ROOT/runtime/LegacyWindowShim.mm",
-    "command": "$CXX -target arm64-apple-ios15.0-macabi -isysroot $SDK -iframework $SDK/System/iOSSupport/System/Library/Frameworks -std=c++17 -fobjc-arc -I$ROOT/runtime/include -include PearRuntime.h -c LegacyWindowShim.mm"
-  },
-  {
-    "directory": "$ROOT/runtime",
-    "file": "$ROOT/runtime/LegacyDirectTouch.mm",
-    "command": "$CXX -target arm64-apple-ios15.0-macabi -isysroot $SDK -iframework $SDK/System/iOSSupport/System/Library/Frameworks -std=c++17 -fobjc-arc -I$ROOT/runtime/include -include PearRuntime.h -c LegacyDirectTouch.mm"
-  },
-  {
-    "directory": "$ROOT/runtime",
-    "file": "$ROOT/runtime/BeepShim.mm",
-    "command": "$CXX -target arm64-apple-ios15.0-macabi -isysroot $SDK -iframework $SDK/System/iOSSupport/System/Library/Frameworks -std=c++17 -fobjc-arc -I$ROOT/runtime/include -include PearRuntime.h -c BeepShim.mm"
-  },
-  {
-    "directory": "$ROOT/runtime",
-    "file": "$ROOT/runtime/ODRShim.mm",
-    "command": "$CXX -target arm64-apple-ios15.0-macabi -isysroot $SDK -iframework $SDK/System/iOSSupport/System/Library/Frameworks -std=c++17 -fobjc-arc -I$ROOT/runtime/include -include PearRuntime.h -c ODRShim.mm"
-  },
-  {
-    "directory": "$ROOT/runtime",
-    "file": "$ROOT/runtime/ServicesShim.mm",
-    "command": "$CXX -target arm64-apple-ios15.0-macabi -isysroot $SDK -iframework $SDK/System/iOSSupport/System/Library/Frameworks -std=c++17 -fobjc-arc -I$ROOT/runtime/include -include PearRuntime.h -c ServicesShim.mm"
-  },
-  {
-    "directory": "$ROOT/runtime",
-    "file": "$ROOT/runtime/PlatformShim.mm",
-    "command": "$CXX -target arm64-apple-ios15.0-macabi -isysroot $SDK -iframework $SDK/System/iOSSupport/System/Library/Frameworks -std=c++17 -fobjc-arc -I$ROOT/runtime/include -include PearRuntime.h -c PlatformShim.mm"
-  },
-  {
-    "directory": "$ROOT/runtime",
-    "file": "$ROOT/runtime/ConsentShim.mm",
-    "command": "$CXX -target arm64-apple-ios15.0-macabi -isysroot $SDK -iframework $SDK/System/iOSSupport/System/Library/Frameworks -std=c++17 -fobjc-arc -I$ROOT/runtime/include -include PearRuntime.h -c ConsentShim.mm"
-  },
-  {
-    "directory": "$ROOT/runtime",
-    "file": "$ROOT/runtime/DeviceProfile.mm",
-    "command": "$CXX -x c++ -target arm64-apple-ios15.0-macabi -isysroot $SDK -std=c++17 -I$ROOT/runtime/include -c DeviceProfile.mm"
-  },
-  {
-    "directory": "$ROOT/runtime",
-    "file": "$ROOT/runtime/NetworkShim.mm",
-    "command": "$CXX -target arm64-apple-ios15.0-macabi -isysroot $SDK -iframework $SDK/System/iOSSupport/System/Library/Frameworks -std=c++17 -fobjc-arc -I$ROOT/runtime/include -include PearRuntime.h -c NetworkShim.mm"
-  },
-  {
-    "directory": "$ROOT/runtime",
-    "file": "$ROOT/runtime/TrackingShim.mm",
-    "command": "$CXX -target arm64-apple-ios15.0-macabi -isysroot $SDK -iframework $SDK/System/iOSSupport/System/Library/Frameworks -std=c++17 -fobjc-arc -I$ROOT/runtime/include -include PearRuntime.h -c TrackingShim.mm"
-  },
-  {
-    "directory": "$ROOT/runtime",
-    "file": "$ROOT/runtime/SandboxShim.mm",
-    "command": "$CXX -target arm64-apple-ios15.0-macabi -isysroot $SDK -iframework $SDK/System/iOSSupport/System/Library/Frameworks -std=c++17 -fobjc-arc -I$ROOT/runtime/include -include PearRuntime.h -c SandboxShim.mm"
-  },
-  {
-    "directory": "$ROOT/runtime/include",
-    "file": "$ROOT/runtime/include/PearRuntime.h",
-    "command": "$CXX -x objective-c++-header -target arm64-apple-ios15.0-macabi -isysroot $SDK -iframework $SDK/System/iOSSupport/System/Library/Frameworks -fobjc-arc -I$ROOT/runtime/include -fsyntax-only PearRuntime.h"
-  }
-]
-JSON
+{
+  echo "["
+  first=1
+  for module in "${MODULES[@]}"; do
+    for source in "$ROOT/modules/$module"/*.mm; do
+      [[ "$(basename "$source")" == DeviceProfile.mm ]] && continue
+      [[ $first -eq 1 ]] || echo ","
+      first=0
+      printf '  {"directory": "%s", "file": "%s", "command": "%s %s -DPEAR_RUNTIME_MODULE=\\"%s\\" -include PearRuntime.h -c %s"}' \
+        "$ROOT" "$source" "$CXX" "${COMMON[*]//\"/\\\"}" "$module" "$source"
+    done
+  done
+  echo
+  echo "]"
+} > "$ROOT/compile_commands.json"
 
 # Do not force-include PearRuntime.h into the early device snapshot. Compiling
 # it as plain C++ also keeps ObjC/Foundation initialization out of this object.
 xcrun --sdk macosx clang++ \
-  -x c++ -target arm64-apple-ios15.0-macabi -isysroot "$SDK" \
-  -I"$ROOT/runtime/include" -std=c++17 -c "$ROOT/runtime/DeviceProfile.mm" \
+  -x c++ -target "$TARGET" -isysroot "$SDK" "$OPT" -mcpu="$CPU" \
+  -I"$ROOT/include" -std=c++17 -c "$ROOT/modules/device/DeviceProfile.mm" \
   -o "$DEVICE_PROFILE"
 
-echo ">> Building $OUT (Mac Catalyst)"
-xcrun --sdk macosx clang++ \
-  -target arm64-apple-ios15.0-macabi \
-  -isysroot "$SDK" \
-  -iframework "$SDK/System/iOSSupport/System/Library/Frameworks" \
-  -I"$ROOT/runtime/include" \
-  -include PearRuntime.h \
-  -std=c++17 \
+echo ">> Compiling PearRuntime $VERSION modules (${MODULES[*]}) for $CPU"
+JOBS="$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || sysctl -n hw.ncpu)"
+pids=()
+objects=()
+for module in "${MODULES[@]}"; do
+  for source in "$ROOT/modules/$module"/*.mm; do
+    [[ "$(basename "$source")" == DeviceProfile.mm ]] && continue
+    object="$OBJ_DIR/$module-$(basename "${source%.mm}").o"
+    objects+=("$object")
+    "$CXX" "${COMMON[@]}" -DPEAR_RUNTIME_MODULE="\"$module\"" -include PearRuntime.h \
+      -c "$source" -o "$object" &
+    pids+=($!)
+    if (( ${#pids[@]} >= JOBS )); then
+      wait "${pids[0]}"
+      pids=("${pids[@]:1}")
+    fi
+  done
+done
+for pid in "${pids[@]}"; do wait "$pid"; done
+
+echo ">> Linking $OUT (Mac Catalyst)"
+"$CXX" -target "$TARGET" -isysroot "$SDK" -iframework "$IOS_FRAMEWORKS" \
   -dynamiclib \
   -Wl,-undefined,dynamic_lookup \
+  -Wl,-dead_strip \
   -fobjc-arc \
   -framework Foundation \
   -framework UIKit \
@@ -149,35 +106,9 @@ xcrun --sdk macosx clang++ \
   -framework AppKit \
   -framework AudioToolbox \
   -install_name @rpath/libPearRuntime.dylib \
+  -current_version "${VERSION%%-*}" \
   -o "$OUT" \
-  "$ROOT/runtime/PearRuntime.mm" \
-  "$ROOT/runtime/KeychainShim.mm" \
-  "$ROOT/runtime/CloudShim.mm" \
-  "$ROOT/runtime/CredentialShim.mm" \
-  "$ROOT/runtime/DeviceShim.mm" \
-  "$DEVICE_PROFILE" \
-  "$ROOT/runtime/ScreenShim.mm" \
-  "$ROOT/runtime/PathShim.mm" \
-  "$ROOT/runtime/MetalLayerShim.mm" \
-  "$ROOT/runtime/TouchSynthesizer.mm" \
-  "$ROOT/runtime/PointerLockShim.mm" \
-  "$ROOT/runtime/MouseTouchShim.mm" \
-  "$ROOT/runtime/LegacyWindowShim.mm" \
-  "$ROOT/runtime/LegacyDirectTouch.mm" \
-  "$ROOT/runtime/VirtualGamepadShim.mm" \
-  "$ROOT/runtime/BeepShim.mm" \
-  "$ROOT/runtime/ODRShim.mm" \
-  "$ROOT/runtime/ServicesShim.mm" \
-  "$ROOT/runtime/PlatformShim.mm" \
-  "$ROOT/runtime/ConsentShim.mm" \
-  "$ROOT/runtime/NetworkShim.mm" \
-  "$ROOT/runtime/TrackingShim.mm" \
-  "$ROOT/runtime/SandboxShim.mm" \
-  "$ROOT/runtime/GLShim.mm" \
-  "$ROOT/runtime/FPSHUD.mm" \
-  "$ROOT/runtime/WebInputShim.mm" \
-  "$ROOT/runtime/FoundationShim.mm" \
-  "$ROOT/runtime/HostService.mm"
+  "${objects[@]}" "$DEVICE_PROFILE"
 
 echo ">> Done: $OUT"
 file "$OUT"
@@ -193,18 +124,18 @@ xcrun --sdk macosx clang++ \
   -Wl,-reexport_library,"$SDK/usr/lib/libc++.1.tbd" \
   -install_name @rpath/libcxxcompat.dylib \
   -o "$CXX_COMPAT" \
-  "$ROOT/runtime/cxxcompat.cpp"
+  "$ROOT/compat/cxxcompat.cpp"
 file "$CXX_COMPAT"
 
 # Some Swift SDKs link against the UIKit Swift overlay, which the Mac Catalyst
 # host runtime does not ship. Build the small source-built overlay used by the
-# installer. It contains only public API bridges from runtime/swift/.
+# installer. It contains only public API bridges from compat/swift/.
 echo ">> Building $SWIFT_OVERLAY (Swift UIKit compatibility)"
 CLANG_TARGET="arm64-apple-ios15.0-macabi"
 CLANG="$(xcrun --find clang)"
 SWIFTC="$(xcrun --find swiftc)"
 "$CLANG" -c -target "$CLANG_TARGET" -isysroot "$SDK" \
-  "$ROOT/runtime/swift/PearSwiftUIKitSupport.c" \
+  "$ROOT/compat/swift/PearSwiftUIKitSupport.c" \
   -o "$OUT_DIR/PearSwiftUIKitSupport.o"
 # The numeric raw-representable ABI must live in the `UIKit` module, not just
 # in this dylib. Compile it as its own module and alias the system headers so
@@ -212,12 +143,12 @@ SWIFTC="$(xcrun --find swiftc)"
 "$SWIFTC" -target "$CLANG_TARGET" -sdk "$SDK" -F "$IOS_FRAMEWORKS" \
   -parse-as-library -emit-object -module-name PearSwiftUIKit \
   -o "$OUT_DIR/PearSwiftUIKit.o" \
-  "$ROOT/runtime/swift/PearSwiftUIKit.swift"
+  "$ROOT/compat/swift/PearSwiftUIKit.swift"
 "$SWIFTC" -target "$CLANG_TARGET" -sdk "$SDK" -F "$IOS_FRAMEWORKS" \
   -parse-as-library -emit-object -module-name UIKit \
   -module-alias AppleUIKit=UIKit \
   -o "$OUT_DIR/PearUIKitNumeric.o" \
-  "$ROOT/runtime/swift/PearUIKitNumeric.swift"
+  "$ROOT/compat/swift/PearUIKitNumeric.swift"
 "$SWIFTC" -target "$CLANG_TARGET" -sdk "$SDK" -F "$IOS_FRAMEWORKS" \
   -parse-as-library -emit-library \
   -Xlinker -install_name -Xlinker @rpath/libswiftUIKit.dylib \
@@ -242,7 +173,7 @@ mkdir -p "$MARKETPLACE/Versions/A/Resources"
   -Xlinker -install_name -Xlinker @rpath/MarketplaceKit.framework/MarketplaceKit \
   -Xlinker -undefined -Xlinker dynamic_lookup \
   -o "$MARKETPLACE/Versions/A/MarketplaceKit" \
-  "$ROOT/runtime/swift/MarketplaceKit.swift"
+  "$ROOT/compat/swift/MarketplaceKit.swift"
 ln -s A "$MARKETPLACE/Versions/Current"
 ln -s Versions/Current/MarketplaceKit "$MARKETPLACE/MarketplaceKit"
 ln -s Versions/Current/Resources "$MARKETPLACE/Resources"

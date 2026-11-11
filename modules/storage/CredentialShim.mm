@@ -120,6 +120,7 @@ static void PearInstallCredentialGuard(void) {
 
 __attribute__((constructor))
 static void PearCredentialShimInit(void) {
+    PEAR_MODULE_GUARD();
     if (getenv("PEAR_NO_CREDENTIAL_SHIM")) return;
     @autoreleasepool {
         PearInstallCredentialGuard();

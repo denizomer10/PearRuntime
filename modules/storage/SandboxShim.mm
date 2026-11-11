@@ -49,6 +49,7 @@ static BOOL PearTraceEnabled(void) { return gTraceEnabled == 1; }
 
 // Reads the switch before getenv() is interposed below.
 __attribute__((constructor)) static void PearPathTraceInit(void) {
+    PEAR_MODULE_GUARD();
     gTraceEnabled = getenv("PEAR_DEBUG_PATHS") != NULL ? 1 : 0;
 }
 
@@ -166,6 +167,7 @@ static void PearApplyIOSSandbox(void) {
 
 __attribute__((constructor))
 static void PearSandboxShimInit(void) {
+    PEAR_MODULE_GUARD();
     @autoreleasepool {
         PearApplyIOSSandbox();
     }

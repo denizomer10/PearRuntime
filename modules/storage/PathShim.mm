@@ -252,6 +252,7 @@ static NSString *PearHomeDirectory(void) {
 
 __attribute__((constructor))
 static void PearPathShimInit(void) {
+    PEAR_MODULE_GUARD();
     @autoreleasepool {
         if (!PearShimRoot()) return;
         PearInstallFileManagerShim();

@@ -593,6 +593,7 @@ static void PearInstallLegacyTouchLogging(void) {
 
 __attribute__((constructor))
 static void PearGLShimInit(void) {
+    PEAR_MODULE_GUARD();
     // The OpenGLES framework (and EAGLContext) loads with the app, so retry.
     for (int i = 0; i < 40; i++) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * 0.5 * NSEC_PER_SEC)),

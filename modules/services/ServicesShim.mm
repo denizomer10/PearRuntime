@@ -892,6 +892,7 @@ static void PearInstallBackgroundTasks(void) {
 
 __attribute__((constructor))
 static void PearServicesShimInit(void) {
+    PEAR_MODULE_GUARD();
     if (PearServicesDisabled()) return;
     @autoreleasepool {
         PearInstallAudioSession();

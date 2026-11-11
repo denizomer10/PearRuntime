@@ -70,6 +70,7 @@ static void PearSilenceSystemBeeps(void) {
 
 __attribute__((constructor))
 static void PearBeepShimInit(void) {
+    PEAR_MODULE_GUARD();
     @autoreleasepool {
         PearSilenceSystemBeeps();
     }

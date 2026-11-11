@@ -319,6 +319,7 @@ static BOOL PearInstallNextDrawableFix(void) {
 
 __attribute__((constructor))
 static void PearMetalLayerShimInit(void) {
+    PEAR_MODULE_GUARD();
     if (NSProcessInfo.processInfo.environment[@"PEAR_NO_METAL_FIX"]) return;
     PearInstallTextureGuard(MTLCreateSystemDefaultDevice());
     if (!PearInstallNextDrawableFix()) {

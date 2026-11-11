@@ -80,6 +80,7 @@ static void PearInstallTrackingShim(void) {
 
 __attribute__((constructor))
 static void PearTrackingShimInit(void) {
+    PEAR_MODULE_GUARD();
     if (getenv("PEAR_NO_TRACKING_SHIM")) return;
     @autoreleasepool {
         PearInstallTrackingShim();

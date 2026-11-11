@@ -1172,6 +1172,7 @@ static void PearInstallGameKit(void) {
 
 __attribute__((constructor))
 static void PearCloudShimInit(void) {
+    PEAR_MODULE_GUARD();
     if (PearCloudShimDisabled()) return;
     @autoreleasepool {
         PearInstallKeyValueStore();

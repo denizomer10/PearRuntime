@@ -259,6 +259,7 @@ static void PearInstallFoundationGuards(void) {
 
 __attribute__((constructor))
 static void PearFoundationShimInit(void) {
+    PEAR_MODULE_GUARD();
     @autoreleasepool {
         PearInstallFoundationGuards();
     }
