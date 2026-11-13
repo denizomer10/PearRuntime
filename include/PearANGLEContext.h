@@ -14,6 +14,12 @@
 - (instancetype)initWithClientVersion:(NSInteger)version
                            sharegroup:(PearANGLESharegroup *)group
                                 error:(NSError *__autoreleasing *)error;
+// Private fork contract: serialized real context bindings on several threads.
+// Default initializer stays exclusive and follows standard EGL ownership.
+- (instancetype)initWithClientVersion:(NSInteger)version
+                           sharegroup:(PearANGLESharegroup *)group
+              serializedThreadSharing:(BOOL)enabled
+                                error:(NSError *__autoreleasing *)error;
 @property(nonatomic, strong, readonly) PearANGLESharegroup *sharegroup;
 @property(nonatomic, readonly) NSInteger clientVersion;
 @property(nonatomic, readonly) NSUInteger pixelWidth;

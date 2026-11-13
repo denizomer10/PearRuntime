@@ -3,6 +3,7 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import "PearTouchGeometry.h"
+#import "PearRuntime.h"
 #import <objc/runtime.h>
 #import <objc/message.h>
 
@@ -205,6 +206,9 @@ static void PearRepairEmptyLegacyWindows(void) {
             if (area.size.width < 1 || area.size.height < 1) area = host.bounds;
             CGRect designFit = PearAspectFitRect(CGSizeMake(designAspect * 1000.0, 1000.0), area);
             CGSize logical = CGSizeMake(round(designFit.size.width), round(designFit.size.height));
+            // The GL allocator owns the game's coordinate space once a
+            // drawable exists; the host only scales that space for display.
+            PearGLCopyFixedLogicalSize(&logical);
             if (logical.width < 1 || logical.height < 1) continue;
             NSString *sizeOverride = NSProcessInfo.processInfo.environment[@"PEAR_LEGACY_LOGICAL_SIZE"];
             NSArray<NSString *> *parts = [sizeOverride.lowercaseString componentsSeparatedByString:@"x"];

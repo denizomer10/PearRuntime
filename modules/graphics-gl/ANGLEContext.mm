@@ -92,6 +92,8 @@ static BOOL PearLoadContextAPI(NSError *__autoreleasing *error) {
     EGLConfig _config;
     pthread_t _ownerThread;
     BOOL _hasOwner;
+    BOOL _serializedThreadSharing;
+    NSUInteger _threadBindings;
     BOOL _debugMessagesInstalled;
     NSUInteger _width, _height;
     CALayer *_drawableLayer;
@@ -113,7 +115,12 @@ static void PearContextThreadExited(void *value) {
 
 - (instancetype)initWithClientVersion:(NSInteger)version sharegroup:(PearANGLESharegroup *)group
                                 error:(NSError *__autoreleasing *)error {
+    return [self initWithClientVersion:version sharegroup:group serializedThreadSharing:NO error:error];
+}
+- (instancetype)initWithClientVersion:(NSInteger)version sharegroup:(PearANGLESharegroup *)group
+              serializedThreadSharing:(BOOL)enabled error:(NSError *__autoreleasing *)error {
     if (!(self = [super init])) return nil;
+    _serializedThreadSharing = enabled;
     std::lock_guard<std::recursive_mutex> guard(gContextOperations);
     if (!gContextTLSReady) { PearContextError(error, 20, @"Context thread-local storage is unavailable"); return nil; }
     if (!PearLoadContextAPI(error)) return nil;
@@ -132,7 +139,9 @@ static void PearContextThreadExited(void *value) {
         PearContextError(error, 5, @"ANGLE has no compatible GLES configuration"); return nil;
     }
     EGLContext shared = _sharegroup.members.count ? (EGLContext)_sharegroup.members.firstObject.pointerValue : EGL_NO_CONTEXT;
-    EGLint attributes[] = {EGL_CONTEXT_CLIENT_VERSION, (EGLint)version, EGL_NONE};
+    // 0x5E01 is private to the PearRuntime ANGLE fork, not a Khronos token.
+    EGLint attributes[] = {EGL_CONTEXT_CLIENT_VERSION, (EGLint)version,
+                          enabled ? 0x5E01 : EGL_NONE, EGL_TRUE, EGL_NONE};
     _context = gEGL.create(PearANGLEDisplay(), _config, shared, attributes);
     if (_context == EGL_NO_CONTEXT) {
         PearContextError(error, 6, [NSString stringWithFormat:@"EGL context creation failed (0x%x)", gEGL.error()]); return nil;
@@ -153,7 +162,8 @@ static void PearContextThreadExited(void *value) {
     std::lock_guard<std::recursive_mutex> guard(gContextOperations);
     gEGL.current(PearANGLEDisplay(), EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     gEGL.releaseThread();
-    context->_hasOwner = NO;
+    if (context->_threadBindings) --context->_threadBindings;
+    context->_hasOwner = context->_threadBindings > 0;
 }
 
 + (BOOL)setCurrentContext:(PearANGLEContext *)context error:(NSError *__autoreleasing *)error {
@@ -162,7 +172,7 @@ static void PearContextThreadExited(void *value) {
     if (context == previous) return YES;
     if (!PearLoadContextAPI(error)) return NO;
     pthread_t thread = pthread_self();
-    if (context && context->_hasOwner && !pthread_equal(context->_ownerThread, thread))
+    if (context && !context->_serializedThreadSharing && context->_hasOwner && !pthread_equal(context->_ownerThread, thread))
         return PearContextError(error, 7, @"Context is current on another thread");
     EGLSurface surface = context ? context->_surface : EGL_NO_SURFACE;
     EGLContext handle = context ? context->_context : EGL_NO_CONTEXT;
@@ -178,8 +188,12 @@ static void PearContextThreadExited(void *value) {
                      previous ? previous->_context : EGL_NO_CONTEXT);
         return PearContextError(error, 21, @"Context thread-local binding failed");
     }
-    if (previous) previous->_hasOwner = NO;
+    if (previous) {
+        if (previous->_threadBindings) --previous->_threadBindings;
+        previous->_hasOwner = previous->_threadBindings > 0;
+    }
     if (context) {
+        ++context->_threadBindings;
         context->_ownerThread = thread; context->_hasOwner = YES;
         if (!context->_debugMessagesInstalled && getenv("PEAR_DEBUG_GL")) {
             context->_debugMessagesInstalled = YES;
@@ -197,7 +211,7 @@ static void PearContextThreadExited(void *value) {
         return PearContextError(error, 22, @"Detach the native surface before allocating a pbuffer drawable");
     if (!width || !height || width > 8192 || height > 8192)
         return PearContextError(error, 9, @"Drawable dimensions must be 1…8192 pixels");
-    if (_hasOwner && !pthread_equal(_ownerThread, pthread_self()))
+    if (_hasOwner && PearANGLEContext.currentContext != self)
         return PearContextError(error, 7, @"Cannot resize a context owned by another thread");
     if (width == _width && height == _height) return YES;
     EGLint attributes[] = {EGL_WIDTH, (EGLint)width, EGL_HEIGHT, (EGLint)height, EGL_NONE};

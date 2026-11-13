@@ -7,6 +7,7 @@
 #import <string.h>
 #import <math.h>
 #import <atomic>
+#import <os/lock.h>
 #import "PearRuntime.h"
 #import "PearTouchGeometry.h"
 #import "PearANGLEGameRouting.h"
@@ -41,6 +42,16 @@ static CGSize PearDeclaredDrawableSize(CGSize size) {
 static void *PearGLProc(const char *name) { return PearANGLEGameSymbol(name); }
 static CGSize gGLDrawableSize = { 0, 0 };
 static std::atomic<NSUInteger> gDrawableClientVersion{2};
+static os_unfair_lock gFixedLogicalLock = OS_UNFAIR_LOCK_INIT;
+static CGSize gFixedLogicalSize = {0, 0};
+BOOL PearGLCopyFixedLogicalSize(CGSize *size) {
+    os_unfair_lock_lock(&gFixedLogicalLock);
+    CGSize value = gFixedLogicalSize;
+    os_unfair_lock_unlock(&gFixedLogicalLock);
+    if (value.width < 1 || value.height < 1) return NO;
+    *size = value;
+    return YES;
+}
 /// The size the engine itself created its drawable at. This is the coordinate
 /// space its hit-testing uses. It must not follow window resizes: the fit
 /// transform is visual only, and allowing the view's bounds to grow with the
@@ -339,7 +350,7 @@ static void PearFitDrawable(CALayer *layer) {
     CGSize native = gNativeDrawableSize;
     if (native.width < 1 || native.height < 1) return;
 
-    BOOL fixedFunction = gDrawableClientVersion.load(std::memory_order_relaxed) == 1;
+    BOOL fixedFunction = gDrawableClientVersion.load(std::memory_order_relaxed) == 1 || getenv("PEAR_LEGACY_ATTACH_LAYER");
     dispatch_async(dispatch_get_main_queue(), ^{
         CALayer *current = gDrawableLayer;
         UIWindow *window = PearGLKeyWindow();
@@ -538,9 +549,10 @@ static void PearInstallEAGLHook(void) {
                 // the transform handles the visible size. A normal windowed
                 // resize is left alone.
                 UIWindow *window = PearGLWindowForLayer(layer);
-                BOOL fullScreenLike = window && PearGLFreezesLargeWindows() &&
+                BOOL fixedLegacy = getenv("PEAR_LEGACY_ATTACH_LAYER") != nullptr;
+                BOOL fullScreenLike = fixedLegacy || (window && PearGLFreezesLargeWindows() &&
                     layer.bounds.size.width > gNativeDrawableSize.width * 1.4 &&
-                    layer.bounds.size.height > gNativeDrawableSize.height * 1.4;
+                    layer.bounds.size.height > gNativeDrawableSize.height * 1.4);
                 if (fullScreenLike) {
                     layer.bounds = CGRectMake(0, 0, gNativeDrawableSize.width,
                                               gNativeDrawableSize.height);
@@ -559,7 +571,13 @@ static void PearInstallEAGLHook(void) {
         if (result && [drawable isKindOfClass:CALayer.class]) {
             NSUInteger clientVersion = ((PearEAGLContext *)self).API;
             gDrawableClientVersion.store(clientVersion, std::memory_order_relaxed);
-            if (clientVersion == 1) PearSetScreenOverride(((CALayer *)drawable).bounds.size);
+            if (clientVersion == 1 || getenv("PEAR_LEGACY_ATTACH_LAYER")) {
+                CGSize logical = ((CALayer *)drawable).bounds.size;
+                os_unfair_lock_lock(&gFixedLogicalLock);
+                gFixedLogicalSize = logical;
+                os_unfair_lock_unlock(&gFixedLogicalLock);
+                PearSetScreenOverride(logical);
+            }
             typedef void (*GetRenderbufferParameter)(unsigned int, unsigned int, int *);
             static GetRenderbufferParameter query;
             if (!query) query = (GetRenderbufferParameter)PearGLProc("glGetRenderbufferParameteriv");

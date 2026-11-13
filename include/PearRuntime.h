@@ -31,6 +31,8 @@ NSString *PearLogFilePath(void);
 /// Used by the GL shim once an app has a fixed drawable, so a Mac window resize
 /// (including full screen) does not move the app's coordinate space.
 void PearSetScreenOverride(CGSize size);
+/// Shared immutable logical space for an active legacy GL drawable.
+BOOL PearGLCopyFixedLogicalSize(CGSize *size);
 void PearClearScreenOverride(void);
 
 /// Fixed on first use: presence of PEAR_HOST_SOCKET selects host-authoritative

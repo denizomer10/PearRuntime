@@ -44,12 +44,17 @@ extern "C" int PearSysctlMIB(int *name, u_int namelen, void *oldp, size_t *oldle
 // paths does an app probe before it decides the environment is not a stock
 // device? The trace is read-only; calls behave exactly as before.
 static int gTraceEnabled = 0;
+static bool gTraceAllPaths = false;
+static char gTraceFile[PATH_MAX] = "/tmp/pear-fs.log";
 
 static BOOL PearTraceEnabled(void) { return gTraceEnabled == 1; }
 
 // Reads the switch before getenv() is interposed below.
 __attribute__((constructor)) static void PearPathTraceInit(void) {
     PEAR_MODULE_GUARD();
+    const char *traceFile = getenv("PEAR_FS_LOG_FILE");
+    if (traceFile && traceFile[0] == '/') strlcpy(gTraceFile, traceFile, sizeof(gTraceFile));
+    gTraceAllPaths = getenv("PEAR_DEBUG_ALL_PATHS") != nullptr;
     gTraceEnabled = getenv("PEAR_DEBUG_PATHS") != NULL ? 1 : 0;
 }
 
@@ -60,7 +65,7 @@ static void PearTraceWrite(const char *api, const char *path, long result, int e
     os_unfair_lock_lock(&gTraceLock);
     if (gTraceFD < 0) {
         // openat keeps this out of the interposed open() above.
-        gTraceFD = openat(AT_FDCWD, "/tmp/pear-fs.log",
+        gTraceFD = openat(AT_FDCWD, gTraceFile,
                           O_WRONLY | O_CREAT | O_APPEND, 0644);
     }
     if (gTraceFD >= 0) {
@@ -76,6 +81,7 @@ static void PearTraceWrite(const char *api, const char *path, long result, int e
 }
 
 static BOOL PearTraceInteresting(const char *path) {
+    if (gTraceAllPaths && path) return YES;
     if (!path || path[0] != '/') return NO;
 
     // This runs from inside interposed path calls, so it must not use

@@ -48,7 +48,7 @@ static void PearReleaseEAGLAdapter(void *value) {
     if (!gEAGLAdapterKeyReady || (group && ![group isKindOfClass:PearEAGLSharegroup.class])) return nil;
     _sharegroup = group ?: [PearEAGLSharegroup new];
     NSError *error = nil;
-    _angleContext = [[PearANGLEContext alloc] initWithClientVersion:(NSInteger)api sharegroup:_sharegroup.angleGroup error:&error];
+    _angleContext = [[PearANGLEContext alloc] initWithClientVersion:(NSInteger)api sharegroup:_sharegroup.angleGroup serializedThreadSharing:YES error:&error];
     if (!_angleContext) return nil;
     _API = api;
     if (getenv("PEAR_GRAPHICS_BACKEND")) PearANGLETrace( "[PearRuntime][angle] context GLES%lu created\n", (unsigned long)api);

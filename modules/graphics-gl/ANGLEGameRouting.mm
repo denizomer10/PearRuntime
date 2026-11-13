@@ -219,6 +219,36 @@ static GLenum GL_APIENTRY PearCompat_glCheckFramebufferStatus(GLenum target) {
             target, result, (long)PearANGLEContext.currentContext.clientVersion);
     return result;
 }
+static void GL_APIENTRY PearDiagnosticCompileShader(GLuint shader) {
+    static auto compile = (void (*)(GLuint))PearANGLEGetProcAddress("glCompileShader");
+    static auto query = (void (*)(GLuint, GLenum, GLint *))PearANGLEGetProcAddress("glGetShaderiv");
+    static auto info = (void (*)(GLuint, GLsizei, GLsizei *, GLchar *))PearANGLEGetProcAddress("glGetShaderInfoLog");
+    compile(shader);
+    GLint compiled = 0; query(shader, GL_COMPILE_STATUS, &compiled);
+    if (!compiled) {
+        char log[2048] = {}; GLsizei length = 0; info(shader, sizeof(log)-1, &length, log);
+        PearANGLETrace("[PearRuntime][angle-validation] shader %u compile failed: %.*s\n", shader, (int)length, log);
+    }
+}
+static void GL_APIENTRY PearDiagnosticLinkProgram(GLuint program) {
+    static auto link = (void (*)(GLuint))PearANGLEGetProcAddress("glLinkProgram");
+    static auto query = (void (*)(GLuint, GLenum, GLint *))PearANGLEGetProcAddress("glGetProgramiv");
+    static auto info = (void (*)(GLuint, GLsizei, GLsizei *, GLchar *))PearANGLEGetProcAddress("glGetProgramInfoLog");
+    link(program);
+    GLint linked = 0; query(program, GL_LINK_STATUS, &linked);
+    if (!linked) {
+        char log[2048] = {}; GLsizei length = 0; info(program, sizeof(log)-1, &length, log);
+        PearANGLETrace("[PearRuntime][angle-validation] program %u link failed: %.*s\n", program, (int)length, log);
+    }
+}
+static GLint GL_APIENTRY PearDiagnosticUniformLocation(GLuint program, const GLchar *name) {
+    static auto original = (GLint (*)(GLuint, const GLchar *))PearANGLEGetProcAddress("glGetUniformLocation");
+    GLint location = original(program, name);
+    static std::atomic<unsigned> count{0};
+    if (count.fetch_add(1) < 128)
+        PearANGLETrace("[PearRuntime][angle-validation] uniform program=%u name=%s location=%d\n", program, name ?: "(null)", location);
+    return location;
+}
 static void *GL_APIENTRY PearDiagnosticMapBufferOES(GLenum target, GLenum access) {
     static auto original = (void *(*)(GLenum, GLenum))PearANGLEGetProcAddress("glMapBufferOES");
     void *result = original(target, access);
@@ -227,6 +257,32 @@ static void *GL_APIENTRY PearDiagnosticMapBufferOES(GLenum target, GLenum access
         PearANGLETrace("[PearRuntime][angle-validation] mapBuffer target=0x%x access=0x%x null=%d GLES%ld\n",
             target, access, result == nullptr, (long)PearANGLEContext.currentContext.clientVersion);
     return result;
+}
+
+// iOS accepts READ/DRAW_FRAMEBUFFER(_APPLE) in glDiscardFramebufferEXT (games
+// discard the multisample buffer after the APPLE resolve); ANGLE's extension
+// accepts only GL_FRAMEBUFFER. Those targets go to ES3 glInvalidateFramebuffer,
+// with EXT default-framebuffer names mapped to its enums. Discard is a hint, so
+// when no equivalent exists the call is dropped instead of raising an error.
+static void GL_APIENTRY PearRoutedDiscardFramebufferEXT(GLenum target, GLsizei count, const GLenum *attachments) {
+    static auto discard = (void (GL_APIENTRY *)(GLenum, GLsizei, const GLenum *))PearANGLEGetProcAddress("glDiscardFramebufferEXT");
+    static auto invalidate = (void (GL_APIENTRY *)(GLenum, GLsizei, const GLenum *))PearANGLEGetProcAddress("glInvalidateFramebuffer");
+    static auto integer = (void (GL_APIENTRY *)(GLenum, GLint *))PearANGLEGetProcAddress("glGetIntegerv");
+    constexpr GLenum kRead = 0x8CA8, kDraw = 0x8CA9;
+    if (target != kRead && target != kDraw) { if (discard) discard(target, count, attachments); return; }
+    if (!invalidate || !integer || count <= 0 || count > 16 || !attachments) return;
+    GLint bound = 0;
+    integer(target == kRead ? 0x8CAA /* READ_FRAMEBUFFER_BINDING */ : 0x8CA6 /* DRAW_FRAMEBUFFER_BINDING */, &bound);
+    GLenum mapped[16];
+    for (GLsizei index = 0; index < count; ++index) {
+        GLenum value = attachments[index];
+        if (!bound) value = value == 0x1800 ? 0x1800 /* GL_COLOR */ : value == 0x1801 ? 0x1801 : value == 0x1802 ? 0x1802 : value;
+        else value = value == 0x1800 ? GL_COLOR_ATTACHMENT0 : value == 0x1801 ? GL_DEPTH_ATTACHMENT : value == 0x1802 ? GL_STENCIL_ATTACHMENT : value;
+        mapped[index] = value;
+    }
+    GLint major = 0;
+    integer(0x821B /* GL_MAJOR_VERSION */, &major);
+    if (major >= 3) invalidate(target, count, mapped);
 }
 
 static void PearRoutedDeleteRenderbuffers(GLsizei count, const GLuint *names) {
@@ -309,6 +365,11 @@ void *PearANGLEGameSymbol(const char *name) {
     if (!strcmp(name, "OBJC_CLASS_$_GLKViewController")) return (__bridge void *)objc_getClass("PearGLKViewController");
     if (!strcmp(name, "OBJC_METACLASS_$_GLKViewController")) return (__bridge void *)objc_getMetaClass("PearGLKViewController");
     if (!strcmp(name, "glCheckFramebufferStatusOES")) return (void *)PearCompat_glCheckFramebufferStatus;
+    if (getenv("PEAR_DEBUG_GL")) {
+        if (!strcmp(name, "glCompileShader")) return (void *)PearDiagnosticCompileShader;
+        if (!strcmp(name, "glLinkProgram")) return (void *)PearDiagnosticLinkProgram;
+        if (!strcmp(name, "glGetUniformLocation")) return (void *)PearDiagnosticUniformLocation;
+    }
     if (!strcmp(name, "glMapBufferOES") && getenv("PEAR_DEBUG_GL")) return (void *)PearDiagnosticMapBufferOES;
 #define PEAR_ROUTE_FRAMEBUFFER(entry) if (!strcmp(name, #entry)) return (void *)PearCompat_##entry
     PEAR_ROUTE_FRAMEBUFFER(glGenRenderbuffers);
@@ -327,6 +388,7 @@ void *PearANGLEGameSymbol(const char *name) {
 #undef PEAR_ROUTE_FRAMEBUFFER
     if (!strcmp(name, "glDeleteRenderbuffers") || !strcmp(name, "glDeleteRenderbuffersOES")) return (void *)PearRoutedDeleteRenderbuffers;
     if (!strcmp(name, "glGetString")) return (void *)PearRoutedGetString;
+    if (!strcmp(name, "glDiscardFramebufferEXT")) return (void *)PearRoutedDiscardFramebufferEXT;
     if (!strcmp(name, "glGetStringi")) return (void *)PearRoutedGetStringi;
     if (!strcmp(name, "glGetIntegerv")) return (void *)PearRoutedGetIntegerv;
     if (!strcmp(name, "glRenderbufferStorageMultisampleAPPLE")) return (void *)PearRenderbufferStorageMultisampleAPPLE;
