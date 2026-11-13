@@ -17,6 +17,8 @@
 #import "PearRuntime.h"
 #include <mutex>
 
+void PearMetalHUDNoteDrawable(void *layer);
+
 static BOOL PearMetalDebug(void) {
     return getenv("PEAR_DEBUG_METAL") != NULL;
 }
@@ -268,6 +270,7 @@ static BOOL PearInstallNextDrawableFix(void) {
     static const BOOL trace = getenv("PEAR_PERF_TRACE") != NULL;
     method_setImplementation(method, imp_implementationWithBlock(^id(id self) {
         CAMetalLayer *layer = (CAMetalLayer *)self;
+        PearMetalHUDNoteDrawable((__bridge void *)self);
         // Hot path: once a layer has a device and a drawable size there is
         // nothing to repair. Two property reads instead of five per frame.
         if (!trace) {
