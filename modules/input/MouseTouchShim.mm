@@ -10,6 +10,7 @@ extern void PearSynthesizeVirtualFinger(BOOL down, NSString *key, CGFloat nx, CG
 extern void PearSendLegacyDirectTouch(BOOL down, CGFloat nx, CGFloat ny);
 extern void PearCancelLegacyDirectTouch(void);
 extern void PearRunLegacyDirectTouchSelfTest(void);
+extern CGRect PearWindowVisibleContentRect(id window, id contentView);
 
 static void PearSendMouseTouch(BOOL down, CGFloat nx, CGFloat ny) {
     if (NSProcessInfo.processInfo.environment[@"PEAR_DIRECT_LEGACY_TOUCH"].boolValue)
@@ -81,7 +82,10 @@ void PearInstallMouseToTouchFallback(void) {
         }
         id content = window ? ((id (*)(id, SEL))objc_msgSend)(window, @selector(contentView)) : nil;
         if (!content) { cancel(); return event; }
-        NSRect bounds = ((NSRect (*)(id, SEL))objc_msgSend)(content, @selector(bounds));
+        // Only the area below the title bar is game content: the full-size
+        // content view also covers the title bar, and treating clicks there
+        // as touches swallowed the window's close/minimize/zoom buttons.
+        NSRect bounds = PearWindowVisibleContentRect(window, content);
         NSPoint point = ((NSPoint (*)(id, SEL))objc_msgSend)(event, @selector(locationInWindow));
         point = ((NSPoint (*)(id, SEL, NSPoint, id))objc_msgSend)(content, @selector(convertPoint:fromView:), point, nil);
         if (NSProcessInfo.processInfo.environment[@"PEAR_LEGACY_ATTACH_LAYER"].boolValue) {

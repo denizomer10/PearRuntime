@@ -21,6 +21,24 @@ static BOOL PearIsLegacyApp(void) {
     return major > 0 && major < 15.0;
 }
 
+/// The part of a window's content view that is not under the title bar, in
+/// the content view's coordinates. Catalyst windows use a full-size content
+/// view, so its bounds include the title bar strip. Full screen has no title
+/// bar and returns the whole view.
+CGRect PearWindowVisibleContentRect(id window, id contentView) {
+    if (!contentView) return CGRectZero;
+    CGRect bounds = ((CGRect (*)(id, SEL))objc_msgSend)(contentView, @selector(bounds));
+    SEL layoutSel = NSSelectorFromString(@"contentLayoutRect");
+    if (!window || ![window respondsToSelector:layoutSel]) return bounds;
+    NSUInteger mask = ((NSUInteger (*)(id, SEL))objc_msgSend)(window, @selector(styleMask));
+    if (mask & (1 << 14)) return bounds;  // full screen
+    CGRect layout = ((CGRect (*)(id, SEL))objc_msgSend)(window, layoutSel);
+    CGRect converted = ((CGRect (*)(id, SEL, CGRect, id))objc_msgSend)(
+        contentView, NSSelectorFromString(@"convertRect:fromView:"), layout, nil);
+    CGRect visible = CGRectIntersection(converted, bounds);
+    return (visible.size.width >= 1 && visible.size.height >= 1) ? visible : bounds;
+}
+
 static BOOL gLegacyWindowFixInstalled = NO;
 static char kPearAttachedLegacyRoot;
 
@@ -92,6 +110,22 @@ static void PearRepairEmptyLegacyWindows(void) {
         }
         if (empty) PearLog(@"[PearRuntime][window] repaired empty legacy host window to %.0fx%.0f",
                            preferred.width, preferred.height);
+        if (getenv("PEAR_DEBUG_VIEWS")) {
+            static int buttonLogs = 0;
+            if (buttonLogs++ % 300 == 0) {
+                SEL buttonSel = NSSelectorFromString(@"standardWindowButton:");
+                for (long kind = 0; kind < 3 && [window respondsToSelector:buttonSel]; kind++) {
+                    id button = ((id (*)(id, SEL, long))objc_msgSend)(window, buttonSel, kind);
+                    if (!button) continue;
+                    NSRect frame = ((NSRect (*)(id, SEL))objc_msgSend)(button, @selector(frame));
+                    BOOL enabled = ((BOOL (*)(id, SEL))objc_msgSend)(button, NSSelectorFromString(@"isEnabled"));
+                    id superview = ((id (*)(id, SEL))objc_msgSend)(button, @selector(superview));
+                    NSRect superFrame = superview ? ((NSRect (*)(id, SEL))objc_msgSend)(superview, @selector(frame)) : NSZeroRect;
+                    PearLog(@"[PearRuntime][window] button %ld enabled=%d frame=%@ in %@ %@", kind, enabled,
+                            NSStringFromRect(frame), NSStringFromClass([superview class]), NSStringFromRect(superFrame));
+                }
+            }
+        }
         // Diagnostic experiment only: some scene-less apps have a UIKit layer
         // tree but an empty AppKit backing layer. Do not enable without testing.
         if (NSProcessInfo.processInfo.environment[@"PEAR_LEGACY_ATTACH_LAYER"].boolValue && uiWindow) {
@@ -135,8 +169,43 @@ static void PearRepairEmptyLegacyWindows(void) {
                 PearLog(@"[PearRuntime][window] attached UIKit root layer %@ to legacy host", NSStringFromClass(top.class));
             }
             // Changing frame changes bounds and crops the engine's layer tree.
-            // Preserve logical bounds; scale and center the entire tree instead.
-            CGSize logical = uiWindow.bounds.size;
+            // Keep a logical (UIKit) size and scale/center the tree instead.
+            //
+            // The logical size must not be read back from the UIWindow after
+            // the transform is applied: UIKit keeps the window's frame and
+            // reports bounds = frame / scale, so every pass grew (or shrank)
+            // the size again. Engines size their render target from those
+            // bounds (Unity: UnityView -> CAMetalLayer drawable), which made
+            // the internal resolution depend on timing; Gutterball ended up at
+            // 557x418 in a large window. The logical size is now the host
+            // view's size: one UIKit point per window point, so the content
+            // scale factor (the display's backing scale) maps it onto the
+            // window's real pixels, stays sharp at any size and follows
+            // resizes. It is applied through UIKit (window and root view) so
+            // autoresizing lays the views out again.
+            //
+            // The aspect ratio is the one the game launched with (its first
+            // window), not the current window's: legacy titles lay out their
+            // UI once for that shape, and a 16:9 full-screen surface left a
+            // 4:3 game's HUD in one part of the frame with a black strip
+            // beside it. The logical size is that aspect fitted into the
+            // window, so the game keeps its shape at full resolution and the
+            // rest is letterboxed.
+            static CGFloat designAspect = 0;
+            if (designAspect <= 0 && host.bounds.size.width >= 1 && host.bounds.size.height >= 1) {
+                CGSize initial = CATransform3DIsIdentity(top.transform) && uiWindow.bounds.size.height >= 1
+                    ? uiWindow.bounds.size : host.bounds.size;
+                designAspect = initial.width / initial.height;
+                PearLog(@"[PearRuntime][window] legacy design aspect %.4f (%.0fx%.0f)",
+                        designAspect, initial.width, initial.height);
+            }
+            // Fit into the visible area below the title bar, not the whole
+            // full-size content view (the top of the game was hidden).
+            CGRect area = PearWindowVisibleContentRect(window, view);
+            if (area.size.width < 1 || area.size.height < 1) area = host.bounds;
+            CGRect designFit = PearAspectFitRect(CGSizeMake(designAspect * 1000.0, 1000.0), area);
+            CGSize logical = CGSizeMake(round(designFit.size.width), round(designFit.size.height));
+            if (logical.width < 1 || logical.height < 1) continue;
             NSString *sizeOverride = NSProcessInfo.processInfo.environment[@"PEAR_LEGACY_LOGICAL_SIZE"];
             NSArray<NSString *> *parts = [sizeOverride.lowercaseString componentsSeparatedByString:@"x"];
             if (parts.count == 2) {
@@ -151,7 +220,19 @@ static void PearRepairEmptyLegacyWindows(void) {
                     [CATransaction commit];
                 }
             }
-            CGRect fitted = PearAspectFitRect(logical, host.bounds);
+            if (parts.count != 2) {
+                [CATransaction begin];
+                [CATransaction setDisableActions:YES];
+                if (!CGSizeEqualToSize(uiWindow.bounds.size, logical)) {
+                    uiWindow.bounds = CGRectMake(0, 0, logical.width, logical.height);
+                }
+                UIView *content = uiWindow.rootViewController.isViewLoaded ? uiWindow.rootViewController.view : nil;
+                if (content && !CGSizeEqualToSize(content.bounds.size, logical)) {
+                    content.frame = CGRectMake(0, 0, logical.width, logical.height);
+                }
+                [CATransaction commit];
+            }
+            CGRect fitted = PearAspectFitRect(logical, area);
             if (!CGRectIsEmpty(fitted)) {
                 CGFloat scale = fitted.size.width / logical.width;
                 CGPoint center = CGPointMake(CGRectGetMidX(fitted), CGRectGetMidY(fitted));
