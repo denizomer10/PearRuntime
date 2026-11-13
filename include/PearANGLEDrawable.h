@@ -1,0 +1,36 @@
+#pragma once
+#import "PearANGLEContext.h"
+#import <CoreGraphics/CoreGraphics.h>
+#include <stdint.h>
+
+// Original bridge contract. System EAGL objects/GL names cannot be passed here.
+typedef NS_ENUM(NSUInteger, PearANGLEColorFormat) {
+    PearANGLEColorRGBA8 = 1,
+    PearANGLEColorRGB565 = 2,
+    PearANGLEColorSRGBA8 = 3,
+};
+
+typedef struct {
+    CGRect logicalBounds;
+    CGSize pixelSize;
+    CGFloat backingScale;
+    uint64_t generation;
+} PearANGLEDrawableGeometry;
+
+@interface PearANGLEContext (Drawable)
+// Allocates the ANGLE renderbuffer currently bound to GL_RENDERBUFFER.
+// RGBA8, single-sample GLES2/3 only for now; other formats fail explicitly.
+// A nil layer releases storage. Allocation/presentation require this context current.
+- (BOOL)allocateBoundRenderbuffer:(NSUInteger)target fromLayer:(CALayer *)layer
+                     colorFormat:(PearANGLEColorFormat)format retainedBacking:(BOOL)retained
+                           error:(NSError *__autoreleasing *)error;
+- (BOOL)presentBoundRenderbuffer:(NSUInteger)target error:(NSError *__autoreleasing *)error;
+// A snapshot becomes invalid when the host's bounds/scale or storage changes.
+// Snapshot/mapping queries are safe on an input thread without a current GL
+// context. They do not query or mutate GL objects.
+- (BOOL)copyDrawableGeometry:(PearANGLEDrawableGeometry *)geometry forRenderbuffer:(unsigned int)renderbuffer;
+// Top-left host-layer coordinates -> top-left drawable pixels. Outside points
+// and stale generations are rejected, never clamped into a game's controls.
+- (BOOL)mapLayerPoint:(CGPoint)point forRenderbuffer:(unsigned int)renderbuffer
+          generation:(uint64_t)generation toPixel:(CGPoint *)pixel;
+@end

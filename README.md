@@ -117,3 +117,21 @@ Use the pinned ANGLE fork's thread-exit and host-layer fixes (`f405241`). Old
 staged libraries reproduce EGL_BAD_ACCESS after a current context's thread
 exits. The PearSilicon parent repository contains the source-build script and
 real Catalyst/Metal shader, framebuffer and thread-lifecycle tests.
+
+### EAGL selector and drawable adapters (not activated for games)
+
+`PearEAGLContext.h` implements public context/sharegroup/storage/presentation
+selectors using separately named original classes. `PearANGLEDrawable.h`
+provides RGBA8 single-sample renderbuffer allocation and immediate native-layer
+presentation for GLES2/3. The cached presentation FBO preserves caller GL state;
+retained backing keeps the source renderbuffer contents.
+
+Successful allocations publish immutable logical-bounds/pixel-size/scale
+snapshots with generations. Input-thread queries do not require a GL context;
+old generations and changed layer geometry are rejected. Engine GL deletion
+and same-name reuse still need import-wrapper tracking. RGB565/sRGB,
+multisampling, scheduled presentation and GLES1 presentation are not implemented.
+
+The classes do not replace system EAGLContext and do not redirect a game's
+linked or dynamically resolved GL calls. That routing and the game's atomic
+render/input resize transaction must be integrated before activation.
