@@ -199,3 +199,32 @@ cat > "$MARKETPLACE/Versions/A/Resources/Info.plist" <<PLIST
 PLIST
 file "$MARKETPLACE/MarketplaceKit"
 bash "$ROOT/build-angle-bridge.sh" "$OUT"
+
+# --- ANGLE (Mac Catalyst) ---------------------------------------------------
+# Every compatibility app carries its own ANGLE next to libPearOpenGLES; the
+# system OpenGLES framework is never used. Stage the source-built Catalyst
+# dylibs (scripts/build-angle-metal.sh -> out/PearCatalyst) with ANGLE's
+# license. A macOS build must not be passed off as Catalyst: the platform is
+# checked, never patched.
+ANGLE_SRC="${PEAR_ANGLE_CATALYST_DIR:-$ROOT/third_party/angle/out/PearCatalyst}"
+ANGLE_STAGE="$OUT_DIR/PearANGLE"
+echo ">> Staging ANGLE (Mac Catalyst) from $ANGLE_SRC"
+for lib in libEGL.dylib libGLESv2.dylib; do
+  if [[ ! -f "$ANGLE_SRC/$lib" ]]; then
+    echo "ERROR: $ANGLE_SRC/$lib is missing. Build it with:" >&2
+    echo "  bash scripts/build-angle-metal.sh   (from the PearSilicon checkout)" >&2
+    exit 1
+  fi
+  if ! xcrun vtool -show-build "$ANGLE_SRC/$lib" 2>/dev/null | grep -q "platform MACCATALYST"; then
+    echo "ERROR: $ANGLE_SRC/$lib is not a Mac Catalyst binary." >&2
+    exit 1
+  fi
+done
+rm -rf "$ANGLE_STAGE"
+mkdir -p "$ANGLE_STAGE"
+for lib in libEGL.dylib libGLESv2.dylib; do
+  cp "$ANGLE_SRC/$lib" "$ANGLE_STAGE/$lib"
+  xcrun install_name_tool -id "@rpath/PearANGLE/$lib" "$ANGLE_STAGE/$lib" 2>/dev/null
+done
+cp "$ROOT/third_party/angle/LICENSE" "$ANGLE_STAGE/LICENSE.ANGLE"
+file "$ANGLE_STAGE"/*.dylib

@@ -16,6 +16,8 @@
 #include <limits.h>
 #include <unistd.h>
 #include <GLES2/gl2.h>
+#include <mutex>
+#import "PearANGLEBackend.h"
 
 static std::atomic<bool> gRoutingReady{false};
 static std::string &PearAppRoot() { static std::string root; return root; }
@@ -77,8 +79,44 @@ static void *PearRoutedBundleProc(CFBundleRef bundle, CFStringRef name) {
     return CFBundleGetFunctionPointerForName(bundle, name);
 }
 
+/// Library directory for lazy initialization. Set when the app does not link
+/// OpenGL ES itself (the bridge was found next to the runtime instead of being
+/// loaded): ANGLE then starts on the app's first GL use, so a Metal-only game
+/// pays nothing for it. Linked apps initialize eagerly in the constructor.
+static std::string &PearLazyANGLEDirectory() { static std::string path; return path; }
+
+static void PearEnsureANGLE() {
+    if (PearANGLEDisplay() != EGL_NO_DISPLAY || PearLazyANGLEDirectory().empty()) return;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        @autoreleasepool {
+            NSError *error = nil;
+            NSString *libraries = [NSString stringWithUTF8String:PearLazyANGLEDirectory().c_str()];
+            if (!PearANGLEInitialize(libraries, &error)) {
+                // No system OpenGL ES fallback: refuse instead of mixing backends.
+                PearANGLETrace("[PearRuntime][angle-route] lazy ANGLE initialization failed: %s\n",
+                               error.localizedDescription.UTF8String ?: "unknown");
+                _exit(78);
+            }
+            PearANGLETrace("[PearRuntime][angle-route] ANGLE initialized on first GL use\n");
+        }
+    });
+}
+
+/// Routed C/ObjC lookup functions themselves need no GL; only what they
+/// resolve to does (those calls come back through PearANGLEGameSymbol).
+static bool PearIsLookupWrapper(const char *name) {
+    static const char *const wrappers[] = {"dlsym", "dlopen", "CFBundleGetFunctionPointerForName",
+        "NSClassFromString", "objc_getClass", "objc_lookUpClass", "objc_getMetaClass"};
+    for (const char *wrapper : wrappers) if (!strcmp(name, wrapper)) return true;
+    return false;
+}
+
 void *PearANGLEGameSymbol(const char *name) {
     if (!name || !PearANGLEGameRoutingEnabled()) return nullptr;
+    if (!PearIsLookupWrapper(name) && (PearIsGLName(name) || !strncmp(name, "OBJC_", 5) ||
+                                       !strncmp(name, "EAGL", 4) || !strcmp(name, "eglGetProcAddress")))
+        PearEnsureANGLE();
     if (!strcmp(name, "OBJC_CLASS_$_EAGLContext")) return (__bridge void *)PearEAGLContext.class;
     if (!strcmp(name, "OBJC_CLASS_$_EAGLSharegroup")) return (__bridge void *)PearEAGLSharegroup.class;
     if (!strcmp(name, "OBJC_METACLASS_$_EAGLContext")) return (__bridge void *)object_getClass(PearEAGLContext.class);
@@ -325,12 +363,35 @@ __attribute__((constructor)) static void PearEnableGameRouting() {
         const char *leaf = strrchr(path, '/');
         if (leaf && !strcmp(leaf + 1, "libPearOpenGLES.dylib")) { PearBridgePath() = path; break; }
     }
+    // An app that only reaches OpenGL ES at run time (dlopen, environment
+    // injection) does not load the bridge at launch. The installer puts it
+    // next to the runtime in every compatibility app; arm routing with it so
+    // a later dlopen("OpenGLES") gets the bridge, never the system framework.
+    std::string runtimeDirectory;
+    {
+        Dl_info self = {};
+        if (dladdr((const void *)&PearEnableGameRouting, &self) && self.dli_fname) {
+            runtimeDirectory = self.dli_fname;
+            size_t slash = runtimeDirectory.rfind('/');
+            runtimeDirectory = slash == std::string::npos ? std::string() : runtimeDirectory.substr(0, slash);
+        }
+    }
+    bool lazy = false;
+    if (PearBridgePath().empty() && !runtimeDirectory.empty()) {
+        std::string sibling = runtimeDirectory + "/libPearOpenGLES.dylib";
+        if (access(sibling.c_str(), R_OK) == 0) { PearBridgePath() = sibling; lazy = !backend; }
+    }
     if (backend && strcmp(backend, "angle")) {
         PearANGLETrace("[PearRuntime][angle-route] unsupported backend; only ANGLE is available\n");
         _exit(78);
     }
     if (!backend && PearBridgePath().empty()) return;
     if (!PearRuntimeModuleEnabled("graphics-gl")) {
+        if (lazy) {
+            // The app does not link GL; a core-only or Metal session must keep running.
+            PearANGLETrace("[PearRuntime][angle-route] graphics-gl disabled; GL routing not armed\n");
+            return;
+        }
         PearANGLETrace("[PearRuntime][angle-route] ANGLE requires the graphics-gl module\n");
         _exit(78);
     }
@@ -342,18 +403,32 @@ __attribute__((constructor)) static void PearEnableGameRouting() {
         PearAppRoot() = canonical;
         size_t app = PearAppRoot().find(".app/");
         if (app != std::string::npos) PearAppRoot().resize(app + 4);
+        // ANGLE lives next to the runtime (Frameworks/PearANGLE); the app root
+        // layout remains the fallback, PEAR_ANGLE_LIB_DIR the override.
         const char *directory = getenv("PEAR_ANGLE_LIB_DIR");
-        NSString *libraries = directory ? [NSString stringWithUTF8String:directory] :
-            [[NSString stringWithUTF8String:PearAppRoot().c_str()] stringByAppendingPathComponent:@"Frameworks/PearANGLE"];
-        NSError *error = nil;
-        if (!PearANGLEInitialize(libraries, &error)) {
-            PearANGLETrace("[PearRuntime][angle-route] initialization failed: %s\n", error.localizedDescription.UTF8String);
-            _exit(78);
+        NSString *libraries = nil;
+        if (directory) {
+            libraries = [NSString stringWithUTF8String:directory];
+        } else if (!runtimeDirectory.empty() &&
+                   access((runtimeDirectory + "/PearANGLE/libEGL.dylib").c_str(), R_OK) == 0) {
+            libraries = [[NSString stringWithUTF8String:runtimeDirectory.c_str()] stringByAppendingPathComponent:@"PearANGLE"];
+        } else {
+            libraries = [[NSString stringWithUTF8String:PearAppRoot().c_str()] stringByAppendingPathComponent:@"Frameworks/PearANGLE"];
+        }
+        if (lazy) {
+            PearLazyANGLEDirectory() = libraries.fileSystemRepresentation;
+        } else {
+            NSError *error = nil;
+            if (!PearANGLEInitialize(libraries, &error)) {
+                PearANGLETrace("[PearRuntime][angle-route] initialization failed: %s\n", error.localizedDescription.UTF8String);
+                _exit(78);
+            }
         }
         gRoutingReady.store(true, std::memory_order_release);
         _dyld_register_func_for_add_image(PearRouteImage);
         auto installGeometry = (void (*)(void))dlsym(RTLD_DEFAULT, "PearANGLEInstallGeometryHooks");
         if (installGeometry) installGeometry();
-        PearANGLETrace("[PearRuntime][angle-route] ANGLE is the only GL backend\n");
+        PearANGLETrace(lazy ? "[PearRuntime][angle-route] ANGLE routing armed; starts on first GL use\n"
+                            : "[PearRuntime][angle-route] ANGLE is the only GL backend\n");
     }
 }
