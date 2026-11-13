@@ -1,6 +1,7 @@
 #pragma once
 #import <Foundation/Foundation.h>
 #import "PearANGLEBackend.h"
+@class CALayer;
 
 @interface PearANGLESharegroup : NSObject
 @end
@@ -20,9 +21,14 @@
 + (PearANGLEContext *)currentContext;
 + (BOOL)setCurrentContext:(PearANGLEContext *)context error:(NSError *__autoreleasing *)error;
 - (BOOL)resizePixelWidth:(NSUInteger)width height:(NSUInteger)height error:(NSError *__autoreleasing *)error;
+// Native surface changes occur on the context's render thread. A layer
+// geometry change requires detach/rebind before the next frame is presented.
+- (BOOL)bindDrawableLayer:(CALayer *)layer error:(NSError *__autoreleasing *)error;
+- (BOOL)detachDrawableLayerWithError:(NSError *__autoreleasing *)error;
+@property(nonatomic, readonly) BOOL hasWindowSurface;
 // Matching RGBA8 source color attachment 0, in this context's object space.
 // The allocation adapter must retain/validate attachment format metadata.
-// Window-surface/EAGL renderbuffer routing is a separate adapter.
+// EAGL renderbuffer/import routing is a separate adapter.
 - (BOOL)presentFramebuffer:(unsigned int)framebuffer width:(NSUInteger)width height:(NSUInteger)height
                      error:(NSError *__autoreleasing *)error;
 @end

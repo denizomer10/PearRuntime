@@ -4,6 +4,8 @@
 #include <GLES3/gl3.h>
 #include <cstring>
 #include <pthread.h>
+#import <QuartzCore/QuartzCore.h>
+#include <cmath>
 #include <mutex>
 
 static std::recursive_mutex gContextOperations;
@@ -20,6 +22,8 @@ struct PearContextAPI {
     PFNEGLGETERRORPROC error;
     PFNEGLSWAPBUFFERSPROC swap;
     PFNEGLRELEASETHREADPROC releaseThread;
+    PFNEGLCREATEWINDOWSURFACEPROC window;
+    PFNEGLQUERYSURFACEPROC querySurface;
 };
 static PearContextAPI gEGL;
 
@@ -42,6 +46,8 @@ static BOOL PearLoadContextAPI(NSError *__autoreleasing *error) {
     LOAD(error, "eglGetError", PFNEGLGETERRORPROC);
     LOAD(swap, "eglSwapBuffers", PFNEGLSWAPBUFFERSPROC);
     LOAD(releaseThread, "eglReleaseThread", PFNEGLRELEASETHREADPROC);
+    LOAD(window, "eglCreateWindowSurface", PFNEGLCREATEWINDOWSURFACEPROC);
+    LOAD(querySurface, "eglQuerySurface", PFNEGLQUERYSURFACEPROC);
 #undef LOAD
     return YES;
 }
@@ -64,6 +70,9 @@ static BOOL PearLoadContextAPI(NSError *__autoreleasing *error) {
     pthread_t _ownerThread;
     BOOL _hasOwner;
     NSUInteger _width, _height;
+    CALayer *_drawableLayer;
+    CGRect _drawableBounds;
+    CGFloat _drawableScale;
 }
 + (void)threadExitedWithRetainedContext:(void *)value;
 @end
@@ -92,7 +101,7 @@ static void PearContextThreadExited(void *value) {
         PearContextError(error, 4, @"A sharegroup cannot mix GLES client versions"); return nil;
     }
     EGLint renderable = version == 1 ? EGL_OPENGL_ES_BIT : version == 2 ? EGL_OPENGL_ES2_BIT : EGL_OPENGL_ES3_BIT_KHR;
-    EGLint config[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE, renderable,
+    EGLint config[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT | EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE, renderable,
         EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_NONE};
     EGLint count = 0;
     if (!gEGL.choose(PearANGLEDisplay(), config, &_config, 1, &count) || count != 1) {
@@ -154,6 +163,8 @@ static void PearContextThreadExited(void *value) {
 
 - (BOOL)resizePixelWidth:(NSUInteger)width height:(NSUInteger)height error:(NSError *__autoreleasing *)error {
     std::lock_guard<std::recursive_mutex> guard(gContextOperations);
+    if (_drawableLayer)
+        return PearContextError(error, 22, @"Detach the native surface before allocating a pbuffer drawable");
     if (!width || !height || width > 8192 || height > 8192)
         return PearContextError(error, 9, @"Drawable dimensions must be 1…8192 pixels");
     if (_hasOwner && !pthread_equal(_ownerThread, pthread_self()))
@@ -174,6 +185,69 @@ static void PearContextThreadExited(void *value) {
     return YES;
 }
 
+- (BOOL)hasWindowSurface { std::lock_guard<std::recursive_mutex> guard(gContextOperations); return _drawableLayer != nil; }
+
+- (BOOL)bindDrawableLayer:(CALayer *)layer error:(NSError *__autoreleasing *)error {
+    std::lock_guard<std::recursive_mutex> guard(gContextOperations);
+    if ([PearANGLEContext currentContext] != self)
+        return PearContextError(error, 12, @"Native surface binding requires this context on the calling thread");
+    if (!layer || ![layer isKindOfClass:CALayer.class])
+        return PearContextError(error, 23, @"A native CALayer is required");
+    CGRect bounds = layer.bounds;
+    CGFloat scale = layer.contentsScale;
+    double width = bounds.size.width * scale, height = bounds.size.height * scale;
+    if (!isfinite(scale) || scale <= 0 || bounds.size.width <= 0 || bounds.size.height <= 0 ||
+        !isfinite(width) || !isfinite(height) || width < 1 || height < 1 || width > 8192 || height > 8192)
+        return PearContextError(error, 9, @"Native drawable pixel dimensions must be 1…8192");
+    if (_drawableLayer == layer) {
+        if (CGRectEqualToRect(bounds, _drawableBounds) && scale == _drawableScale) return YES;
+        return PearContextError(error, 24, @"Native surface geometry changed; detach and rebind at a frame boundary");
+    }
+    EGLint attributes[] = {EGL_NONE};
+    EGLSurface replacement = gEGL.window(PearANGLEDisplay(), _config, (__bridge EGLNativeWindowType)layer, attributes);
+    if (replacement == EGL_NO_SURFACE)
+        return PearContextError(error, 25, [NSString stringWithFormat:@"EGL native surface creation failed (0x%x)", gEGL.error()]);
+    if (!gEGL.current(PearANGLEDisplay(), replacement, replacement, _context)) {
+        gEGL.destroySurface(PearANGLEDisplay(), replacement);
+        return PearContextError(error, 26, @"Native surface binding failed; previous drawable retained");
+    }
+    EGLint actualWidth = 0, actualHeight = 0;
+    BOOL valid = gEGL.querySurface(PearANGLEDisplay(), replacement, EGL_WIDTH, &actualWidth) &&
+        gEGL.querySurface(PearANGLEDisplay(), replacement, EGL_HEIGHT, &actualHeight) && actualWidth > 0 && actualHeight > 0;
+    if (!valid) {
+        gEGL.current(PearANGLEDisplay(), _surface, _surface, _context);
+        gEGL.destroySurface(PearANGLEDisplay(), replacement);
+        return PearContextError(error, 27, @"EGL returned invalid native drawable dimensions");
+    }
+    EGLSurface previous = _surface;
+    __attribute__((objc_precise_lifetime)) CALayer *previousLayer = _drawableLayer;
+    _surface = replacement; _width = (NSUInteger)actualWidth; _height = (NSUInteger)actualHeight;
+    _drawableLayer = layer; _drawableBounds = bounds; _drawableScale = scale;
+    gEGL.destroySurface(PearANGLEDisplay(), previous);
+    (void)previousLayer; // Retain the previous host until EGL has released it.
+    return YES;
+}
+
+- (BOOL)detachDrawableLayerWithError:(NSError *__autoreleasing *)error {
+    std::lock_guard<std::recursive_mutex> guard(gContextOperations);
+    if ([PearANGLEContext currentContext] != self)
+        return PearContextError(error, 12, @"Native surface detachment requires this context on the calling thread");
+    if (!_drawableLayer) return YES;
+    EGLint attributes[] = {EGL_WIDTH, (EGLint)_width, EGL_HEIGHT, (EGLint)_height, EGL_NONE};
+    EGLSurface replacement = gEGL.surface(PearANGLEDisplay(), _config, attributes);
+    if (replacement == EGL_NO_SURFACE)
+        return PearContextError(error, 10, @"Replacement pbuffer allocation failed; native surface retained");
+    if (!gEGL.current(PearANGLEDisplay(), replacement, replacement, _context)) {
+        gEGL.destroySurface(PearANGLEDisplay(), replacement);
+        return PearContextError(error, 11, @"Replacement pbuffer binding failed; native surface retained");
+    }
+    EGLSurface previous = _surface;
+    _surface = replacement;
+    gEGL.destroySurface(PearANGLEDisplay(), previous);
+    _drawableLayer = nil;
+    return YES;
+}
+
 - (NSUInteger)pixelWidth { std::lock_guard<std::recursive_mutex> guard(gContextOperations); return _width; }
 - (NSUInteger)pixelHeight { std::lock_guard<std::recursive_mutex> guard(gContextOperations); return _height; }
 
@@ -182,6 +256,8 @@ static void PearContextThreadExited(void *value) {
     std::lock_guard<std::recursive_mutex> guard(gContextOperations);
     if ([PearANGLEContext currentContext] != self)
         return PearContextError(error, 12, @"Presentation requires this context on the calling thread");
+    if (_drawableLayer && (!CGRectEqualToRect(_drawableLayer.bounds, _drawableBounds) || _drawableLayer.contentsScale != _drawableScale))
+        return PearContextError(error, 24, @"Native geometry changed; rebuild drawable and input geometry before presentation");
     if (_clientVersion < 2 || !width || !height || width > 8192 || height > 8192)
         return PearContextError(error, 13, @"Framebuffer presentation requires GLES 2/3 and valid pixel dimensions");
     if (_clientVersion == 2 && (width != _width || height != _height))

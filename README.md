@@ -103,14 +103,17 @@ These switches are diagnostic isolation controls, not guarantees of title compat
 ### ANGLE context core (not game routing yet)
 
 `include/PearANGLEContext.h` and `modules/graphics-gl/ANGLEContext.mm` provide
-original EGL context/sharegroup ownership and pixel-sized pbuffer lifecycle.
+original EGL context/sharegroup ownership, pixel-sized pbuffers, and native
+CALayer/CAMetalLayer surface lifecycle.
 The backend is explicit and immutable; no system EAGL context or GL object is
 mixed with ANGLE. Cross-thread use is rejected while a context is current.
 Presentation currently covers matching RGBA8 color attachment 0; GLES2 copies
-require identical pixel extents, while GLES3 core blit can scale. GLES1 and
-native-window/EAGL import routing remain separate work.
+require identical pixel extents, while GLES3 core blit can scale. Native bounds
+or backing-scale changes require explicit detach/rebind at a frame boundary;
+the EAGL adapter must rebuild renderbuffer and input geometry together. GLES1
+presentation and EAGL renderbuffer/import routing remain separate work.
 
-Use the pinned ANGLE fork's Apple thread-exit fix (`9e214cf` or later). Old
+Use the pinned ANGLE fork's thread-exit and host-layer fixes (`f405241`). Old
 staged libraries reproduce EGL_BAD_ACCESS after a current context's thread
 exits. The PearSilicon parent repository contains the source-build script and
 real Catalyst/Metal shader, framebuffer and thread-lifecycle tests.
