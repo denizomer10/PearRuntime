@@ -1,3 +1,3 @@
 [submodule "third_party/angle"]
 	path = third_party/angle
-	url = https://github.com/denizomer10/angle.git
+	url = https://github.com/denizomer10/PearANGLE.git

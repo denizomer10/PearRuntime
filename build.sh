@@ -227,4 +227,17 @@ for lib in libEGL.dylib libGLESv2.dylib; do
   xcrun install_name_tool -id "@rpath/PearANGLE/$lib" "$ANGLE_STAGE/$lib" 2>/dev/null
 done
 cp "$ROOT/third_party/angle/LICENSE" "$ANGLE_STAGE/LICENSE.ANGLE"
+# ANGLE's LICENSE covers ANGLE only; the dylibs also contain abseil, zlib,
+# xxHash, astc-encoder and others whose licenses must travel with them. Read
+# the link inputs from the build when it is available, so a new dependency
+# cannot slip in without its license.
+ANGLE_LICENSE_ARGS=(--angle-root "$ROOT/third_party/angle" --out "$ANGLE_STAGE/THIRD_PARTY_LICENSES.txt")
+if [[ -f "$ANGLE_SRC/build.ninja" ]]; then
+  ANGLE_LICENSE_ARGS+=(--ninja-dir "$ANGLE_SRC" --target libEGL.dylib --target libGLESv2.dylib)
+else
+  for component in abseil-cpp astc-encoder perfetto volk xxhash zlib; do
+    ANGLE_LICENSE_ARGS+=(--component "$component")
+  done
+fi
+python3 "$ROOT/collect-angle-licenses.py" "${ANGLE_LICENSE_ARGS[@]}"
 file "$ANGLE_STAGE"/*.dylib
