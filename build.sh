@@ -44,7 +44,7 @@ COMMON=(-target "$TARGET" -isysroot "$SDK" -iframework "$IOS_FRAMEWORKS"
 
 # Module layout: modules/<module>/*.mm. Every file is compiled with its module
 # name so its initializer can be switched off at launch (PEAR_RUNTIME_DISABLE).
-MODULES=(core input graphics device storage services)
+MODULES=(core input graphics device storage services performance)
 
 # Emit a compilation database so editors/clangd resolve UIKit for these files.
 {

@@ -8,7 +8,7 @@
 #define PEAR_RUNTIME_VERSION "dev"
 #endif
 
-static const char *const kModules[] = {"core", "input", "graphics", "device", "storage", "services"};
+static const char *const kModules[] = {"core", "input", "graphics", "device", "storage", "services", "performance"};
 enum { kModuleCount = sizeof(kModules) / sizeof(kModules[0]) };
 static int gEnabled[kModuleCount];
 static char gEnabledList[128];

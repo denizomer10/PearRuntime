@@ -125,17 +125,21 @@ static void PearEnsureKeyWindow(void) {
 
 static char kPearSeededBounds, kPearSeededDrawable;
 
-static void PearFixMetalLayers(void);
+static int PearFixMetalLayers(int *metalLayers);
 static BOOL PearInstallNextDrawableFix(void);
 
-static void PearFixMetalLayers(void) {
+/// Scans the window tree and repairs Metal layers. Returns the number of layers
+/// changed and stores how many Metal layers were seen.
+static int PearFixMetalLayers(int *metalLayers) {
+    if (metalLayers) *metalLayers = 0;
     PearInstallNextDrawableFix();
-    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    static id<MTLDevice> device;
+    if (!device) device = MTLCreateSystemDefaultDevice();
     if (!device) {
         if (PearMetalDebug()) {
             PearLog(@"[PearRuntime][metal] MTLCreateSystemDefaultDevice returned nil");
         }
-        return;
+        return 0;
     }
 
     PearEnsureKeyWindow();
@@ -169,6 +173,7 @@ static void PearFixMetalLayers(void) {
         if ([layer isKindOfClass:CAMetalLayer.class]) {
             CAMetalLayer *metal = (CAMetalLayer *)layer;
             BOOL changed = NO;
+            if (metalLayers) (*metalLayers)++;
 
             if (metal.device == nil) {
                 metal.device = device;
@@ -234,6 +239,7 @@ static void PearFixMetalLayers(void) {
         PearLog(@"[PearRuntime][metal] scan: %lu window(s), %d layer(s) normalized",
                 (unsigned long)windowCount, fixed);
     }
+    return fixed;
 }
 
 /// A layer can be created and asked for a drawable before it is attached to a
@@ -259,8 +265,17 @@ static BOOL PearInstallNextDrawableFix(void) {
     if (PearMetalDebug()) PearLog(@"[PearRuntime][metal] nextDrawable fix installed");
 
     IMP original = method_getImplementation(method);
+    static const BOOL trace = getenv("PEAR_PERF_TRACE") != NULL;
     method_setImplementation(method, imp_implementationWithBlock(^id(id self) {
         CAMetalLayer *layer = (CAMetalLayer *)self;
+        // Hot path: once a layer has a device and a drawable size there is
+        // nothing to repair. Two property reads instead of five per frame.
+        if (!trace) {
+            CGSize drawable = layer.drawableSize;
+            if (drawable.width > 0 && drawable.height > 0 && layer.device != nil) {
+                return ((id (*)(id, SEL))original)(self, selector);
+            }
+        }
         if (layer.device == nil) {
             id<MTLDevice> device = MTLCreateSystemDefaultDevice();
             if (device) {
@@ -285,7 +300,6 @@ static BOOL PearInstallNextDrawableFix(void) {
             objc_setAssociatedObject(layer, &kPearSeededDrawable, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
 
-        static const BOOL trace = getenv("PEAR_PERF_TRACE") != NULL;
         if (!trace) return ((id (*)(id, SEL))original)(self, selector);
         double start = CACurrentMediaTime();
         id drawable = ((id (*)(id, SEL))original)(self, selector);
@@ -338,11 +352,28 @@ static void PearMetalLayerShimInit(void) {
         dispatch_resume(retry);
     }
     // The layer and the key window can appear well after the app's first frame,
-    // especially when an engine preloads content. Check for a full minute.
-    for (int i = 1; i <= 60; i++) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * 1.0 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            @autoreleasepool { PearFixMetalLayers(); }
-        });
-    }
+    // especially when an engine preloads content. Check once a second for up to
+    // a minute, but stop as soon as the game's Metal layers have stayed healthy
+    // for five scans: walking the layer tree on the main thread during gameplay
+    // is a needless hitch source.
+    static dispatch_source_t scan;
+    scan = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(scan, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC),
+                              NSEC_PER_SEC, NSEC_PER_SEC / 10);
+    __block int scans = 0, healthy = 0;
+    dispatch_source_set_event_handler(scan, ^{
+        @autoreleasepool {
+            int layers = 0;
+            int fixed = PearFixMetalLayers(&layers);
+            healthy = (layers > 0 && fixed == 0) ? healthy + 1 : 0;
+            if (++scans >= 60 || healthy >= 5) {
+                if (PearMetalDebug()) {
+                    PearLog(@"[PearRuntime][metal] layer scan finished after %d scan(s)", scans);
+                }
+                dispatch_source_cancel(scan);
+                scan = nil;
+            }
+        }
+    });
+    dispatch_resume(scan);
 }

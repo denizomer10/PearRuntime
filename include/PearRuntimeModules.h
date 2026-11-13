@@ -27,6 +27,9 @@ const char *PearRuntimeVersion(void);
 }
 #endif
 
+// The `performance` module (Apple silicon scheduling, Game Mode) follows the
+// same rules.
+//
 // Each source file is compiled with -DPEAR_RUNTIME_MODULE="<module>". An
 // initializer opts into module gating with this guard as its first statement.
 #ifndef PEAR_RUNTIME_MODULE

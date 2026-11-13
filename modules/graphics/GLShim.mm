@@ -20,6 +20,7 @@
 #import <dlfcn.h>
 #import <string.h>
 #import <math.h>
+#import <atomic>
 #import "PearRuntime.h"
 #import "PearTouchGeometry.h"
 
@@ -78,8 +79,39 @@ static void PearFitDrawable(CALayer *layer);
 /// a window-sized framebuffer; cropping to that viewport makes the visible
 /// image fill the window, and the same scale aligns touch with what is shown.
 /// Opt out with PEAR_NO_GL_VIEWPORT_FIT=1.
+/// Bumped (from any thread) whenever the window geometry may have changed.
+/// The present path re-fits only after a bump, and keeps re-fitting for a
+/// short settling period because UIKit applies its new window size a little
+/// after the AppKit resize notification. Without this, every presented frame
+/// queued a main-thread block, which competes with the game's own main-thread
+/// work (Unity and most iOS engines render on the main thread) and shows up as
+/// frame-time spikes.
+static std::atomic<uint32_t> gGeometryGeneration{1};
+static uint32_t gSeenGeometryGeneration = 0;
+static int gFitSettleFrames = 0;
+
+static void PearGLGeometryChanged(void) {
+    gGeometryGeneration.fetch_add(1, std::memory_order_relaxed);
+}
+
+static void PearObserveGLGeometry(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        for (NSString *name in @[ @"NSWindowDidResizeNotification",
+                                  @"NSWindowDidEnterFullScreenNotification",
+                                  @"NSWindowDidExitFullScreenNotification",
+                                  @"NSWindowDidChangeBackingPropertiesNotification",
+                                  UIWindowDidBecomeKeyNotification,
+                                  UISceneDidActivateNotification ]) {
+            [NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:nil
+                usingBlock:^(__unused NSNotification *note) { PearGLGeometryChanged(); }];
+        }
+    });
+}
+
 static void PearUpdateDrawableCrop(void) {
-    if (getenv("PEAR_NO_GL_VIEWPORT_FIT")) return;
+    static const BOOL disabled = getenv("PEAR_NO_GL_VIEWPORT_FIT") != NULL;
+    if (disabled) return;
     CALayer *layer = gDrawableLayer;
     if (!layer) return;
 
@@ -110,9 +142,21 @@ static void PearUpdateDrawableCrop(void) {
     }
 
     // The window can be resized (or rotated) after the renderbuffer was
-    // created. Re-fit on every present so the visible scale follows the window;
-    // a stale scale makes taps land away from the controls.
-    PearFitDrawable(layer);
+    // created. Re-fit after every geometry change (and briefly afterwards, while
+    // UIKit settles) so the visible scale follows the window; a stale scale
+    // makes taps land away from the controls. A slow periodic re-fit covers
+    // changes that arrive without a notification.
+    uint32_t generation = gGeometryGeneration.load(std::memory_order_relaxed);
+    if (generation != gSeenGeometryGeneration) {
+        gSeenGeometryGeneration = generation;
+        gFitSettleFrames = 45;
+    }
+    if (gFitSettleFrames > 0) {
+        gFitSettleFrames--;
+        PearFitDrawable(layer);
+    } else if (gPresentCount % 120 == 0) {
+        PearFitDrawable(layer);
+    }
 
     typedef void (*PearGetIntegervFn)(int pname, int *params);
     static PearGetIntegervFn getIntegerv;
@@ -202,7 +246,8 @@ extern "C" void *EAGLGetProcAddress(const char *name) {
 #pragma mark - Drawable fit
 
 static BOOL PearGLDebug(void) {
-    return getenv("PEAR_DEBUG_GL") != NULL;
+    static const BOOL debug = getenv("PEAR_DEBUG_GL") != NULL;
+    return debug;
 }
 
 static UIWindow *PearGLKeyWindow(void);
@@ -215,6 +260,31 @@ static UIWindow *PearGLWindowForLayer(CALayer *layer) {
 
 static UIWindow *PearGLKeyWindow(void) {
     return PearPrimaryWindow();
+}
+
+/// Whether a large (maximised / full-screen) window keeps the drawable at the
+/// size the engine first created and only scales it up visually.
+///
+/// That freeze exists for legacy GL titles (the legacy window profile), which
+/// lay their controls out once and mis-place every touch if the view grows.
+/// Modern engines re-allocate their renderbuffer and re-layout on resize; for
+/// them the freeze produced a pillar-boxed, upscaled (blurry) image in a
+/// maximised or full-screen window. They now follow the window at its real
+/// pixel size. PEAR_GL_FREEZE_LARGE_WINDOW=1/0 forces either behaviour.
+static BOOL PearGLFreezesLargeWindows(void) {
+    static BOOL freeze;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        const char *forced = getenv("PEAR_GL_FREEZE_LARGE_WINDOW");
+        if (forced && *forced) {
+            freeze = strcmp(forced, "0") != 0;
+        } else {
+            freeze = getenv("PEAR_LEGACY_ATTACH_LAYER") != NULL;
+        }
+        PearLog(@"[PearRuntime][gl] large windows: %s",
+                freeze ? "keep the launch drawable (legacy profile)" : "re-render at window size");
+    });
+    return freeze;
 }
 
 static CGSize gLastFitWindowSize = { 0, 0 };
@@ -308,7 +378,8 @@ static void PearInstallTouchRemap(void) {
 /// `locationInView:` in the space the engine was built for, while the transform
 /// still makes the frame fill the window.
 static void PearFitDrawable(CALayer *layer) {
-    if (!layer || getenv("PEAR_NO_GL_FIT")) return;
+    static const BOOL disabled = getenv("PEAR_NO_GL_FIT") != NULL;
+    if (!layer || disabled) return;
     CGSize native = gNativeDrawableSize;
     if (native.width < 1 || native.height < 1) return;
 
@@ -323,7 +394,8 @@ static void PearFitDrawable(CALayer *layer) {
         // Remember the last window the app was actually laid out in. A window
         // that is much larger than the drawable in both axes is the full-screen
         // (or otherwise maximised) form and must not become the reference.
-        BOOL fullScreenLike = windowBounds.size.width > native.width * 1.4 &&
+        BOOL fullScreenLike = PearGLFreezesLargeWindows() &&
+                              windowBounds.size.width > native.width * 1.4 &&
                               windowBounds.size.height > native.height * 1.4;
         if (!fullScreenLike) {
             if (gReferenceWindowSize.width < 1) gReferenceWindowSize = windowBounds.size;
@@ -494,7 +566,7 @@ static void PearInstallEAGLHook(void) {
                 // the transform handles the visible size. A normal windowed
                 // resize is left alone.
                 UIWindow *window = PearGLWindowForLayer(layer);
-                BOOL fullScreenLike = window &&
+                BOOL fullScreenLike = window && PearGLFreezesLargeWindows() &&
                     layer.bounds.size.width > gNativeDrawableSize.width * 1.4 &&
                     layer.bounds.size.height > gNativeDrawableSize.height * 1.4;
                 if (fullScreenLike) {
@@ -505,6 +577,8 @@ static void PearInstallEAGLHook(void) {
             gGLDrawableSize = CGSizeMake(layer.bounds.size.width * layer.contentsScale,
                                          layer.bounds.size.height * layer.contentsScale);
             gDrawableLayer = layer;
+            PearObserveGLGeometry();
+            PearGLGeometryChanged();
             PearFitDrawable(layer);
         } else if (PearGLDebug()) {
             PearLog(@"[PearRuntime][gl] renderbufferStorage fromDrawable %@", NSStringFromClass([drawable class]));

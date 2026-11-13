@@ -12,10 +12,24 @@
 // This replaces `UIScreen`'s geometry accessors so they follow the key window
 // live — which also means the values track window resizes. Disable with
 // PEAR_NO_SCREEN_SHIM.
+//
+// Render scale: `scale`/`nativeScale` report the display's real backing scale
+// (2.0 on a Retina Mac) multiplied by PEAR_RENDER_SCALE, and `nativeBounds` is
+// the window size in pixels at that scale. Earlier builds reported 1.0, so
+// every engine that sizes its render target as `bounds * scale` rendered a
+// quarter of the window's pixels and the compositor upscaled it (blurry, low
+// internal resolution). PEAR_RENDER_SCALE accepts:
+//   native (default)  the display's backing scale
+//   0.25 … 1          that fraction of native (performance), never below 1x
+//   points            1.0, the old behaviour
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import <stdatomic.h>
+#import <os/lock.h>
+#import <time.h>
+#import "PearRuntime.h"
 
 /// Set by the deprecated `UIViewController.interfaceOrientation` override when
 /// an app actually reads it. Only those apps cache the launch-time orientation
@@ -47,9 +61,35 @@ static CGRect PearReportedBounds(void) {
     if (gReportedOverride.width > 0 && gReportedOverride.height > 0) {
         return CGRectMake(0, 0, gReportedOverride.width, gReportedOverride.height);
     }
+
+    // Engines query UIScreen every frame, often from their render thread.
+    // Walking the scene/window tree each time costs main-thread time and is
+    // not thread-safe, so the window size is cached briefly: the main thread
+    // refreshes it at most every 50 ms (fast enough to follow a live resize),
+    // other threads read the last main-thread value.
+    static os_unfair_lock cacheLock = OS_UNFAIR_LOCK_INIT;
+    static CGSize cachedSize = {0, 0};
+    static uint64_t cachedAt = 0;
+    const uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    const BOOL main = [NSThread isMainThread];
+    os_unfair_lock_lock(&cacheLock);
+    CGSize cached = cachedSize;
+    uint64_t age = now - cachedAt;
+    os_unfair_lock_unlock(&cacheLock);
+    if (cached.width > 0 && cached.height > 0 && (!main || age < 50 * NSEC_PER_MSEC)) {
+        return CGRectMake(0, 0, cached.width, cached.height);
+    }
+
     UIWindow *window = PearMainWindow();
     if (window && window.bounds.size.width > 0 && window.bounds.size.height > 0) {
-        return window.bounds;
+        CGRect bounds = window.bounds;
+        if (main) {
+            os_unfair_lock_lock(&cacheLock);
+            cachedSize = bounds.size;
+            cachedAt = now;
+            os_unfair_lock_unlock(&cacheLock);
+        }
+        return bounds;
     }
 
     // Before the first scene/window is connected, UIKit can report an empty
@@ -63,6 +103,73 @@ static CGRect PearReportedBounds(void) {
         PearLog(@"[PearRuntime][screen] no window yet; reporting 1024x768 fallback");
     }
     return CGRectMake(0, 0, 1024, 768);
+}
+
+/// Display backing scale (as UIKit reports it for the window), cached so
+/// render threads never touch UIKit; refreshed on the main thread and when the
+/// window moves between displays.
+static IMP gOriginalScaleIMP = NULL;
+static _Atomic double gDisplayScale = 0;
+
+/// Multiplier from PEAR_RENDER_SCALE, parsed once. 0 means "points" (1.0).
+static double PearRenderScaleFactor(void) {
+    static double factor = 1.0;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        const char *value = getenv("PEAR_RENDER_SCALE");
+        if (!value || !*value || strcasecmp(value, "native") == 0) return;
+        if (strcasecmp(value, "points") == 0 || strcasecmp(value, "legacy") == 0) {
+            factor = 0;
+            return;
+        }
+        double parsed = atof(value);
+        if (parsed >= 0.25 && parsed <= 1.0) factor = parsed;
+    });
+    return factor;
+}
+
+static double PearDisplayScale(id screen) {
+    double cached = atomic_load(&gDisplayScale);
+    const BOOL main = [NSThread isMainThread];
+    if (cached > 0 && !main) return cached;
+    double scale = 0;
+    if (main) {
+        UIWindow *window = PearMainWindow();
+        if (window) scale = window.traitCollection.displayScale;
+    }
+    // Before the window exists, Catalyst's UIScreen reports a nominal 2.0 even
+    // on a 1x display. An engine that sized its drawable from that value would
+    // then disagree with the window (and with touch coordinates) once the real
+    // scale appears, so ask AppKit for the actual display instead.
+    if (scale <= 0 && main) {
+        Class nsScreen = NSClassFromString(@"NSScreen");
+        id mainScreen = [nsScreen respondsToSelector:@selector(mainScreen)]
+            ? ((id (*)(id, SEL))objc_msgSend)(nsScreen, @selector(mainScreen)) : nil;
+        SEL backing = NSSelectorFromString(@"backingScaleFactor");
+        if ([mainScreen respondsToSelector:backing]) {
+            scale = ((CGFloat (*)(id, SEL))objc_msgSend)(mainScreen, backing);
+        }
+    }
+    if (scale <= 0 && gOriginalScaleIMP && screen) {
+        scale = ((CGFloat (*)(id, SEL))gOriginalScaleIMP)(screen, @selector(scale));
+    }
+    if (scale <= 0) scale = cached > 0 ? cached : 2.0;
+    static _Atomic double logged = 0;
+    if (scale != cached) atomic_store(&gDisplayScale, scale);
+    if (scale != atomic_exchange(&logged, scale)) {
+        double factor = PearRenderScaleFactor();
+        PearLog(@"[PearRuntime][screen] display backing scale %.2f, render scale %.2f",
+                scale, factor == 0 ? 1.0 : MAX(1.0, scale * factor));
+    }
+    return scale;
+}
+
+/// The scale reported to the app: the display's backing scale times the
+/// configured render factor, never below 1.
+static CGFloat PearReportedScale(id screen) {
+    double factor = PearRenderScaleFactor();
+    if (factor == 0) return 1.0;
+    return (CGFloat)MAX(1.0, PearDisplayScale(screen) * factor);
 }
 
 /// The orientation implied by the app's actual window shape. Used instead of
@@ -99,29 +206,38 @@ static void PearInstallScreenShim(void) {
         return ((CGRect (*)(id, SEL))originalBounds)(self, @selector(bounds));
     }));
 
-    Method nativeBoundsMethod = class_getInstanceMethod(screen, @selector(nativeBounds));
-    IMP originalNative = method_getImplementation(nativeBoundsMethod);
-    method_setImplementation(nativeBoundsMethod, imp_implementationWithBlock(^CGRect(id self) {
-        CGRect reported = PearReportedBounds();
-        if (!CGRectIsNull(reported)) return reported;
-        return ((CGRect (*)(id, SEL))originalNative)(self, @selector(nativeBounds));
-    }));
-
     Method scaleMethod = class_getInstanceMethod(screen, @selector(scale));
-    IMP originalScale = method_getImplementation(scaleMethod);
+    gOriginalScaleIMP = method_getImplementation(scaleMethod);
     method_setImplementation(scaleMethod, imp_implementationWithBlock(^CGFloat(id self) {
-        if (!CGRectIsNull(PearReportedBounds())) return 1.0;
-        return ((CGFloat (*)(id, SEL))originalScale)(self, @selector(scale));
+        return PearReportedScale(self);
     }));
 
     Method nativeScaleMethod = class_getInstanceMethod(screen, @selector(nativeScale));
-    IMP originalNativeScale = method_getImplementation(nativeScaleMethod);
     method_setImplementation(nativeScaleMethod, imp_implementationWithBlock(^CGFloat(id self) {
-        if (!CGRectIsNull(PearReportedBounds())) return 1.0;
-        return ((CGFloat (*)(id, SEL))originalNativeScale)(self, @selector(nativeScale));
+        return PearReportedScale(self);
     }));
 
-    PearLog(@"[PearRuntime][screen] shim installed (UIScreen follows the window)");
+    // Pixels, as on a device: engines that size their backbuffer from
+    // nativeBounds then match the window's real pixel count.
+    Method nativeBoundsMethod = class_getInstanceMethod(screen, @selector(nativeBounds));
+    method_setImplementation(nativeBoundsMethod, imp_implementationWithBlock(^CGRect(id self) {
+        CGRect reported = PearReportedBounds();
+        CGFloat scale = PearReportedScale(self);
+        return CGRectMake(0, 0, round(reported.size.width * scale), round(reported.size.height * scale));
+    }));
+
+    // Moving the window between a Retina panel and a 1x external display
+    // changes the backing scale; refresh the cache on the main thread.
+    for (NSString *name in @[ @"NSWindowDidChangeBackingPropertiesNotification",
+                              @"NSWindowDidChangeScreenNotification" ]) {
+        [NSNotificationCenter.defaultCenter addObserverForName:name object:nil
+            queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *note) {
+                atomic_store(&gDisplayScale, 0);
+                PearDisplayScale(nil);
+            }];
+    }
+
+    PearLog(@"[PearRuntime][screen] shim installed (UIScreen follows the window at native backing scale)");
 
     if (NSProcessInfo.processInfo.environment[@"PEAR_NO_ORIENTATION_SHIM"]) {
         PearLog(@"[PearRuntime][screen] orientation shim disabled");
