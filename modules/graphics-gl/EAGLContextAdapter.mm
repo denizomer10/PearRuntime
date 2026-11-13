@@ -92,11 +92,25 @@ static void PearReleaseEAGLAdapter(void *value) {
     // Public constant values verified through exported SDK runtime constants;
     // no dependency on the system GL implementation is linked or called.
     id format = properties[@"EAGLDrawablePropertyColorFormat"];
-    if (format && ![format isEqual:@"EAGLColorFormat8888"])
-        return [self adapterError:3 message:@"Only EAGL RGBA8 drawables are currently implemented"];
+    // RGB565 (GTA III and other early titles) is stored as RGBA8: same colours
+    // at higher precision. It has no alpha, so the layer composites opaque.
+    BOOL rgb565 = [format isEqual:@"EAGLColorFormat565"];
+    if (format && ![format isEqual:@"EAGLColorFormat8888"] && !rgb565) {
+        PearANGLETrace("[PearRuntime][angle] unsupported EAGL colour format %s\n",
+                       [[format description] UTF8String] ?: "?");
+        return [self adapterError:3 message:@"Only EAGL RGBA8 and RGB565 drawables are implemented"];
+    }
     id retained = properties[@"EAGLDrawablePropertyRetained"];
     if (retained && ![retained isKindOfClass:NSNumber.class])
         return [self adapterError:4 message:@"Retained backing must be a boolean"];
+    if (rgb565 && drawable && ![(CALayer *)drawable isOpaque]) {
+        if (NSThread.isMainThread) {
+            ((CALayer *)drawable).opaque = YES;
+        } else {
+            CALayer *layer = drawable;
+            dispatch_async(dispatch_get_main_queue(), ^{ layer.opaque = YES; });
+        }
+    }
     NSError *error = nil;
     BOOL result = [_angleContext allocateBoundRenderbuffer:target fromLayer:drawable colorFormat:PearANGLEColorRGBA8
                                          retainedBacking:[retained boolValue] error:&error];

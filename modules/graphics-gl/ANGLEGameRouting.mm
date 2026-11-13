@@ -5,9 +5,17 @@
 #include "PearRuntimeModules.h"
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <mach-o/fixup-chains.h>
+#include <mach-o/fat.h>
+#include <libkern/OSByteOrder.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <cstddef>
 #include <mach/mach_vm.h>
 #include <objc/runtime.h>
 #include <dlfcn.h>
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <string>
@@ -52,6 +60,127 @@ static Class PearRoutedMetaClass(const char *name) {
     Class cls = PearRoutedClassName(name);
     return cls ? object_getClass(cls) : objc_getMetaClass(name);
 }
+// GL_APPLE_framebuffer_multisample is iOS-only; ANGLE offers the same through
+// GL_ANGLE_framebuffer_multisample/blit (ES2) or ES3 core. Original adapters.
+static void *PearANGLEFirstProc(const char *preferred, const char *fallback) {
+    void *function = PearANGLEGetProcAddress(preferred);
+    return function ?: PearANGLEGetProcAddress(fallback);
+}
+static void GL_APIENTRY PearRenderbufferStorageMultisampleAPPLE(GLenum target, GLsizei samples, GLenum format,
+                                                                 GLsizei width, GLsizei height) {
+    static auto storage = (void (GL_APIENTRY *)(GLenum, GLsizei, GLenum, GLsizei, GLsizei))
+        PearANGLEFirstProc("glRenderbufferStorageMultisampleANGLE", "glRenderbufferStorageMultisample");
+    if (storage) storage(target, samples, format, width, height);
+}
+/// Size of the renderbuffer attached as colour 0 of `framebuffer`, if any.
+static bool PearColorRenderbufferSize(GLenum framebuffer, GLint *width, GLint *height) {
+    static auto attachment = (void (GL_APIENTRY *)(GLenum, GLenum, GLenum, GLint *))
+        PearANGLEGetProcAddress("glGetFramebufferAttachmentParameteriv");
+    static auto integer = (void (GL_APIENTRY *)(GLenum, GLint *))PearANGLEGetProcAddress("glGetIntegerv");
+    static auto bind = (void (GL_APIENTRY *)(GLenum, GLuint))PearANGLEGetProcAddress("glBindRenderbuffer");
+    static auto parameter = (void (GL_APIENTRY *)(GLenum, GLenum, GLint *))
+        PearANGLEGetProcAddress("glGetRenderbufferParameteriv");
+    if (!attachment || !integer || !bind || !parameter) return false;
+    GLint type = GL_NONE, name = 0, previous = 0;
+    attachment(framebuffer, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &type);
+    if (type != GL_RENDERBUFFER) return false;
+    attachment(framebuffer, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &name);
+    integer(GL_RENDERBUFFER_BINDING, &previous);
+    bind(GL_RENDERBUFFER, (GLuint)name);
+    parameter(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, width);
+    parameter(GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, height);
+    bind(GL_RENDERBUFFER, (GLuint)previous);
+    return *width > 0 && *height > 0;
+}
+/// Resolves the read framebuffer (READ_FRAMEBUFFER_APPLE) into the draw one,
+/// colour only, over the whole surface; the scissor test applies as on iOS.
+static void GL_APIENTRY PearResolveMultisampleFramebufferAPPLE() {
+    static auto blit = (void (GL_APIENTRY *)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum))
+        PearANGLEFirstProc("glBlitFramebufferANGLE", "glBlitFramebuffer");
+    constexpr GLenum kRead = 0x8CA8, kDraw = 0x8CA9; // READ/DRAW_FRAMEBUFFER(_APPLE/_ANGLE)
+    GLint width = 0, height = 0, drawWidth = 0, drawHeight = 0;
+    if (!blit || !PearColorRenderbufferSize(kRead, &width, &height)) return;
+    if (PearColorRenderbufferSize(kDraw, &drawWidth, &drawHeight)) {
+        width = std::min(width, drawWidth);
+        height = std::min(height, drawHeight);
+    }
+    blit(0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+}
+
+// Apple GPUs on iOS never advertise desktop texture compression. Games pick
+// their asset pack from the extension list (GTA III: GTA3_DXT.IMG when DXT is
+// present), but iOS bundles ship only the PVR/ETC packs. Games see the
+// extensions an iPhone would report; ANGLE itself is unchanged.
+// PEAR_GL_ALL_EXTENSIONS=1 shows ANGLE's full list.
+static bool PearHiddenExtension(const char *name, size_t length) {
+    static const char *const hidden[] = {
+        "GL_EXT_texture_compression_dxt1", "GL_EXT_texture_compression_s3tc",
+        "GL_EXT_texture_compression_s3tc_srgb", "GL_ANGLE_texture_compression_dxt3",
+        "GL_ANGLE_texture_compression_dxt5", "GL_EXT_texture_compression_rgtc",
+        "GL_EXT_texture_compression_bptc", "GL_AMD_compressed_ATC_texture",
+        "GL_NV_texture_compression_s3tc", "GL_S3_s3tc"};
+    static const bool everything = getenv("PEAR_GL_ALL_EXTENSIONS") != nullptr;
+    if (everything || !name) return false;
+    for (const char *entry : hidden)
+        if (strlen(entry) == length && !strncmp(entry, name, length)) return true;
+    return false;
+}
+static const GLubyte *GL_APIENTRY PearRoutedGetString(GLenum which) {
+    static auto original = (const GLubyte *(GL_APIENTRY *)(GLenum))PearANGLEGetProcAddress("glGetString");
+    const GLubyte *value = original ? original(which) : nullptr;
+    if (which != GL_EXTENSIONS || !value) return value;
+    // ANGLE keeps one extension string per context; filter each once.
+    static std::mutex lock;
+    static std::map<const GLubyte *, std::string> filtered;
+    std::lock_guard<std::mutex> guard(lock);
+    auto found = filtered.find(value);
+    if (found == filtered.end()) {
+        std::string result;
+        for (const char *cursor = (const char *)value; *cursor;) {
+            while (*cursor == ' ') ++cursor;
+            const char *end = cursor;
+            while (*end && *end != ' ') ++end;
+            if (end > cursor && !PearHiddenExtension(cursor, size_t(end - cursor))) {
+                if (!result.empty()) result += ' ';
+                result.append(cursor, end);
+            }
+            cursor = end;
+        }
+        found = filtered.emplace(value, std::move(result)).first;
+    }
+    return (const GLubyte *)found->second.c_str();
+}
+static constexpr GLenum kPearNumExtensions = 0x821D; // GL_NUM_EXTENSIONS (ES3)
+/// ES3 indexed extension queries, renumbered without the hidden entries.
+static GLint PearVisibleExtension(GLint wanted, const GLubyte **name) {
+    static auto integer = (void (GL_APIENTRY *)(GLenum, GLint *))PearANGLEGetProcAddress("glGetIntegerv");
+    static auto indexed = (const GLubyte *(GL_APIENTRY *)(GLenum, GLuint))PearANGLEGetProcAddress("glGetStringi");
+    GLint total = 0, visible = 0;
+    if (!integer || !indexed) return 0;
+    integer(kPearNumExtensions, &total);
+    for (GLint index = 0; index < total; ++index) {
+        const GLubyte *entry = indexed(GL_EXTENSIONS, (GLuint)index);
+        if (!entry || PearHiddenExtension((const char *)entry, strlen((const char *)entry))) continue;
+        if (visible == wanted && name) { *name = entry; return visible; }
+        ++visible;
+    }
+    return visible;
+}
+static const GLubyte *GL_APIENTRY PearRoutedGetStringi(GLenum which, GLuint index) {
+    static auto original = (const GLubyte *(GL_APIENTRY *)(GLenum, GLuint))PearANGLEGetProcAddress("glGetStringi");
+    if (which != GL_EXTENSIONS || !original) return original ? original(which, index) : nullptr;
+    const GLubyte *name = nullptr;
+    PearVisibleExtension((GLint)index, &name);
+    // Out of range: let ANGLE record GL_INVALID_VALUE as usual.
+    return name ?: original(which, 0x7fffffff);
+}
+static void GL_APIENTRY PearRoutedGetIntegerv(GLenum which, GLint *value) {
+    static auto original = (void (GL_APIENTRY *)(GLenum, GLint *))PearANGLEGetProcAddress("glGetIntegerv");
+    if (!original) return;
+    original(which, value);
+    if (which == kPearNumExtensions && value) *value = PearVisibleExtension(-1, nullptr);
+}
+
 static void PearRoutedDeleteRenderbuffers(GLsizei count, const GLuint *names) {
     [PearANGLEContext.currentContext forgetDrawableRenderbuffers:names count:count];
     static auto original = (void (*)(GLsizei, const GLuint *))PearANGLEGetProcAddress("glDeleteRenderbuffers");
@@ -130,6 +259,11 @@ void *PearANGLEGameSymbol(const char *name) {
     if (!strcmp(name, "OBJC_CLASS_$_GLKViewController")) return (__bridge void *)objc_getClass("PearGLKViewController");
     if (!strcmp(name, "OBJC_METACLASS_$_GLKViewController")) return (__bridge void *)objc_getMetaClass("PearGLKViewController");
     if (!strcmp(name, "glDeleteRenderbuffers") || !strcmp(name, "glDeleteRenderbuffersOES")) return (void *)PearRoutedDeleteRenderbuffers;
+    if (!strcmp(name, "glGetString")) return (void *)PearRoutedGetString;
+    if (!strcmp(name, "glGetStringi")) return (void *)PearRoutedGetStringi;
+    if (!strcmp(name, "glGetIntegerv")) return (void *)PearRoutedGetIntegerv;
+    if (!strcmp(name, "glRenderbufferStorageMultisampleAPPLE")) return (void *)PearRenderbufferStorageMultisampleAPPLE;
+    if (!strcmp(name, "glResolveMultisampleFramebufferAPPLE")) return (void *)PearResolveMultisampleFramebufferAPPLE;
     if (!strcmp(name, "EAGLGetVersion")) return (void *)PearRoutedVersion;
     if (!strcmp(name, "EAGLGetProcAddress") || !strcmp(name, "eglGetProcAddress")) return (void *)PearRoutedProc;
     if (!strcmp(name, "NSClassFromString")) return (void *)PearRoutedNSClass;
@@ -267,6 +401,128 @@ static bool PearReadBindings(const uint8_t *begin, size_t size, bool lazy,
     return true;
 }
 
+/// Import slots of an image linked with chained fixups (LC_DYLD_CHAINED_FIXUPS).
+/// dyld overwrites the chains with final pointers while it loads the image, so
+/// the chains are walked in the file on disk; the import table is read from the
+/// mapped __LINKEDIT. Only the plain 64-bit pointer formats (arm64) are decoded.
+static bool PearReadChainedBindings(const char *path, const linkedit_data_command *fixups, uintptr_t linkeditBase,
+    const std::vector<const segment_command_64 *> &segments, intptr_t slide,
+    const std::vector<std::string> &dylibs, std::vector<PearImportPatch> &patches) {
+    const uint8_t *data = (const uint8_t *)(linkeditBase + fixups->dataoff);
+    const uint8_t *dataEnd = data + fixups->datasize;
+    if (fixups->datasize < sizeof(dyld_chained_fixups_header)) return false;
+    const auto *header = (const dyld_chained_fixups_header *)data;
+    if (header->fixups_version != 0 || header->symbols_format != 0 ||
+        header->starts_offset >= fixups->datasize || header->imports_offset >= fixups->datasize ||
+        header->symbols_offset >= fixups->datasize) {
+        PearANGLETrace("[PearRuntime][angle-route] unsupported chained fixups header\n");
+        return false;
+    }
+    size_t importSize = header->imports_format == DYLD_CHAINED_IMPORT ? 4 :
+                        header->imports_format == DYLD_CHAINED_IMPORT_ADDEND ? 8 :
+                        header->imports_format == DYLD_CHAINED_IMPORT_ADDEND64 ? 16 : 0;
+    if (!importSize || header->imports_offset + uint64_t(header->imports_count) * importSize > fixups->datasize) return false;
+    const char *symbols = (const char *)data + header->symbols_offset;
+    size_t symbolsSize = fixups->datasize - header->symbols_offset;
+    // Import ordinal -> (library ordinal, name).
+    auto import = [&](uint32_t index, int &library, const char *&name) -> bool {
+        if (index >= header->imports_count) return false;
+        const uint8_t *entry = data + header->imports_offset + size_t(index) * importSize;
+        uint64_t nameOffset;
+        if (header->imports_format == DYLD_CHAINED_IMPORT_ADDEND64) {
+            const auto *value = (const dyld_chained_import_addend64 *)entry;
+            library = (int16_t)value->lib_ordinal; nameOffset = value->name_offset;
+            if (value->addend) return false;
+        } else {
+            uint32_t raw; memcpy(&raw, entry, 4);
+            library = (int8_t)(raw & 0xff); nameOffset = raw >> 9;
+            if (header->imports_format == DYLD_CHAINED_IMPORT_ADDEND) {
+                int32_t addend; memcpy(&addend, entry + 4, 4);
+                if (addend) return false;
+            }
+        }
+        if (nameOffset >= symbolsSize || strnlen(symbols + nameOffset, symbolsSize - nameOffset) == symbolsSize - nameOffset) return false;
+        name = symbols + nameOffset;
+        return true;
+    };
+
+    // The original chains live in the arm64 slice of the file on disk.
+    int descriptor = open(path, O_RDONLY | O_CLOEXEC);
+    if (descriptor < 0) return false;
+    struct stat info = {};
+    if (fstat(descriptor, &info) != 0 || info.st_size < (off_t)sizeof(mach_header_64)) { close(descriptor); return false; }
+    size_t fileSize = (size_t)info.st_size;
+    void *mapping = mmap(nullptr, fileSize, PROT_READ, MAP_PRIVATE, descriptor, 0);
+    close(descriptor);
+    if (mapping == MAP_FAILED) return false;
+    struct Unmap { void *address; size_t size; ~Unmap() { munmap(address, size); } } unmap{mapping, fileSize};
+    const uint8_t *file = (const uint8_t *)mapping;
+    uint64_t slice = 0, sliceSize = fileSize;
+    uint32_t magic; memcpy(&magic, file, 4);
+    if (magic == FAT_CIGAM || magic == FAT_MAGIC) {
+        uint32_t count = OSSwapBigToHostInt32(((const fat_header *)file)->nfat_arch);
+        bool found = false;
+        for (uint32_t index = 0; index < count && sizeof(fat_header) + (index + 1) * sizeof(fat_arch) <= fileSize; ++index) {
+            const fat_arch *arch = (const fat_arch *)(file + sizeof(fat_header)) + index;
+            if ((cpu_type_t)OSSwapBigToHostInt32(arch->cputype) == CPU_TYPE_ARM64 &&
+                (OSSwapBigToHostInt32(arch->cpusubtype) & ~CPU_SUBTYPE_MASK) != CPU_SUBTYPE_ARM64E) {
+                slice = OSSwapBigToHostInt32(arch->offset); sliceSize = OSSwapBigToHostInt32(arch->size); found = true; break;
+            }
+        }
+        if (!found || slice + sliceSize > fileSize) return false;
+    }
+
+    const uint8_t *startsBase = data + header->starts_offset;
+    if (startsBase + sizeof(uint32_t) > dataEnd) return false;
+    const auto *starts = (const dyld_chained_starts_in_image *)startsBase;
+    if (starts->seg_count > segments.size() || startsBase + sizeof(uint32_t) * (1 + uint64_t(starts->seg_count)) > dataEnd) return false;
+    for (uint32_t segmentIndex = 0; segmentIndex < starts->seg_count; ++segmentIndex) {
+        uint32_t infoOffset = starts->seg_info_offset[segmentIndex];
+        if (!infoOffset) continue;
+        const uint8_t *segmentBase = startsBase + infoOffset;
+        if (segmentBase + offsetof(dyld_chained_starts_in_segment, page_start) > dataEnd) return false;
+        const auto *chain = (const dyld_chained_starts_in_segment *)segmentBase;
+        if (segmentBase + offsetof(dyld_chained_starts_in_segment, page_start) + sizeof(uint16_t) * uint64_t(chain->page_count) > dataEnd) return false;
+        if (chain->pointer_format != DYLD_CHAINED_PTR_64 && chain->pointer_format != DYLD_CHAINED_PTR_64_OFFSET) {
+            PearANGLETrace("[PearRuntime][angle-route] unsupported chained pointer format %u\n", chain->pointer_format);
+            return false;
+        }
+        const segment_command_64 *segment = segments[segmentIndex];
+        for (uint32_t page = 0; page < chain->page_count; ++page) {
+            uint16_t start = chain->page_start[page];
+            if (start == DYLD_CHAINED_PTR_START_NONE) continue;
+            if (start & DYLD_CHAINED_PTR_START_MULTI) return false; // 32-bit formats only
+            uint64_t offset = uint64_t(page) * chain->page_size + start;
+            for (unsigned guard = 0; guard < 1000000; ++guard) {
+                if (offset + 8 > segment->filesize || offset + 8 > segment->vmsize) return false;
+                uint64_t fileOffset = segment->fileoff + offset;
+                if (fileOffset + 8 > sliceSize) return false;
+                uint64_t raw; memcpy(&raw, file + slice + fileOffset, 8);
+                if (raw >> 63) { // bind
+                    dyld_chained_ptr_64_bind bind; memcpy(&bind, &raw, 8);
+                    int library = 0; const char *name = nullptr;
+                    if (!import(bind.ordinal, library, name)) {
+                        PearANGLETrace("[PearRuntime][angle-route] invalid chained import %u\n", bind.ordinal);
+                        return false;
+                    }
+                    bool bridged = library > 0 && (size_t)library <= dylibs.size() &&
+                                   dylibs[library - 1].find("libPearOpenGLES.dylib") != std::string::npos;
+                    if (PearRoutingCandidate(name) && !bridged) {
+                        if (bind.addend || offset % sizeof(uintptr_t)) return false;
+                        void *replacement = PearANGLEGameSymbol(name + 1);
+                        if (!replacement) { PearANGLETrace("[PearRuntime][angle-route] unsupported import %s\n", name); return false; }
+                        patches.push_back({(uintptr_t *)(slide + segment->vmaddr + offset), (uintptr_t)replacement});
+                    }
+                }
+                uint64_t next = (raw >> 51) & 0xfff;
+                if (!next) break;
+                offset += next * 4;
+            }
+        }
+    }
+    return true;
+}
+
 static bool PearApplyPatches(const std::vector<PearImportPatch> &patches) {
     std::map<mach_vm_address_t, vm_prot_t> pages;
     mach_vm_size_t pageSize = (mach_vm_size_t)getpagesize();
@@ -317,7 +573,7 @@ static void PearRouteImage(const mach_header *header, intptr_t slide) {
     std::vector<std::string> dylibs;
     const segment_command_64 *linkedit = nullptr;
     const dyld_info_command *dyld = nullptr;
-    bool chained = false;
+    const linkedit_data_command *chained = nullptr;
     for (uint32_t index = 0; index < h->ncmds; ++index) {
         if (cursor + sizeof(load_command) > commandsEnd) { fail(); return; }
         const load_command *command = (const load_command *)cursor;
@@ -329,7 +585,8 @@ static void PearRouteImage(const mach_header *header, intptr_t slide) {
         }
         if ((command->cmd == LC_DYLD_INFO || command->cmd == LC_DYLD_INFO_ONLY) && command->cmdsize >= sizeof(dyld_info_command))
             dyld = (const dyld_info_command *)command;
-        if (command->cmd == LC_DYLD_CHAINED_FIXUPS) chained = true;
+        if (command->cmd == LC_DYLD_CHAINED_FIXUPS && command->cmdsize >= sizeof(linkedit_data_command))
+            chained = (const linkedit_data_command *)command;
         if ((command->cmd == LC_LOAD_DYLIB || command->cmd == LC_LOAD_WEAK_DYLIB ||
              command->cmd == LC_REEXPORT_DYLIB || command->cmd == LC_LOAD_UPWARD_DYLIB || command->cmd == LC_LAZY_LOAD_DYLIB) &&
             command->cmdsize >= sizeof(dylib_command)) {
@@ -342,12 +599,23 @@ static void PearRouteImage(const mach_header *header, intptr_t slide) {
         }
         cursor += command->cmdsize;
     }
-    if (chained || !linkedit || !dyld) {
-        PearANGLETrace( "[PearRuntime][angle-route] metadata chained=%d linkedit=%d classic=%d\n", chained, linkedit != nullptr, dyld != nullptr);
+    if (!linkedit || (!chained && !dyld)) {
+        PearANGLETrace( "[PearRuntime][angle-route] metadata chained=%d linkedit=%d classic=%d\n", chained != nullptr, linkedit != nullptr, dyld != nullptr);
         fail(); return;
     }
     uintptr_t base = slide + linkedit->vmaddr - linkedit->fileoff;
     std::vector<PearImportPatch> patches;
+    if (chained) {
+        if (chained->dataoff < linkedit->fileoff ||
+            uint64_t(chained->dataoff) + chained->datasize > linkedit->fileoff + linkedit->filesize ||
+            !PearReadChainedBindings(image.dli_fname, chained, base, segments, slide, dylibs, patches)) {
+            PearANGLETrace("[PearRuntime][angle-route] chained fixups could not be routed\n");
+            fail(); return;
+        }
+        if (!PearApplyPatches(patches)) { fail(); return; }
+        PearANGLETrace("[PearRuntime][angle-route] bound %zu imports in %s (chained fixups)\n", patches.size(), image.dli_fname);
+        return;
+    }
     auto read = [&](uint32_t offset, uint32_t size, bool lazy) {
         if (!size) return true;
         if (offset < linkedit->fileoff || uint64_t(offset) + size > linkedit->fileoff + linkedit->filesize) {

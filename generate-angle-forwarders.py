@@ -23,7 +23,11 @@ for extension in tree.findall('extensions/extension'):
 # Only forward entry points exported by the pinned ANGLE build.
 definitions = (root / 'third_party/angle/src/libGLESv2/libGLESv2_autogen.def').read_text()
 exports = set(re.findall(r'^\s+(gl\w+)\s*$', definitions, re.M))
-selected &= exports
+# Every other GLES command is still exported so the game's image binds at launch
+# (dyld refuses to start an app with a missing symbol, e.g. iOS-only APPLE
+# extensions). The forwarder resolves through the runtime: original adapters
+# (GL_APPLE_framebuffer_multisample) or, unimplemented, a logged abort on call.
+missing = selected - exports
 lines = ['// Generated from the pinned Khronos registry (Apache-2.0) and ANGLE export list.',
          '// Copyright 2013-2026 The Khronos Group Inc.; original forwarding generator is PearRuntime.',
          '#include <GLES/gl.h>', '#include <GLES/glext.h>', '#include <GLES2/gl2.h>',
@@ -48,4 +52,4 @@ for name in sorted(selected):
               f'    static Function function = (Function)PearRequireGLES("{name}");',
               f'    return function({", ".join(args)});', '}']
 pathlib.Path(sys.argv[1]).write_text('\n'.join(lines) + '\n')
-print(f'Generated {len(selected)} typed GLES forwarders')
+print(f'Generated {len(selected)} typed GLES forwarders ({len(missing)} not in ANGLE)')
