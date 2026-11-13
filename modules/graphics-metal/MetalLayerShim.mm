@@ -53,7 +53,15 @@ static void PearInstallTextureGuard(id<MTLDevice> device) {
     IMP original = method_getImplementation(method);
     method_setImplementation(method, imp_implementationWithBlock(^id(id self, MTLTextureDescriptor *descriptor) {
         PearClampTextureDescriptor(descriptor);
-        return ((id (*)(id, SEL, id))original)(self, plain, descriptor);
+        id texture = ((id (*)(id, SEL, id))original)(self, plain, descriptor);
+        if (!texture && PearMetalDebug()) {
+            static unsigned failures;
+            @synchronized ([MTLTextureDescriptor class]) {
+                if (failures++ < 32)
+                    PearLog(@"[PearRuntime][metal] texture allocation failed format=%lu size=%lux%lu mipmaps=%lu usage=%lu storage=%lu", (unsigned long)descriptor.pixelFormat, (unsigned long)descriptor.width, (unsigned long)descriptor.height, (unsigned long)descriptor.mipmapLevelCount, (unsigned long)descriptor.usage, (unsigned long)descriptor.storageMode);
+            }
+        }
+        return texture;
     }));
 
     SEL offset = @selector(newTextureWithDescriptor:offset:bytesPerRow:);

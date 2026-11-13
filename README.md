@@ -82,3 +82,35 @@ a `MarketplaceKit.framework` stub.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+### Independent graphics backends
+
+`graphics` owns shared window and screen geometry. Backend hooks live in
+`modules/graphics-gl` (EAGL allocation, presentation, fit and touch conversion)
+and `modules/graphics-metal` (CAMetalLayer repair and drawable diagnostics).
+They are independently gated at launch:
+
+- `PEAR_RUNTIME_ONLY=graphics-gl,input`: shared geometry + GL + input, no Metal repair hooks.
+- `PEAR_RUNTIME_ONLY=graphics-metal,input`: shared geometry + Metal + input, no EAGL hooks.
+- `PEAR_RUNTIME_DISABLE=graphics-gl`: keep other modules, disable EAGL hooks.
+- `PEAR_RUNTIME_DISABLE=graphics`: disable shared geometry and both backend hooks.
+
+Selecting `graphics` includes both backends; explicit disables take precedence.
+Selection is immutable within the process. The shared Metal HUD carrier remains
+an instrumentation surface for GL frames, not a change of the game's renderer.
+These switches are diagnostic isolation controls, not guarantees of title compatibility.
+
+### ANGLE context core (not game routing yet)
+
+`include/PearANGLEContext.h` and `modules/graphics-gl/ANGLEContext.mm` provide
+original EGL context/sharegroup ownership and pixel-sized pbuffer lifecycle.
+The backend is explicit and immutable; no system EAGL context or GL object is
+mixed with ANGLE. Cross-thread use is rejected while a context is current.
+Presentation currently covers matching RGBA8 color attachment 0; GLES2 copies
+require identical pixel extents, while GLES3 core blit can scale. GLES1 and
+native-window/EAGL import routing remain separate work.
+
+Use the pinned ANGLE fork's Apple thread-exit fix (`9e214cf` or later). Old
+staged libraries reproduce EGL_BAD_ACCESS after a current context's thread
+exits. The PearSilicon parent repository contains the source-build script and
+real Catalyst/Metal shader, framebuffer and thread-lifecycle tests.

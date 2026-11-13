@@ -8,7 +8,7 @@
 #define PEAR_RUNTIME_VERSION "dev"
 #endif
 
-static const char *const kModules[] = {"core", "input", "graphics", "device", "storage", "services", "performance"};
+static const char *const kModules[] = {"core", "input", "graphics", "device", "storage", "services", "performance", "graphics-gl", "graphics-metal"};
 enum { kModuleCount = sizeof(kModules) / sizeof(kModules[0]) };
 static int gEnabled[kModuleCount];
 static char gEnabledList[128];
@@ -36,6 +36,12 @@ static void LoadModules(void) {
             int enabled = 1;
             if (i > 0) {  // core is always on
                 if (only && *only) enabled = ListContains(only, kModules[i]);
+                if (strcmp(kModules[i], "graphics") == 0 && only && *only)
+                    enabled = ListContains(only, "graphics") || ListContains(only, "graphics-gl") || ListContains(only, "graphics-metal");
+                if (strncmp(kModules[i], "graphics-", 9) == 0) {
+                    enabled = (!only || !*only || ListContains(only, "graphics") || ListContains(only, kModules[i]))
+                        && !ListContains(disabled, "graphics");
+                }
                 if (ListContains(disabled, kModules[i])) enabled = 0;
             }
             gEnabled[i] = enabled;

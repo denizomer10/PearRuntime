@@ -311,8 +311,15 @@ static BOOL gTouchRemapInstalled = NO;
 /// drawable, and applying the reference fit gives the window point the engine
 /// expects. Returns `point` unchanged when no fit/reference is available.
 static CGPoint PearRemapWindowPoint(CGPoint point, CGSize currentWindow) {
-    return PearMapFittedTouch(point, gNativeDrawableSize, gReferenceWindowSize,
-                              currentWindow, gFitApplied);
+    (void)currentWindow;
+    if (!gFitApplied || !NSThread.isMainThread) return point;
+    CALayer *drawable = gDrawableLayer;
+    UIWindow *window = PearGLWindowForLayer(drawable);
+    if (!drawable || !window) return point;
+    // Use the displayed layer tree, including its current bounds origin,
+    // parent offsets and live-resize transform. Launch-time dimensions can
+    // disagree with the engine after it reallocates its renderbuffer.
+    return [drawable convertPoint:point fromLayer:window.layer];
 }
 
 /// Legacy GL titles ask for `locationInView:window` (or `nil`, which means the
@@ -333,6 +340,10 @@ static void PearInstallTouchRemap(void) {
     const char *types = method_getTypeEncoding(method);
     IMP replacement = imp_implementationWithBlock(^CGPoint(id self, UIView *view) {
         CGPoint point = ((CGPoint (*)(id, SEL, UIView *))original)(self, selector, view);
+        id delegate = gDrawableLayer.delegate;
+        UIView *renderView = [delegate isKindOfClass:UIView.class] ? delegate : nil;
+        UIView *target = [(UITouch *)self view];
+        if (!renderView || !target || ![target isDescendantOfView:renderView]) return point;
 
         // `nil` means window coordinates. A UIWindow (or a root view whose
         // bounds match the window) is the same space for a full-window GL app.
@@ -390,6 +401,13 @@ static void PearFitDrawable(CALayer *layer) {
 
         CGRect windowBounds = window.bounds;
         if (windowBounds.size.width < 1 || windowBounds.size.height < 1) return;
+        CALayer *parent = current.superlayer;
+        if (!parent) return;
+        CGRect container = [parent convertRect:windowBounds fromLayer:window.layer];
+        if (CGRectIsEmpty(container) || CGRectIsInfinite(container)) return;
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        @try {
 
         // Remember the last window the app was actually laid out in. A window
         // that is much larger than the drawable in both axes is the full-screen
@@ -430,41 +448,37 @@ static void PearFitDrawable(CALayer *layer) {
                 current.bounds = CGRectMake(0, 0, native.width, native.height);
             }
         } else {
-            basis = current.bounds.size;
+            // UIKit autoresizing changes bounds through the existing fit
+            // transform. Those bounds are not a new engine coordinate space:
+            // only a successful renderbuffer allocation can establish one.
+            CGFloat pixelScale = current.contentsScale > 0 ? current.contentsScale : 1;
+            basis = CGSizeMake(gGLDrawableSize.width / pixelScale,
+                               gGLDrawableSize.height / pixelScale);
             if (basis.width < 1 || basis.height < 1) return;
+            if (!CGSizeEqualToSize(current.bounds.size, basis))
+                current.bounds = CGRectMake(0, 0, basis.width, basis.height);
 
-            // Keep the pre-existing windowed behaviour: shrink an oversized
-            // drawable, but do not enlarge one that already fits.
-            BOOL fits = basis.width <= windowBounds.size.width * 1.02 &&
-                        basis.height <= windowBounds.size.height * 1.02;
-            if (fits) {
-                if (!gFitApplied) return;
-                gFitApplied = NO;
-                gLastFitScale = 0;
-                current.transform = CATransform3DIdentity;
-                if (current.superlayer) {
-                    current.position = CGPointMake(CGRectGetMidX(current.superlayer.bounds),
-                                                   CGRectGetMidY(current.superlayer.bounds));
-                }
-                return;
-            }
+            // Small fixed drawables still need centering and enlargement.
+            // Removing the fit when the window grows leaves the game in the
+            // old corner and changes its input coordinate space mid-resize.
+
         }
 
-        CGFloat scale = MIN(windowBounds.size.width / basis.width,
-                            windowBounds.size.height / basis.height);
+        CGRect fitted = PearAspectFitRect(basis, container);
+        CGFloat scale = fitted.size.width / basis.width;
         if (scale <= 0) return;
 
         // Re-apply the position even when the scale is unchanged: a window
         // resize can move the view before the next present.
-        current.position = current.superlayer
-            ? CGPointMake(CGRectGetMidX(current.superlayer.bounds),
-                          CGRectGetMidY(current.superlayer.bounds))
-            : current.position;
+        current.position = CGPointMake(fitted.origin.x + current.anchorPoint.x * fitted.size.width,
+                                       fitted.origin.y + current.anchorPoint.y * fitted.size.height);
 
         if (gFitApplied &&
             CGSizeEqualToSize(gLastFitWindowSize, windowBounds.size) &&
             CGSizeEqualToSize(gLastFitLayerSize, basis) &&
-            fabs(gLastFitScale - scale) < 0.001) {
+            fabs(gLastFitScale - scale) < 0.001 &&
+            fabs(current.transform.m11 - scale) < 0.001 &&
+            fabs(current.transform.m22 - scale) < 0.001) {
             return;
         }
 
@@ -480,6 +494,9 @@ static void PearFitDrawable(CALayer *layer) {
         if (PearGLDebug()) {
             PearLog(@"[PearRuntime][gl] fit drawable %@ x%.3f into window %@",
                     NSStringFromCGSize(native), scale, NSStringFromCGRect(windowBounds));
+        }
+        } @finally {
+            [CATransaction commit];
         }
     });
 }

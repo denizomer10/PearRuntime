@@ -11,9 +11,24 @@ extern void PearSendLegacyDirectTouch(BOOL down, CGFloat nx, CGFloat ny);
 extern void PearCancelLegacyDirectTouch(void);
 extern void PearRunLegacyDirectTouchSelfTest(void);
 extern CGRect PearWindowVisibleContentRect(id window, id contentView);
+static BOOL gAdaptiveDirectTouch;
+
+// Only engine-owned rendering views use responder delivery. UIKit controls,
+// scroll views and gesture-recognizer surfaces retain the system event path.
+static BOOL PearCanDeliverEngineTouch(CGPoint normalized) {
+    UIWindow *window = PearPrimaryWindow();
+    CGPoint point = CGPointMake(CGRectGetMinX(window.bounds) + normalized.x * window.bounds.size.width,
+                               CGRectGetMinY(window.bounds) + normalized.y * window.bounds.size.height);
+    UIView *view = [window hitTest:point withEvent:nil];
+    if (!view || [view isKindOfClass:UIControl.class] || [view isKindOfClass:UIScrollView.class] || view.gestureRecognizers.count) return NO;
+    Class metal = NSClassFromString(@"CAMetalLayer"), gl = NSClassFromString(@"CAEAGLLayer");
+    if (!((metal && [view.layer isKindOfClass:metal]) || (gl && [view.layer isKindOfClass:gl]))) return NO;
+    SEL began = @selector(touchesBegan:withEvent:);
+    return class_getMethodImplementation(view.class, began) != class_getMethodImplementation(UIView.class, began);
+}
 
 static void PearSendMouseTouch(BOOL down, CGFloat nx, CGFloat ny) {
-    if (NSProcessInfo.processInfo.environment[@"PEAR_DIRECT_LEGACY_TOUCH"].boolValue)
+    if (gAdaptiveDirectTouch || NSProcessInfo.processInfo.environment[@"PEAR_DIRECT_LEGACY_TOUCH"].boolValue)
         PearSendLegacyDirectTouch(down, nx, ny);
     else
         PearSynthesizeVirtualFinger(down, @"f:mouseclick", nx, ny);
@@ -37,7 +52,13 @@ static void InstallNativeTouchTracking(void) {
             @try {
                 NSSet *touches = [event respondsToSelector:@selector(allTouches)]
                     ? ((id (*)(id, SEL))objc_msgSend)(event, @selector(allTouches)) : nil;
-                if (touches.count > 0) {
+                // Pointer hover/move events also carry allTouches. They are
+                // not delivery of a press and must not suppress its fallback.
+                BOOL began = NO;
+                for (UITouch *touch in touches) {
+                    if (touch.phase == UITouchPhaseBegan) { began = YES; break; }
+                }
+                if (began) {
                     gNativeTouchGeneration++;
                     if (getenv("PEAR_DEBUG_TOUCH"))
                         PearLog(@"[PearRuntime][mouse-touch] UIKit touches=%lu generation=%llu", (unsigned long)touches.count, (unsigned long long)gNativeTouchGeneration);
@@ -63,6 +84,7 @@ void PearInstallMouseToTouchFallback(void) {
     __block id gestureWindow = nil;
     void (^cancel)(void) = ^{
         if (synthetic) PearSendMouseTouch(NO, last.x, last.y);
+        gAdaptiveDirectTouch = NO;
         pending = held = synthetic = NO;
         gestureWindow = nil;
         serial++;
@@ -125,6 +147,8 @@ void PearInstallMouseToTouchFallback(void) {
                     return;
                 }
                 synthetic = YES;
+                gAdaptiveDirectTouch = PearCanDeliverEngineTouch(start);
+                if (getenv("PEAR_DEBUG_TOUCH")) PearLog(@"[PearRuntime][mouse-touch] engine responder fallback=%d", gAdaptiveDirectTouch);
                 if (getenv("PEAR_DEBUG_TOUCH")) PearLog(@"[PearRuntime][mouse-touch] fallback begin (%.3f,%.3f)", start.x, start.y);
                 PearSendMouseTouch(YES, start.x, start.y);
                 if (!CGPointEqualToPoint(start, last))
@@ -149,7 +173,7 @@ void PearInstallMouseToTouchFallback(void) {
     gMouseTouchMonitor = ((id (*)(id, SEL, NSUInteger, id))objc_msgSend)(eventClass, add, mask, handler);
     [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationWillResignActiveNotification
         object:nil queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *note) {
-            if (synthetic && NSProcessInfo.processInfo.environment[@"PEAR_DIRECT_LEGACY_TOUCH"].boolValue) {
+            if (synthetic && (gAdaptiveDirectTouch || NSProcessInfo.processInfo.environment[@"PEAR_DIRECT_LEGACY_TOUCH"].boolValue)) {
                 PearCancelLegacyDirectTouch();
                 synthetic = NO;
             }

@@ -8,6 +8,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+if [[ ! -f "$ROOT/third_party/angle/include/EGL/egl.h" ]]; then
+  echo "ERROR: ANGLE headers are missing. Initialize the pinned fork:" >&2
+  echo "  git -C '$ROOT' submodule update --init --depth 1 third_party/angle" >&2
+  exit 1
+fi
 OUT_DIR="${PEAR_BUILD_DIR:-$ROOT/build}"
 case "$OUT_DIR" in /*) ;; *) OUT_DIR="$ROOT/$OUT_DIR" ;; esac
 OUT="$OUT_DIR/libPearRuntime.dylib"
@@ -39,12 +44,12 @@ CPU="${PEAR_RUNTIME_CPU:-apple-m1}"
 OPT="${PEAR_RUNTIME_OPT:--O2}"
 TARGET="arm64-apple-ios15.0-macabi"
 COMMON=(-target "$TARGET" -isysroot "$SDK" -iframework "$IOS_FRAMEWORKS"
-        -I"$ROOT/include" -std=c++17 -fobjc-arc "$OPT" -mcpu="$CPU"
+        -I"$ROOT/include" -I"$ROOT/third_party/angle/include" -std=c++17 -fobjc-arc "$OPT" -mcpu="$CPU"
         -fno-omit-frame-pointer -DPEAR_RUNTIME_VERSION="\"$VERSION\"")
 
 # Module layout: modules/<module>/*.mm. Every file is compiled with its module
 # name so its initializer can be switched off at launch (PEAR_RUNTIME_DISABLE).
-MODULES=(core input graphics device storage services performance)
+MODULES=(core input graphics graphics-gl graphics-metal device storage services performance)
 
 # Emit a compilation database so editors/clangd resolve UIKit for these files.
 {

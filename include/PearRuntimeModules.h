@@ -29,6 +29,10 @@ const char *PearRuntimeVersion(void);
 
 // The `performance` module (Apple silicon scheduling, Game Mode) follows the
 // same rules.
+// `graphics` owns shared screen/window geometry. Its backend children are
+// `graphics-gl` and `graphics-metal`: selecting graphics includes both;
+// disabling graphics disables both. Selecting a child includes the shared
+// geometry but not the other backend. Explicit child disables take priority.
 //
 // Each source file is compiled with -DPEAR_RUNTIME_MODULE="<module>". An
 // initializer opts into module gating with this guard as its first statement.
