@@ -9,6 +9,9 @@
 @property(nonatomic, strong) CALayer *layer;
 @property(nonatomic) PearANGLEDrawableGeometry geometry;
 @property(nonatomic) BOOL retained;
+/// Set when the app resized the drawable from a thread other than the one the
+/// context is current on; the owning thread reallocates at its next present.
+@property(atomic) BOOL needsReallocation;
 @end
 @implementation PearANGLEStorage
 @end
@@ -54,6 +57,8 @@ struct PearDrawableGL {
     PFNGLGENFRAMEBUFFERSPROC genFramebuffer;
     PFNGLBINDFRAMEBUFFERPROC bindFramebuffer;
     PFNGLFRAMEBUFFERRENDERBUFFERPROC attach;
+    PFNGLBINDRENDERBUFFERPROC bindRenderbuffer;
+    PFNGLFLUSHPROC flush;
 };
 
 static const PearDrawableGL &PearDrawableAPI() {
@@ -66,8 +71,21 @@ static const PearDrawableGL &PearDrawableAPI() {
         (PFNGLGENFRAMEBUFFERSPROC)PearANGLEGetProcAddress("glGenFramebuffers"),
         (PFNGLBINDFRAMEBUFFERPROC)PearANGLEGetProcAddress("glBindFramebuffer"),
         (PFNGLFRAMEBUFFERRENDERBUFFERPROC)PearANGLEGetProcAddress("glFramebufferRenderbuffer"),
+        (PFNGLBINDRENDERBUFFERPROC)PearANGLEGetProcAddress("glBindRenderbuffer"),
+        (PFNGLFLUSHPROC)PearANGLEGetProcAddress("glFlush"),
     };
-    return api;
+    static const PearDrawableGL oes = {
+        (PFNGLGETINTEGERVPROC)PearANGLEGetProcAddress("glGetIntegerv"),
+        (PFNGLGETRENDERBUFFERPARAMETERIVPROC)PearANGLEGetProcAddress("glGetRenderbufferParameterivOES"),
+        (PFNGLRENDERBUFFERSTORAGEPROC)PearANGLEGetProcAddress("glRenderbufferStorageOES"),
+        (PFNGLISRENDERBUFFERPROC)PearANGLEGetProcAddress("glIsRenderbufferOES"),
+        (PFNGLGENFRAMEBUFFERSPROC)PearANGLEGetProcAddress("glGenFramebuffersOES"),
+        (PFNGLBINDFRAMEBUFFERPROC)PearANGLEGetProcAddress("glBindFramebufferOES"),
+        (PFNGLFRAMEBUFFERRENDERBUFFERPROC)PearANGLEGetProcAddress("glFramebufferRenderbufferOES"),
+        (PFNGLBINDRENDERBUFFERPROC)PearANGLEGetProcAddress("glBindRenderbufferOES"),
+        (PFNGLFLUSHPROC)PearANGLEGetProcAddress("glFlush"),
+    };
+    return PearANGLEContext.currentContext.clientVersion == 1 ? oes : api;
 }
 
 static BOOL PearDrawableError(NSError *__autoreleasing *error, NSInteger code, NSString *message) {
@@ -79,8 +97,8 @@ static BOOL PearDrawableError(NSError *__autoreleasing *error, NSInteger code, N
 static BOOL PearDrawableReady(PearANGLEContext *context, NSUInteger target, NSError *__autoreleasing *error) {
     if (PearANGLEContext.currentContext != context)
         return PearDrawableError(error, 1, @"Drawable operations require this context current on the calling thread");
-    if (context.clientVersion < 2 || target != GL_RENDERBUFFER)
-        return PearDrawableError(error, 2, @"Drawable operations require GLES2/3 and GL_RENDERBUFFER");
+    if (target != GL_RENDERBUFFER)
+        return PearDrawableError(error, 2, @"Drawable operations require GL_RENDERBUFFER");
     const auto &gl = PearDrawableAPI();
     if (!gl.get || !gl.parameter || !gl.storage || !gl.isRenderbuffer ||
         !gl.genFramebuffer || !gl.bindFramebuffer || !gl.attach)
@@ -165,6 +183,111 @@ static BOOL PearStorageMatches(GLuint name, PearANGLEStorage *storage) {
     return YES;
 }
 
+static char gPresenterKey;
+
+- (BOOL)presentDrawableFromOtherThreadWithError:(NSError *__autoreleasing *)error {
+    PearANGLEDrawableState *state = objc_getAssociatedObject(self, &gDrawableStateKey);
+    PearANGLEStorage *storage = nil;
+    GLuint name = 0;
+    if (state) {
+        @synchronized(state) {
+            for (NSNumber *key in state.storage) {
+                PearANGLEStorage *candidate = state.storage[key];
+                if (!storage || candidate.geometry.generation > storage.geometry.generation) {
+                    storage = candidate; name = key.unsignedIntValue;
+                }
+            }
+        }
+    }
+    if (!storage || !storage.layer) return PearDrawableError(error, 10, @"No drawable storage to present");
+    // The owning thread gives up the native surface at its next EAGL
+    // make-current; until then its own layer is still on screen.
+    if (self.hasWindowSurface)
+        return PearDrawableError(error, 14, @"Waiting for the render thread to release the native surface");
+    PearANGLEContext *presenter = objc_getAssociatedObject(self, &gPresenterKey);
+    if (!presenter) {
+        presenter = [[PearANGLEContext alloc] initWithClientVersion:self.clientVersion sharegroup:self.sharegroup error:error];
+        if (!presenter) return NO;
+        objc_setAssociatedObject(self, &gPresenterKey, presenter, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    PearANGLEContext *previous = PearANGLEContext.currentContext;
+    if (![PearANGLEContext setCurrentContext:presenter error:error]) return NO;
+    const auto &gl = PearDrawableAPI();
+    GLint oldRenderbuffer = 0;
+    @try {
+        NSError *bindError = nil;
+        if (![presenter bindDrawableLayer:storage.layer error:&bindError]) {
+            if (![bindError.domain isEqualToString:@"PearRuntime.ANGLE.Context"] || bindError.code != 24) {
+                if (error) *error = bindError;
+                return NO;
+            }
+            if (![presenter detachDrawableLayerWithError:error] || ![presenter bindDrawableLayer:storage.layer error:error])
+                return NO;
+        }
+        if (!gl.bindRenderbuffer || !gl.isRenderbuffer((GLuint)name))
+            return PearDrawableError(error, 10, @"Shared drawable renderbuffer is unavailable");
+        gl.get(GL_RENDERBUFFER_BINDING, &oldRenderbuffer);
+        gl.bindRenderbuffer(GL_RENDERBUFFER, (GLuint)name);
+        // A resize requested from this thread: the renderbuffer is a shared
+        // object, so the presenter can respecify it at the new pixel size.
+        if (storage.needsReallocation || !PearGeometryMatches(storage) ||
+            storage.geometry.pixelSize.width != presenter.pixelWidth ||
+            storage.geometry.pixelSize.height != presenter.pixelHeight) {
+            gl.storage(GL_RENDERBUFFER, GL_RGBA8, (GLsizei)presenter.pixelWidth, (GLsizei)presenter.pixelHeight);
+            PearANGLEStorage *replacement = [PearANGLEStorage new];
+            replacement.layer = storage.layer;
+            replacement.retained = storage.retained;
+            replacement.geometry = {storage.layer.bounds, CGSizeMake(presenter.pixelWidth, presenter.pixelHeight),
+                                    storage.layer.contentsScale, ++state.generation};
+            @synchronized(state) { state.storage[@(name)] = replacement; }
+            storage = replacement;
+        }
+        PearANGLEDrawableState *presenterState = PearDrawableState(presenter);
+        if (!presenterState.framebuffer) {
+            GLuint framebuffer = 0;
+            gl.genFramebuffer(1, &framebuffer);
+            presenterState.framebuffer = framebuffer;
+        }
+        if (!presenterState.framebuffer) return PearDrawableError(error, 11, @"ANGLE presentation framebuffer allocation failed");
+        gl.bindFramebuffer(GL_DRAW_FRAMEBUFFER, presenterState.framebuffer);
+        gl.attach(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, (GLuint)name);
+        gl.bindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        return [presenter presentFramebuffer:presenterState.framebuffer
+                                       width:(NSUInteger)storage.geometry.pixelSize.width
+                                      height:(NSUInteger)storage.geometry.pixelSize.height error:error];
+    } @finally {
+        if (gl.bindRenderbuffer) gl.bindRenderbuffer(GL_RENDERBUFFER, (GLuint)oldRenderbuffer);
+        [PearANGLEContext setCurrentContext:previous error:nullptr];
+    }
+}
+
+- (void)releaseNativeSurfaceForSharedThreadUse {
+    if (PearANGLEContext.currentContext != self) return;
+    if (self.hasWindowSurface) {
+        NSError *error = nil;
+        if (![self detachDrawableLayerWithError:&error])
+            PearANGLETrace("[PearRuntime][angle] shared-thread surface release failed: %s\n",
+                           error.localizedDescription.UTF8String ?: "unknown");
+    }
+    // Make this thread's rendering visible to the presenter context.
+    if (PearDrawableAPI().flush) PearDrawableAPI().flush();
+}
+
+- (BOOL)acceptDrawableLayer:(CALayer *)layer fromOtherThreadWithError:(NSError *__autoreleasing *)error {
+    PearANGLEDrawableState *state = objc_getAssociatedObject(self, &gDrawableStateKey);
+    PearANGLEStorage *match = nil;
+    if (state) {
+        @synchronized(state) {
+            for (PearANGLEStorage *storage in state.storage.objectEnumerator)
+                if (storage.layer == layer) { match = storage; break; }
+        }
+    }
+    if (!match)
+        return PearDrawableError(error, 13, @"Drawable storage must first be allocated on the context's own thread");
+    if (!PearGeometryMatches(match)) match.needsReallocation = YES;
+    return YES;
+}
+
 - (BOOL)presentBoundRenderbuffer:(NSUInteger)target error:(NSError *__autoreleasing *)error {
     if (!PearDrawableReady(self, target, error)) return NO;
     const auto &gl = PearDrawableAPI();
@@ -174,6 +297,12 @@ static BOOL PearStorageMatches(GLuint name, PearANGLEStorage *storage) {
     PearANGLEStorage *storage = PearStoredDrawable(state, (GLuint)name);
     if (!name || !storage)
         return PearDrawableError(error, 10, @"No drawable storage for the bound renderbuffer");
+    if (storage.needsReallocation) {
+        if (![self allocateBoundRenderbuffer:target fromLayer:storage.layer colorFormat:PearANGLEColorRGBA8
+                             retainedBacking:storage.retained error:error]) return NO;
+        storage = PearStoredDrawable(state, (GLuint)name);
+        if (!storage) return PearDrawableError(error, 10, @"No drawable storage for the bound renderbuffer");
+    }
     // UIKit may transiently resize the layer before the logical fit is restored.
     // Reject that frame, but keep valid GL storage so presentation can recover.
     if (!PearGeometryMatches(storage))

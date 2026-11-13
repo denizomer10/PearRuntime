@@ -43,11 +43,18 @@ UIWindow *PearPrimaryWindow(void) {
             if (!window.hidden && window.rootViewController && !firstVisible) firstVisible = window;
         }
     }
-    id delegate = app.delegate;
-    if ([delegate respondsToSelector:@selector(window)]) {
-        id window = ((id (*)(id, SEL))objc_msgSend)(delegate, @selector(window));
-        if ([window isKindOfClass:UIWindow.class] && !((UIWindow *)window).hidden) return window;
+    if (firstVisible) return firstVisible;
+    // Enumerate existing legacy windows. Calling an app delegate's lazy
+    // window getter here can construct UIKit while its traits initialize,
+    // recursively querying UIScreen.bounds/scale (YouTube and other apps).
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    for (UIWindow *window in app.windows) {
+        if (window.hidden || !window.rootViewController) continue;
+        if (window.isKeyWindow) return window;
+        if (!firstVisible) firstVisible = window;
     }
+#pragma clang diagnostic pop
     return firstVisible;
 }
 

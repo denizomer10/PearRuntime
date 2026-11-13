@@ -63,6 +63,12 @@ void PearClearScreenOverride(void) { PearSetScreenOverride(CGSizeZero); }
 
 static void PearRefreshWindowBounds(void) {
     NSCAssert(NSThread.isMainThread, @"Screen geometry is produced on the main thread");
+    // Lazy app-delegate window getters can ask UIScreen for their initial
+    // size. Re-entering the producer must consume the existing snapshot.
+    static thread_local bool refreshing = false;
+    if (refreshing) return;
+    refreshing = true;
+    @try {
     UIWindow *window = PearMainWindow();
     CGSize size = window.bounds.size;
     if (size.width <= 0 || size.height <= 0) return;
@@ -73,6 +79,7 @@ static void PearRefreshWindowBounds(void) {
     os_unfair_lock_unlock(&gScreenBoundsLock);
     if (changed && getenv("PEAR_DEBUG_METAL"))
         PearLog(@"[PearRuntime][screen] published window geometry %@", NSStringFromCGSize(size));
+    } @finally { refreshing = false; }
 }
 
 static void PearQueueScreenRefresh(void) {

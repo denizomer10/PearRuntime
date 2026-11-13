@@ -2,6 +2,7 @@
 // implementation is included. This class is not registered as EAGLContext.
 #import "PearEAGLContext.h"
 #import <QuartzCore/QuartzCore.h>
+#include <unistd.h>
 #include <pthread.h>
 
 @interface PearEAGLSharegroup ()
@@ -31,6 +32,9 @@ static void PearReleaseEAGLAdapter(void *value) {
 @interface PearEAGLContext ()
 @property(atomic, strong, readwrite) NSError *lastError;
 @property(nonatomic) BOOL reportedPresentation;
+/// Made current on a second thread while still current on its render thread
+/// (allowed by EAGL). Presentation then goes through a presenter context.
+@property(atomic) BOOL sharedAcrossThreads;
 @end
 
 @implementation PearEAGLContext
@@ -57,10 +61,19 @@ static void PearReleaseEAGLAdapter(void *value) {
     if (!gEAGLAdapterKeyReady || (context && ![context isKindOfClass:PearEAGLContext.class])) return NO;
     PearEAGLContext *previous = self.currentContext;
     NSError *error = nil;
-    if (![PearANGLEContext setCurrentContext:context.angleContext error:&error]) {
+    BOOL current = [PearANGLEContext setCurrentContext:context.angleContext error:&error];
+    // Do not claim success with a nil native context: GL commands would be
+    // silently discarded. Allocation/presentation have explicit shared-object
+    // paths, but an actual make-current must honor ANGLE's thread ownership.
+    if (!current) {
+        static unsigned failures;
+        if (failures++ < 8)
+            PearANGLETrace("[PearRuntime][angle] EAGL setCurrentContext failed: %s\n",
+                           error.localizedDescription.UTF8String ?: "unknown");
         context.lastError = error;
         return NO;
     }
+    if (context.sharedAcrossThreads) [context.angleContext releaseNativeSurfaceForSharedThreadUse];
     void *replacement = context ? (__bridge_retained void *)context : nullptr;
     void *old = pthread_getspecific(gEAGLAdapterKey);
     if (pthread_setspecific(gEAGLAdapterKey, replacement) != 0) {
@@ -78,6 +91,18 @@ static void PearReleaseEAGLAdapter(void *value) {
     self.lastError = [NSError errorWithDomain:@"PearRuntime.ANGLE.EAGL" code:code
         userInfo:@{NSLocalizedDescriptionKey: message}];
     return NO;
+}
+/// EAGL's drawable calls act on the receiver, current or not (GTA III sizes its
+/// drawable from layout while no context is current). ANGLE needs the context
+/// current, so make it current for the call and restore the thread's previous
+/// one. A context current on another thread still fails, as before.
+static BOOL PearWithContextCurrent(PearANGLEContext *context, NSError *__autoreleasing *error, BOOL (^body)(void)) {
+    PearANGLEContext *previous = PearANGLEContext.currentContext;
+    if (previous == context) return body();
+    if (![PearANGLEContext setCurrentContext:context error:error]) return NO;
+    BOOL result = body();
+    [PearANGLEContext setCurrentContext:previous error:nullptr];
+    return result;
 }
 - (BOOL)renderbufferStorage:(NSUInteger)target fromDrawable:(id)drawable {
     self.lastError = nil;
@@ -112,8 +137,23 @@ static void PearReleaseEAGLAdapter(void *value) {
         }
     }
     NSError *error = nil;
-    BOOL result = [_angleContext allocateBoundRenderbuffer:target fromLayer:drawable colorFormat:PearANGLEColorRGBA8
-                                         retainedBacking:[retained boolValue] error:&error];
+    PearANGLEContext *angle = _angleContext;
+    __block NSError *inner = nil;
+    BOOL result = PearWithContextCurrent(angle, &error, ^BOOL {
+        NSError *allocationError = nil;
+        BOOL allocated = [angle allocateBoundRenderbuffer:target fromLayer:drawable colorFormat:PearANGLEColorRGBA8
+                                         retainedBacking:[retained boolValue] error:&allocationError];
+        inner = allocationError;
+        return allocated;
+    });
+    if (!error) error = inner;
+    // Current on the app's render thread while layout (main) resizes the view.
+    if (!result && [error.domain isEqualToString:@"PearRuntime.ANGLE.Context"] && error.code == 7 &&
+        [drawable isKindOfClass:CALayer.class]) {
+        NSError *acceptError = nil;
+        result = [angle acceptDrawableLayer:drawable fromOtherThreadWithError:&acceptError];
+        error = result ? nil : acceptError;
+    }
     self.lastError = error;
     // Failures are always logged (bounded); every allocation with PEAR_DEBUG_GL.
     static unsigned storageFailures;
@@ -126,7 +166,20 @@ static void PearReleaseEAGLAdapter(void *value) {
 }
 - (BOOL)presentRenderbuffer:(NSUInteger)target {
     NSError *error = nil;
-    BOOL result = [_angleContext presentBoundRenderbuffer:target error:&error];
+    PearANGLEContext *angle = _angleContext;
+    __block NSError *inner = nil;
+    BOOL result = PearWithContextCurrent(angle, &error, ^BOOL {
+        NSError *presentError = nil;
+        BOOL presented = [angle presentBoundRenderbuffer:target error:&presentError];
+        inner = presentError;
+        return presented;
+    });
+    if (!error) error = inner;
+    if (!result && [error.domain isEqualToString:@"PearRuntime.ANGLE.Context"] && error.code == 7) {
+        NSError *sharedError = nil;
+        result = [angle presentDrawableFromOtherThreadWithError:&sharedError];
+        error = result ? nil : sharedError;
+    }
     self.lastError = error;
     {
         static unsigned failures;

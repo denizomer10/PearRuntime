@@ -10,6 +10,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import "PearPointerCaptureState.h"
+#import "PearHostKeyNames.h"
 
 // CoreGraphics cursor APIs are macOS APIs that Catalyst links through the host
 // CoreGraphics. Declare them directly: the iOS-flavoured umbrella headers do
@@ -25,6 +26,7 @@ static GCVirtualController *gVirtualPad;
 static BOOL gPadReady;
 static PearPointerCaptureState gCapture;
 static NSMutableSet<NSString *> *gPressedKeys;
+static NSMutableSet<NSString *> *gPressedMouseButtons;
 static dispatch_source_t gPadTimer;
 static id gPadEventMonitor;
 static NSInteger gLastCaptureState = -1;
@@ -49,8 +51,8 @@ static NSUInteger gMouseReceived, gMouseAccepted, gMouseEventSamples;
 static double gLastMouseDiagnostic;
 
 // Mapping tables loaded from PEAR_VIRTUAL_GAMEPAD_MAP.
-static NSDictionary<NSString *, NSString *> *gKeyToControl;
-static NSDictionary<NSString *, NSString *> *gMouseToControl;
+static NSDictionary<NSString *, NSArray<NSString *> *> *gKeyToControl;
+static NSDictionary<NSString *, NSArray<NSString *> *> *gMouseToControl;
 static NSDictionary<NSString *, NSString *> *gStickKeyToDirection;
 
 BOOL PearVirtualGamepadEnabled(void) {
@@ -105,9 +107,19 @@ static BOOL PearIsKnownControl(NSString *control) {
     return [known containsObject:control];
 }
 
+// Accept old single-control profiles and new lossless multi-control profiles.
+static NSArray<NSString *> *PearPadControls(id value) {
+    NSArray *values = [value isKindOfClass:NSString.class] ? @[value] :
+        ([value isKindOfClass:NSArray.class] ? value : @[]);
+    NSMutableOrderedSet *controls = [NSMutableOrderedSet orderedSet];
+    for (id item in values)
+        if ([item isKindOfClass:NSString.class] && PearIsKnownControl(item)) [controls addObject:item];
+    return controls.array;
+}
+
 static void PearLoadPadMapping(void) {
-    NSMutableDictionary<NSString *, NSString *> *keys = [NSMutableDictionary dictionary];
-    NSMutableDictionary<NSString *, NSString *> *mouse = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString *, NSArray<NSString *> *> *keys = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString *, NSArray<NSString *> *> *mouse = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSString *, NSString *> *stick = [NSMutableDictionary dictionary];
     gMouseSensitivity = 1.0;
     gMouseInvertY = NO;
@@ -130,9 +142,8 @@ static void PearLoadPadMapping(void) {
         if ([buttons isKindOfClass:NSDictionary.class]) {
             for (NSString *key in buttons) {
                 id value = buttons[key];
-                if ([key isKindOfClass:NSString.class] && [value isKindOfClass:NSString.class] &&
-                    [key length] > 0 && PearIsKnownControl(value)) {
-                    keys[key.lowercaseString] = value;
+                if ([key isKindOfClass:NSString.class] && key.length > 0) {
+                    keys[key.lowercaseString] = PearPadControls(value);
                 }
             }
         }
@@ -140,10 +151,10 @@ static void PearLoadPadMapping(void) {
         if ([mouseButtons isKindOfClass:NSDictionary.class]) {
             for (NSString *key in mouseButtons) {
                 id value = mouseButtons[key];
-                if ([key isKindOfClass:NSString.class] && [value isKindOfClass:NSString.class] &&
-                    PearIsKnownControl(value)) {
+                if ([key isKindOfClass:NSString.class] &&
+                    [key rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location == NSNotFound && key.length) {
                     NSString *number = [NSString stringWithFormat:@"%ld", (long)[key integerValue]];
-                    mouse[number] = value;
+                    mouse[number] = PearPadControls(value);
                 }
             }
         }
@@ -166,8 +177,8 @@ static void PearLoadPadMapping(void) {
         id invert = root[@"invertY"];
         if ([invert isKindOfClass:NSNumber.class]) gMouseInvertY = [invert boolValue];
     } else if (!raw.length) {
-        keys = [PearDefaultKeyToControl() mutableCopy];
-        mouse = [PearDefaultMouseToControl() mutableCopy];
+        for (NSString *key in PearDefaultKeyToControl()) keys[key] = @[PearDefaultKeyToControl()[key]];
+        for (NSString *key in PearDefaultMouseToControl()) mouse[key] = @[PearDefaultMouseToControl()[key]];
         stick = [PearDefaultStickKeys() mutableCopy];
     }
 
@@ -202,8 +213,9 @@ static NSSet<NSString *> *PearPadConfigurationElements(void) {
         GCInputLeftShoulder, GCInputRightShoulder, GCInputLeftTrigger, GCInputRightTrigger,
         GCInputButtonMenu, GCInputDirectionPad, GCInputLeftThumbstick, GCInputRightThumbstick,
     ]];
-    NSMutableArray<NSString *> *controls = [gKeyToControl.allValues mutableCopy];
-    [controls addObjectsFromArray:gMouseToControl.allValues];
+    NSMutableArray<NSString *> *controls = [NSMutableArray array];
+    for (NSArray *values in gKeyToControl.allValues) [controls addObjectsFromArray:values];
+    for (NSArray *values in gMouseToControl.allValues) [controls addObjectsFromArray:values];
     for (NSString *control in controls) {
         NSString *element = PearElementForControl(control);
         if (element) [elements addObject:element];
@@ -286,32 +298,32 @@ static void PearPadUpdateLeftStick(void) {
     }
 }
 
+static NSSet<NSString *> *PearPadPressedControls(void) {
+    NSMutableSet *controls = [NSMutableSet set];
+    for (NSString *key in gPressedKeys) [controls addObjectsFromArray:gKeyToControl[key] ?: @[]];
+    for (NSString *button in gPressedMouseButtons) [controls addObjectsFromArray:gMouseToControl[button] ?: @[]];
+    return controls;
+}
+
 static void PearPadUpdateDpad(void) {
     if (!gPadReady) return;
-    float x = 0, y = 0;
-    for (NSString *key in gPressedKeys) {
-        NSString *control = gKeyToControl[key];
-        if ([control isEqualToString:@"dpadLeft"]) x -= 1;
-        else if ([control isEqualToString:@"dpadRight"]) x += 1;
-        else if ([control isEqualToString:@"dpadUp"]) y += 1;
-        else if ([control isEqualToString:@"dpadDown"]) y -= 1;
-    }
-    x = fmaxf(-1, fminf(1, x));
-    y = fmaxf(-1, fminf(1, y));
-    if (@available(macCatalyst 17.0, *)) {
+    NSSet *controls = PearPadPressedControls();
+    float x = ([controls containsObject:@"dpadRight"] ? 1 : 0) - ([controls containsObject:@"dpadLeft"] ? 1 : 0);
+    float y = ([controls containsObject:@"dpadUp"] ? 1 : 0) - ([controls containsObject:@"dpadDown"] ? 1 : 0);
+    if (@available(macCatalyst 17.0, *))
         [gVirtualPad setPosition:CGPointMake(x, y) forDirectionPadElement:GCInputDirectionPad];
-    }
 }
 
 static NSSet<NSString *> *PearPadMappedControls(void) {
     NSMutableSet<NSString *> *controls = [NSMutableSet set];
-    for (NSString *control in gKeyToControl.allValues) [controls addObject:control];
-    for (NSString *control in gMouseToControl.allValues) [controls addObject:control];
+    for (NSArray *values in gKeyToControl.allValues) [controls addObjectsFromArray:values];
+    for (NSArray *values in gMouseToControl.allValues) [controls addObjectsFromArray:values];
     return controls;
 }
 
 static void PearPadNeutral(void) {
     [gPressedKeys removeAllObjects];
+    [gPressedMouseButtons removeAllObjects];
     gMouseX = gMouseY = 0;
     if (!gPadReady) return;
     for (NSString *control in PearPadMappedControls()) {
@@ -353,16 +365,20 @@ static BOOL PearPadClickInContent(id event) {
 }
 
 static void PearPadMouseButton(NSInteger button, BOOL pressed) {
-    NSString *control = gMouseToControl[[NSString stringWithFormat:@"%ld", (long)button]];
-    if (!control) return;
-    PearPadSetControl(control, pressed ? 1 : 0);
+    NSArray *controls = gMouseToControl[[NSString stringWithFormat:@"%ld", (long)button]];
+    NSString *buttonName = [NSString stringWithFormat:@"%ld", (long)button];
+    if (pressed) [gPressedMouseButtons addObject:buttonName]; else [gPressedMouseButtons removeObject:buttonName];
+    NSSet *active = PearPadPressedControls();
+    for (NSString *control in controls)
+        if (!PearIsDpadControl(control)) PearPadSetControl(control, [active containsObject:control] ? 1 : 0);
+    PearPadUpdateDpad();
     if (getenv("PEAR_DEBUG_POINTER")) {
         PearLog(@"[PearRuntime][virtual-pad] mouse button=%ld pressed=%d control=%@",
-                (long)button, pressed, control);
+                (long)button, pressed, controls);
     }
 }
 
-void PearVirtualGamepadKey(NSString *key, BOOL pressed) {
+static void PearPadKey(NSString *key, BOOL pressed) {
     if (!PearVirtualGamepadEnabled() || key.length == 0) return;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!gPadReady || !PearPadForeground()) return;
@@ -374,18 +390,25 @@ void PearVirtualGamepadKey(NSString *key, BOOL pressed) {
             }
             return;
         }
+        if ([gPressedKeys containsObject:name] == pressed) return; // Ignore key repeat / duplicate delivery.
         if (pressed) [gPressedKeys addObject:name]; else [gPressedKeys removeObject:name];
-        NSString *control = gKeyToControl[name];
-        if (control) {
-            if (PearIsDpadControl(control)) PearPadUpdateDpad();
-            else PearPadSetControl(control, pressed ? 1 : 0);
-        }
+        NSArray *controls = gKeyToControl[name];
+        NSSet *active = PearPadPressedControls();
+        for (NSString *control in controls)
+            if (!PearIsDpadControl(control)) PearPadSetControl(control, [active containsObject:control] ? 1 : 0);
+        PearPadUpdateDpad();
         PearPadUpdateLeftStick();
         if (getenv("PEAR_DEBUG_POINTER")) {
             PearLog(@"[PearRuntime][virtual-pad] key=%@ pressed=%d control=%@",
-                    name, pressed, control ?: @"none");
+                    name, pressed, controls ?: @[]);
         }
     });
+}
+
+void PearVirtualGamepadKey(NSString *key, BOOL pressed) {
+    // Prefer local native events when available, so GCKeyboard and AppKit
+    // cannot release each other's held keys. GC remains the fallback host.
+    if (!gPadEventMonitor) PearPadKey(key, pressed);
 }
 
 void PearVirtualGamepadMouse(float dx, float dy) {
@@ -467,6 +490,7 @@ void PearInstallVirtualGamepad(void) {
                 return;
             }
             gPressedKeys = [NSMutableSet set];
+            gPressedMouseButtons = [NSMutableSet set];
             gCapture.requested = false;
             PearLoadPadMapping();
             atexit(PearPadRestoreCursor);
@@ -516,29 +540,30 @@ void PearInstallVirtualGamepad(void) {
             if ([eventClass respondsToSelector:monitor]) {
                 // left/right/other mouse down+up, mouseMoved, Escape down+up.
                 NSUInteger mask = (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4) |
-                    (1u << 5) | (1u << 10) | (1u << 11) | (1u << 25) | (1u << 26);
+                    (1u << 5) | (1u << 6) | (1u << 7) | (1u << 27) | (1u << 10) | (1u << 11) | (1u << 12) | (1u << 25) | (1u << 26);
                 id (^handler)(id) = ^id(id event) {
                     if (!gPadReady || !PearPadForeground()) return event;
                     NSInteger type = ((NSInteger (*)(id, SEL))objc_msgSend)(event, @selector(type));
 
-                    // Escape releases even when GCKeyboard never delivers the
-                    // key (the same events already proved reliable here for
-                    // mouse input). GCKeyboard may have released first; the
-                    // capture state deduplicates.
-                    if (type == 10 || type == 11) {
+                    if (type == 10 || type == 11 || type == 12) {
                         unsigned short code = ((unsigned short (*)(id, SEL))objc_msgSend)(event, @selector(keyCode));
-                        if (code == 53) {
-                            if (type == 10 && gCapture.escape(true)) {
-                                PearPadNeutral();
-                                PearPadSetCursorCaptured(NO);
-                                return nil;
-                            }
-                            if (type == 11) gCapture.escape(false);
+                        NSString *name = PearHostKeyName(code);
+                        NSUInteger flags = ((NSUInteger (*)(id, SEL))objc_msgSend)(event, @selector(modifierFlags));
+                        if (type == 12) {
+                            // AppKit supplies aggregate left/right modifier state.
+                            NSDictionary *modifiers = @{@"shift": @(1u << 17), @"control": @(1u << 18),
+                                @"option": @(1u << 19), @"command": @(1u << 20), @"capslock": @(1u << 16)};
+                            NSNumber *mask = modifiers[name ?: @""];
+                            if (mask) PearPadKey(name, (flags & mask.unsignedIntegerValue) != 0);
+                        } else if (name) {
+                            PearPadKey(name, type == 10);
                         }
-                        return event;
+                        // Preserve system shortcuts such as Command-Tab.
+                        BOOL mapped = gKeyToControl[name ?: @""].count > 0 || [gStickKeyToDirection.allValues containsObject:name ?: @""];
+                        return mapped && !(flags & (1u << 20)) && type != 12 ? nil : event;
                     }
 
-                    if (type == 5) { // mouseMoved
+                    if (type == 5 || type == 6 || type == 7 || type == 27) { // native movement and drag
                         if (gPadCaptured) {
                             double dx = ((double (*)(id, SEL))objc_msgSend)(event, @selector(deltaX));
                             double dy = ((double (*)(id, SEL))objc_msgSend)(event, @selector(deltaY));
@@ -584,7 +609,7 @@ void PearInstallVirtualGamepad(void) {
             for (NSString *name in @[UIApplicationDidBecomeActiveNotification, @"NSApplicationDidBecomeActiveNotification"])
                 [NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *note) { PearPadSetActive(YES); }];
             for (NSString *name in @[UIApplicationWillTerminateNotification, @"NSApplicationWillTerminateNotification"])
-                [NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *note) { PearPadRestoreCursor(); }];
+                [NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *note) { PearPadSetActive(NO); PearPadRestoreCursor(); }];
         } else {
             PearLog(@"[PearRuntime][virtual-pad] requires Mac Catalyst 17 or newer");
         }

@@ -18,6 +18,8 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import "PearRuntime.h"
+#include <signal.h>
+#include <unistd.h>
 
 static const NSUInteger kFullScreenMask = 1 << 14;      // NSWindowStyleMaskFullScreen
 static const NSUInteger kFullSizeContentMask = 1 << 15; // NSWindowStyleMaskFullSizeContentView
@@ -132,7 +134,33 @@ static void PearFixAllWindows(void) {
 __attribute__((constructor))
 static void PearWindowChromeShimInit(void) {
     PEAR_MODULE_GUARD();
+    // Closing the last game scene closes the runtime process as requested by
+    // the launcher. Ignore auxiliary windows and keep other game scenes alive.
+    [NSNotificationCenter.defaultCenter addObserverForName:@"NSWindowWillCloseNotification" object:nil
+        queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+            if (!PearIsSceneWindow(note.object)) return;
+            __weak id closing = note.object;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 2), dispatch_get_main_queue(), ^{
+                Class cls = NSClassFromString(@"NSApplication");
+                id app = ((id (*)(id, SEL))objc_msgSend)(cls, @selector(sharedApplication));
+                for (id window in ((NSArray *(*)(id, SEL))objc_msgSend)(app, @selector(windows))) {
+                    if (window == closing || !PearIsSceneWindow(window)) continue;
+                    BOOL visible = ((BOOL (*)(id, SEL))objc_msgSend)(window, @selector(isVisible));
+                    BOOL minimized = ((BOOL (*)(id, SEL))objc_msgSend)(window, @selector(isMiniaturized));
+                    if (visible || minimized) return;
+                }
+                [NSNotificationCenter.defaultCenter postNotificationName:@"NSApplicationWillTerminateNotification" object:app];
+                PearLog(@"[PearRuntime][window] last game window closed; terminating owned process");
+                kill(getpid(), SIGKILL);
+            });
+        }];
     if (getenv("PEAR_KEEP_TITLEBAR_OVERLAP")) return;
+    // Resizable UIKit applications already lay out navigation/safe areas in
+    // their native Catalyst host. Applying the game's chrome clamp as well
+    // shifts that content twice (for example YouTube).
+    id fullScreenRequired = NSBundle.mainBundle.infoDictionary[@"UIRequiresFullScreen"];
+    if ([fullScreenRequired isKindOfClass:NSNumber.class] && ![fullScreenRequired boolValue] &&
+        !getenv("PEAR_LEGACY_ATTACH_LAYER")) return;
     PearInstallSceneFrameClamp();
     // Catalyst can restore the style when the scene updates its titlebar or
     // the window leaves full screen, so re-apply on those events.

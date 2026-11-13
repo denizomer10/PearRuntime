@@ -181,10 +181,60 @@ static void GL_APIENTRY PearRoutedGetIntegerv(GLenum which, GLint *value) {
     if (which == kPearNumExtensions && value) *value = PearVisibleExtension(-1, nullptr);
 }
 
+// Shipped iOS clients (including Dr. Driving) import unsuffixed framebuffer
+// names in GLES1 contexts. ANGLE validates GLES2 core names strictly; dispatch these
+// equivalent operations to OES when the actual context is GLES1. The exported
+// function stays stable when a process switches between GLES1 and GLES2/3.
+#define PEAR_FRAMEBUFFER_ALIAS(name, result, parameters, arguments) \
+static result GL_APIENTRY PearCompat_##name parameters { \
+    using Function = result (GL_APIENTRY *) parameters; \
+    static Function core = (Function)PearANGLEGetProcAddress(#name); \
+    static Function oes = (Function)PearANGLEGetProcAddress(#name "OES"); \
+    Function function = PearANGLEContext.currentContext.clientVersion == 1 ? oes : core; \
+    return function arguments; \
+}
+PEAR_FRAMEBUFFER_ALIAS(glGenRenderbuffers, void, (GLsizei count, GLuint *names), (count, names))
+PEAR_FRAMEBUFFER_ALIAS(glBindRenderbuffer, void, (GLenum target, GLuint name), (target, name))
+PEAR_FRAMEBUFFER_ALIAS(glIsRenderbuffer, GLboolean, (GLuint name), (name))
+PEAR_FRAMEBUFFER_ALIAS(glRenderbufferStorage, void, (GLenum target, GLenum format, GLsizei width, GLsizei height), (target, format, width, height))
+PEAR_FRAMEBUFFER_ALIAS(glGetRenderbufferParameteriv, void, (GLenum target, GLenum parameter, GLint *value), (target, parameter, value))
+PEAR_FRAMEBUFFER_ALIAS(glGenFramebuffers, void, (GLsizei count, GLuint *names), (count, names))
+PEAR_FRAMEBUFFER_ALIAS(glBindFramebuffer, void, (GLenum target, GLuint name), (target, name))
+PEAR_FRAMEBUFFER_ALIAS(glDeleteFramebuffers, void, (GLsizei count, const GLuint *names), (count, names))
+PEAR_FRAMEBUFFER_ALIAS(glIsFramebuffer, GLboolean, (GLuint name), (name))
+
+PEAR_FRAMEBUFFER_ALIAS(glFramebufferRenderbuffer, void, (GLenum target, GLenum attachment, GLenum kind, GLuint name), (target, attachment, kind, name))
+PEAR_FRAMEBUFFER_ALIAS(glFramebufferTexture2D, void, (GLenum target, GLenum attachment, GLenum kind, GLuint name, GLint level), (target, attachment, kind, name, level))
+PEAR_FRAMEBUFFER_ALIAS(glGetFramebufferAttachmentParameteriv, void, (GLenum target, GLenum attachment, GLenum parameter, GLint *value), (target, attachment, parameter, value))
+#undef PEAR_FRAMEBUFFER_ALIAS
+
+static GLenum GL_APIENTRY PearCompat_glCheckFramebufferStatus(GLenum target) {
+    using Function = GLenum (GL_APIENTRY *)(GLenum);
+    static Function core = (Function)PearANGLEGetProcAddress("glCheckFramebufferStatus");
+    static Function oes = (Function)PearANGLEGetProcAddress("glCheckFramebufferStatusOES");
+    GLenum result = (PearANGLEContext.currentContext.clientVersion == 1 ? oes : core)(target);
+    static std::atomic<unsigned> failures{0};
+    if (result != GL_FRAMEBUFFER_COMPLETE && getenv("PEAR_DEBUG_GL") && failures.fetch_add(1) < 32)
+        PearANGLETrace("[PearRuntime][angle-validation] framebuffer target=0x%x status=0x%x GLES%ld\n",
+            target, result, (long)PearANGLEContext.currentContext.clientVersion);
+    return result;
+}
+static void *GL_APIENTRY PearDiagnosticMapBufferOES(GLenum target, GLenum access) {
+    static auto original = (void *(*)(GLenum, GLenum))PearANGLEGetProcAddress("glMapBufferOES");
+    void *result = original(target, access);
+    static std::atomic<unsigned> count{0};
+    if (count.fetch_add(1) < 64)
+        PearANGLETrace("[PearRuntime][angle-validation] mapBuffer target=0x%x access=0x%x null=%d GLES%ld\n",
+            target, access, result == nullptr, (long)PearANGLEContext.currentContext.clientVersion);
+    return result;
+}
+
 static void PearRoutedDeleteRenderbuffers(GLsizei count, const GLuint *names) {
     [PearANGLEContext.currentContext forgetDrawableRenderbuffers:names count:count];
-    static auto original = (void (*)(GLsizei, const GLuint *))PearANGLEGetProcAddress("glDeleteRenderbuffers");
-    original(count, names);
+    static auto core = (void (*)(GLsizei, const GLuint *))PearANGLEGetProcAddress("glDeleteRenderbuffers");
+    static auto oes = (void (*)(GLsizei, const GLuint *))PearANGLEGetProcAddress("glDeleteRenderbuffersOES");
+    auto original = PearANGLEContext.currentContext.clientVersion == 1 ? oes : core;
+    if (original) original(count, names);
 }
 static void *PearRoutedDlsym(void *handle, const char *name) {
     void *replacement = PearANGLEGameSymbol(name);
@@ -258,6 +308,23 @@ void *PearANGLEGameSymbol(const char *name) {
     if (!strcmp(name, "OBJC_METACLASS_$_GLKView")) return (__bridge void *)objc_getMetaClass("PearGLKView");
     if (!strcmp(name, "OBJC_CLASS_$_GLKViewController")) return (__bridge void *)objc_getClass("PearGLKViewController");
     if (!strcmp(name, "OBJC_METACLASS_$_GLKViewController")) return (__bridge void *)objc_getMetaClass("PearGLKViewController");
+    if (!strcmp(name, "glCheckFramebufferStatusOES")) return (void *)PearCompat_glCheckFramebufferStatus;
+    if (!strcmp(name, "glMapBufferOES") && getenv("PEAR_DEBUG_GL")) return (void *)PearDiagnosticMapBufferOES;
+#define PEAR_ROUTE_FRAMEBUFFER(entry) if (!strcmp(name, #entry)) return (void *)PearCompat_##entry
+    PEAR_ROUTE_FRAMEBUFFER(glGenRenderbuffers);
+    PEAR_ROUTE_FRAMEBUFFER(glBindRenderbuffer);
+    PEAR_ROUTE_FRAMEBUFFER(glIsRenderbuffer);
+    PEAR_ROUTE_FRAMEBUFFER(glRenderbufferStorage);
+    PEAR_ROUTE_FRAMEBUFFER(glGetRenderbufferParameteriv);
+    PEAR_ROUTE_FRAMEBUFFER(glGenFramebuffers);
+    PEAR_ROUTE_FRAMEBUFFER(glBindFramebuffer);
+    PEAR_ROUTE_FRAMEBUFFER(glDeleteFramebuffers);
+    PEAR_ROUTE_FRAMEBUFFER(glIsFramebuffer);
+    PEAR_ROUTE_FRAMEBUFFER(glCheckFramebufferStatus);
+    PEAR_ROUTE_FRAMEBUFFER(glFramebufferRenderbuffer);
+    PEAR_ROUTE_FRAMEBUFFER(glFramebufferTexture2D);
+    PEAR_ROUTE_FRAMEBUFFER(glGetFramebufferAttachmentParameteriv);
+#undef PEAR_ROUTE_FRAMEBUFFER
     if (!strcmp(name, "glDeleteRenderbuffers") || !strcmp(name, "glDeleteRenderbuffersOES")) return (void *)PearRoutedDeleteRenderbuffers;
     if (!strcmp(name, "glGetString")) return (void *)PearRoutedGetString;
     if (!strcmp(name, "glGetStringi")) return (void *)PearRoutedGetStringi;

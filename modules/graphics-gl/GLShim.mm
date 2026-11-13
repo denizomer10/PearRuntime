@@ -38,8 +38,9 @@ static CGSize PearDeclaredDrawableSize(CGSize size) {
     return PearOrientDrawableSize(size, landscape, portrait);
 }
 
-static void *PearGLProc(const char *name) { return PearANGLEGetProcAddress(name); }
+static void *PearGLProc(const char *name) { return PearANGLEGameSymbol(name); }
 static CGSize gGLDrawableSize = { 0, 0 };
+static std::atomic<NSUInteger> gDrawableClientVersion{2};
 /// The size the engine itself created its drawable at. This is the coordinate
 /// space its hit-testing uses. It must not follow window resizes: the fit
 /// transform is visual only, and allowing the view's bounds to grow with the
@@ -338,6 +339,7 @@ static void PearFitDrawable(CALayer *layer) {
     CGSize native = gNativeDrawableSize;
     if (native.width < 1 || native.height < 1) return;
 
+    BOOL fixedFunction = gDrawableClientVersion.load(std::memory_order_relaxed) == 1;
     dispatch_async(dispatch_get_main_queue(), ^{
         CALayer *current = gDrawableLayer;
         UIWindow *window = PearGLKeyWindow();
@@ -374,7 +376,11 @@ static void PearFitDrawable(CALayer *layer) {
         // windowed geometry: the app laid its controls out there, and growing
         // UIScreen to the display makes those controls move while the drawable
         // stays native.
-        if (fullScreenLike && gReferenceWindowSize.width > 0) {
+        if (fixedFunction) {
+            // GLES1 engines lay controls out in the drawable's logical space.
+            // A host resize is a presentation transform, not a new phone size.
+            PearSetScreenOverride(native);
+        } else if (fullScreenLike && gReferenceWindowSize.width > 0) {
             PearSetScreenOverride(gReferenceWindowSize);
         } else {
             PearClearScreenOverride();
@@ -551,6 +557,9 @@ static void PearInstallEAGLHook(void) {
         }
         BOOL result = ((BOOL (*)(id, SEL, NSUInteger, id))original)(self, selector, target, drawable);
         if (result && [drawable isKindOfClass:CALayer.class]) {
+            NSUInteger clientVersion = ((PearEAGLContext *)self).API;
+            gDrawableClientVersion.store(clientVersion, std::memory_order_relaxed);
+            if (clientVersion == 1) PearSetScreenOverride(((CALayer *)drawable).bounds.size);
             typedef void (*GetRenderbufferParameter)(unsigned int, unsigned int, int *);
             static GetRenderbufferParameter query;
             if (!query) query = (GetRenderbufferParameter)PearGLProc("glGetRenderbufferParameteriv");

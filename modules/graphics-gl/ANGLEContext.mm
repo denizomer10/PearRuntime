@@ -2,11 +2,34 @@
 #import "PearANGLEContext.h"
 #include <EGL/eglext.h>
 #include <GLES3/gl3.h>
+#include <GLES2/gl2ext.h>
+#include <atomic>
 #include <cstring>
 #include <pthread.h>
 #import <QuartzCore/QuartzCore.h>
 #include <cmath>
 #include <mutex>
+
+// Opt-in diagnostics use the driver's public callback without consuming the
+// application's glGetError state. Never enabled in ordinary launches.
+static void GL_APIENTRY PearANGLEDebugMessage(GLenum source, GLenum type, GLuint identifier,
+    GLenum severity, GLsizei length, const GLchar *message, const void *) {
+    if (type != GL_DEBUG_TYPE_ERROR_KHR) return;
+    static std::atomic<unsigned> count{0};
+    if (count.fetch_add(1, std::memory_order_relaxed) >= 64) return;
+    PearANGLETrace("[PearRuntime][angle-validation] source=0x%x id=%u severity=0x%x %.*s\n",
+        source, identifier, severity, (int)std::min<GLsizei>(length, 1024), message ?: "");
+}
+static void PearANGLEInstallDebugMessages(void) {
+    auto callback = (PFNGLDEBUGMESSAGECALLBACKKHRPROC)PearANGLEGetProcAddress("glDebugMessageCallbackKHR");
+    auto enable = (void (*)(GLenum))PearANGLEGetProcAddress("glEnable");
+    auto string = (const GLubyte *(*)(GLenum))PearANGLEGetProcAddress("glGetString");
+    const char *extensions = string ? (const char *)string(GL_EXTENSIONS) : nullptr;
+    if (callback && enable && extensions && strstr(extensions, "GL_KHR_debug")) {
+        callback(PearANGLEDebugMessage, nullptr);
+        enable(GL_DEBUG_OUTPUT_KHR);
+    }
+}
 
 static std::recursive_mutex gContextOperations;
 static pthread_key_t gCurrentContextKey;
@@ -69,6 +92,7 @@ static BOOL PearLoadContextAPI(NSError *__autoreleasing *error) {
     EGLConfig _config;
     pthread_t _ownerThread;
     BOOL _hasOwner;
+    BOOL _debugMessagesInstalled;
     NSUInteger _width, _height;
     CALayer *_drawableLayer;
     CGRect _drawableBounds;
@@ -155,7 +179,13 @@ static void PearContextThreadExited(void *value) {
         return PearContextError(error, 21, @"Context thread-local binding failed");
     }
     if (previous) previous->_hasOwner = NO;
-    if (context) { context->_ownerThread = thread; context->_hasOwner = YES; }
+    if (context) {
+        context->_ownerThread = thread; context->_hasOwner = YES;
+        if (!context->_debugMessagesInstalled && getenv("PEAR_DEBUG_GL")) {
+            context->_debugMessagesInstalled = YES;
+            PearANGLEInstallDebugMessages();
+        }
+    }
     id discarded = (__bridge_transfer id)old;
     (void)discarded;
     return YES;
@@ -258,15 +288,19 @@ static void PearContextThreadExited(void *value) {
         return PearContextError(error, 12, @"Presentation requires this context on the calling thread");
     if (_drawableLayer && (!CGRectEqualToRect(_drawableLayer.bounds, _drawableBounds) || _drawableLayer.contentsScale != _drawableScale))
         return PearContextError(error, 24, @"Native geometry changed; rebuild drawable and input geometry before presentation");
-    if (_clientVersion < 2 || !width || !height || width > 8192 || height > 8192)
-        return PearContextError(error, 13, @"Framebuffer presentation requires GLES 2/3 and valid pixel dimensions");
-    if (_clientVersion == 2 && (width != _width || height != _height))
+    if (!width || !height || width > 8192 || height > 8192)
+        return PearContextError(error, 13, @"Framebuffer presentation requires valid pixel dimensions");
+    if (_clientVersion < 3 && (width != _width || height != _height))
         return PearContextError(error, 19, @"GLES 2 framebuffer blit requires identical source/drawable pixel dimensions");
     // These entry points are resolved only after the immutable backend has
     // initialized. No per-frame symbol lookup and no system-GL fallback.
     static auto get = (void (*)(GLenum, GLint *))PearANGLEGetProcAddress("glGetIntegerv");
-    static auto bind = (void (*)(GLenum, GLuint))PearANGLEGetProcAddress("glBindFramebuffer");
-    static auto status = (GLenum (*)(GLenum))PearANGLEGetProcAddress("glCheckFramebufferStatus");
+    static auto bindCore = (void (*)(GLenum, GLuint))PearANGLEGetProcAddress("glBindFramebuffer");
+    static auto bindOES = (void (*)(GLenum, GLuint))PearANGLEGetProcAddress("glBindFramebufferOES");
+    auto bind = _clientVersion == 1 ? bindOES : bindCore;
+    static auto statusCore = (GLenum (*)(GLenum))PearANGLEGetProcAddress("glCheckFramebufferStatus");
+    static auto statusOES = (GLenum (*)(GLenum))PearANGLEGetProcAddress("glCheckFramebufferStatusOES");
+    auto status = _clientVersion == 1 ? statusOES : statusCore;
     using Blit = void (*)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum);
     static auto blitANGLE = (Blit)PearANGLEGetProcAddress("glBlitFramebufferANGLE");
     static auto blitCore = (Blit)PearANGLEGetProcAddress("glBlitFramebuffer");
@@ -278,7 +312,7 @@ static void PearContextThreadExited(void *value) {
     static auto readBuffer = (void (*)(GLenum))PearANGLEGetProcAddress("glReadBuffer");
     if (!get || !bind || !status || !blit || !enabled || !enable || !disable || !string || (_clientVersion >= 3 && !readBuffer))
         return PearContextError(error, 14, @"Required ANGLE framebuffer operations are unavailable");
-    if (_clientVersion == 2) {
+    if (_clientVersion < 3) {
         const char *extensions = (const char *)string(GL_EXTENSIONS);
         if (!extensions || !strstr(extensions, "GL_ANGLE_framebuffer_blit"))
             return PearContextError(error, 15, @"GLES 2 presentation requires ANGLE_framebuffer_blit");
