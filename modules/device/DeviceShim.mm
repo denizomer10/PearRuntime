@@ -9,12 +9,12 @@
 // answers agree.
 //
 // The values are configurable for diagnostics:
-//   PEAR_DEVICE_MODEL      hardware identifier (default iPhone15,2)
+//   PEAR_DEVICE_MODEL      hardware identifier (default iPhone19,2, iPhone 18 Pro)
 //   PEAR_DEVICE_NAME       user-visible model name (default iPhone)
 //   PEAR_DEVICE_IDIOM      phone or pad (default phone)
-//   PEAR_FAKE_IOS_VERSION  marketing version (default 16.0)
-//   PEAR_FAKE_IOS_BUILD    build identifier (default 20A000)
-//   PEAR_FAKE_DARWIN       kernel release (default 22.6.0)
+//   PEAR_FAKE_IOS_VERSION  marketing version (default 27.2.1)
+//   PEAR_FAKE_IOS_BUILD    build identifier (default 24B91034)
+//   PEAR_FAKE_DARWIN       kernel release (default 27.2.0)
 //
 // Opt out with PEAR_NO_DEVICE_SHIM=1.
 //
@@ -433,11 +433,29 @@ static CFTypeRef PearSpoofedIORegistryValue(CFStringRef key) {
         return PearCreateData(PearDeviceModelC(), strlen(PearDeviceModelC()));
     }
     if (!strcmp(name, "product-name")) {
-        return CFStringCreateWithCString(kCFAllocatorDefault, "iPhone 14 Pro",
-                                         kCFStringEncodingUTF8);
+        // Marketing name for the reported model; unknown models get a
+        // generic name rather than a mismatching one.
+        static const struct { const char *model, *name; } kNames[] = {
+            {"iPhone19,2", "iPhone 18 Pro"},
+            {"iPhone19,3", "iPhone 18 Pro Max"}, {"iPhone19,7", "iPhone 18 Pro Max"},
+            {"iPhone15,2", "iPhone 14 Pro"},
+        };
+        const char *model = PearDeviceModelC();
+        const char *product = strncmp(model, "iPad", 4) == 0 ? "iPad" : "iPhone";
+        for (const auto &entry : kNames) {
+            if (!strcmp(entry.model, model)) { product = entry.name; break; }
+        }
+        return CFStringCreateWithCString(kCFAllocatorDefault, product, kCFStringEncodingUTF8);
     }
     if (!strcmp(name, "board-id")) {
-        return PearCreateData("D63AP", 5);
+        static const struct { const char *model, *board; } kBoards[] = {
+            {"iPhone19,2", "V63AP"}, {"iPhone19,3", "V64AP"}, {"iPhone19,7", "V64sAP"},
+        };
+        const char *board = "D63AP";
+        for (const auto &entry : kBoards) {
+            if (!strcmp(entry.model, PearDeviceModelC())) { board = entry.board; break; }
+        }
+        return PearCreateData(board, strlen(board));
     }
     if (!strcmp(name, "IOPlatformSerialNumber")) {
         return CFStringCreateWithCString(kCFAllocatorDefault, gSyntheticSerial,

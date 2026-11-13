@@ -932,23 +932,43 @@ static NSUInteger gAppConnectObservers = 0;
 static BOOL gRuntimeRegisteringObservers = NO;
 static BOOL gTargetedReplayEnabled = YES;
 
-static NSArray<GCController *> *PearControllersUnseenByApp(void) {
-    NSMutableArray<GCController *> *unseen = [NSMutableArray array];
-    @synchronized (gKnownControllers) {
-        for (GCController *controller in gKnownControllers) {
-            if (![gAppSeenControllers containsObject:controller]) [unseen addObject:controller];
-        }
-    }
-    return unseen;
-}
+/// Last time (CFAbsoluteTime) the app itself queried `+controllers` or
+/// `+current`. Main-thread writes and reads only.
+static CFAbsoluteTime gLastAppControllerQuery = 0;
 
+/// Replays a missed connect to one late observer. Decided per observer, not
+/// per controller: every observer registered after a pad connected missed
+/// that pad's notification, whatever another part of the app did. Earlier
+/// builds marked a pad as "seen" as soon as *any* code queried the list; in
+/// Zenless Zone Zero a haptics check queried it first, so the gamepad layer
+/// that registered its observer afterwards never learned about the pad and
+/// the game offered touch controls only.
+///
+/// The one case that must not get a replay is an engine that enumerates the
+/// list *and* registers its observer in the same step (Unity, Unreal): it
+/// already has the pad and a duplicate connect gives it a second player slot.
+/// That is recognised by an app query in the same main-thread turn as the
+/// registration (from just before it until the deferred replay runs).
 static void PearNoteAppConnectObserver(void (^deliver)(NSNotification *)) {
     gAppConnectObservers++;
     PearMarkNativeControllerSupport("observes controller connects");
     if (!gTargetedReplayEnabled) return;
+    const CFAbsoluteTime registeredAt = CFAbsoluteTimeGetCurrent();
+    NSMutableArray<GCController *> *missed = [NSMutableArray array];
+    @synchronized (gKnownControllers) {
+        for (GCController *controller in gKnownControllers) {
+            NSDate *connected = gControllerConnectDates[[NSValue valueWithNonretainedObject:controller]];
+            if (connected && connected.timeIntervalSinceReferenceDate <= registeredAt) {
+                [missed addObject:controller];
+            }
+        }
+    }
+    if (missed.count == 0) return;
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSArray<GCController *> *missed = PearControllersUnseenByApp();
-        if (missed.count == 0) return;
+        if (gLastAppControllerQuery >= registeredAt - 0.05) {
+            PearLog(@"[PearRuntime][input] observer enumerated controllers itself; no replay");
+            return;
+        }
         PearMarkControllersSeen(missed);
         for (GCController *controller in missed) {
             PearLog(@"[PearRuntime][input] delivering missed controller connect to late observer: %@",
@@ -969,6 +989,10 @@ static void PearAddObserverSelector(id self, SEL _cmd, id observer, SEL selector
     if (gRuntimeRegisteringObservers || object != nil || observer == nil
         || ![name isEqualToString:GCControllerDidConnectNotification]) return;
     __weak id weakObserver = observer;
+    if (getenv("PEAR_DEBUG_GC")) {
+        PearLog(@"[PearRuntime][input] app connect observer %@ -[%@ %@]",
+                observer, NSStringFromClass([observer class]), NSStringFromSelector(selector));
+    }
     PearNoteAppConnectObserver(^(NSNotification *note) {
         id strongObserver = weakObserver;
         if (strongObserver && [strongObserver respondsToSelector:selector]) {
@@ -985,6 +1009,13 @@ static id PearAddObserverBlock(id self, SEL _cmd, NSNotificationName name, id ob
         || ![name isEqualToString:GCControllerDidConnectNotification]) return token;
     void (^copied)(NSNotification *) = [block copy];
     __weak id weakToken = token;
+    if (getenv("PEAR_DEBUG_GC")) {
+        Dl_info info = {};
+        void *invoke = *(void **)((char *)(__bridge void *)copied + 16);
+        dladdr(invoke, &info);
+        PearLog(@"[PearRuntime][input] app connect block observer from %s (%s)",
+                info.dli_fname ? strrchr(info.dli_fname, '/') + 1 : "?", info.dli_sname ?: "?");
+    }
     PearNoteAppConnectObserver(^(NSNotification *note) {
         if (!weakToken) return;  // the app already removed its observer
         if (queue && queue != NSOperationQueue.currentQueue) {
@@ -1010,14 +1041,58 @@ static void InstallControllerObserverTracking(void) {
     }
 }
 
+static void InstallGameControllerBridgeNow(void);
+
+/// GameController must not be touched before the app has finished launching.
+/// Querying `+[GCController controllers]` (or registering for its connect
+/// notifications) from the runtime's load-time bootstrap starts the Mac
+/// Catalyst controller session before UIKit is up; that session never reports
+/// a controller that was already connected when the game started, so games
+/// such as Zenless Zone Zero and Genshin Impact saw no pad at all and offered
+/// touch controls only (a pad connected *after* launch still worked).
+/// Verified: with the bridge off the same process lists the Switch Pro
+/// Controller; with the early query it stays empty.
+///
+/// Only the NotificationCenter tracking (no GameController calls) runs at
+/// load time, so connect observers the app registers during launch are still
+/// seen; everything else waits for didFinishLaunching.
 static void InstallGameControllerBridge(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         gKnownControllers = [NSMutableSet new];
         gControllerConnectDates = [NSMutableDictionary new];
         gControllerBootstrapTime = CFAbsoluteTimeGetCurrent();
-        NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
         InstallControllerObserverTracking();
+
+        __block id token = nil;
+        token = [NSNotificationCenter.defaultCenter
+            addObserverForName:UIApplicationDidFinishLaunchingNotification object:nil
+                         queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *note) {
+                [NSNotificationCenter.defaultCenter removeObserver:token];
+                token = nil;
+                InstallGameControllerBridgeNow();
+            }];
+        // A runtime loaded into an app that has already launched (or a
+        // bootstrap that ran late) must not wait for a notification that
+        // already happened.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (UIApplication.sharedApplication.delegate != nil &&
+                UIApplication.sharedApplication.applicationState != UIApplicationStateBackground &&
+                token != nil && UIApplication.sharedApplication.connectedScenes.count > 0) {
+                [NSNotificationCenter.defaultCenter removeObserver:token];
+                token = nil;
+                InstallGameControllerBridgeNow();
+            }
+        });
+    });
+}
+
+static void InstallGameControllerBridgeNow(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        // The first-query discovery window starts now, not at load time.
+        gControllerBootstrapTime = CFAbsoluteTimeGetCurrent();
+        NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
         gRuntimeRegisteringObservers = YES;
 
         [center addObserverForName:GCControllerDidConnectNotification object:nil
@@ -1058,7 +1133,7 @@ static void InstallGameControllerBridge(void) {
                 gControllerConnectDates[[NSValue valueWithNonretainedObject:controller]] = [NSDate date];
             }
         }
-        PearLog(@"[PearRuntime][input] game controllers at bootstrap: %lu",
+        PearLog(@"[PearRuntime][input] game controllers after launch: %lu",
                 (unsigned long)existing.count);
         InstallControllerCompatibility();
         for (GCController *controller in existing) {
@@ -1114,6 +1189,7 @@ static void InstallGameControllerBridge(void) {
                     }
                     PearMarkNativeControllerSupport("queried controllers");
                     PearMarkControllersSeen(result);
+                    if (NSThread.isMainThread) gLastAppControllerQuery = CFAbsoluteTimeGetCurrent();
                     return result;
                 }));
             }
@@ -1125,6 +1201,7 @@ static void InstallGameControllerBridge(void) {
                     if (current && !(NSThread.isMainThread && gRuntimeControllerQueryDepth > 0)) {
                         PearMarkNativeControllerSupport("queried current controller");
                         PearMarkControllersSeen(@[current]);
+                        if (NSThread.isMainThread) gLastAppControllerQuery = CFAbsoluteTimeGetCurrent();
                     }
                     return current;
                 }));

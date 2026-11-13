@@ -17,7 +17,7 @@ static const char *const kKeys[6] = {
     "PEAR_FAKE_IOS_BUILD", "PEAR_FAKE_DARWIN", "PEAR_DEVICE_IDIOM"
 };
 static const char *const kDefaults[5] = {
-    "iPhone15,2", "iPhone", "16.0", "20A000", "22.6.0"
+    "iPhone19,2", "iPhone", "27.2.1", "24B91034", "27.2.0"
 };
 
 static int PearReject(PearDeviceProfileStatus status, const char *key) {

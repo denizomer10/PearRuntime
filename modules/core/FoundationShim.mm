@@ -257,10 +257,49 @@ static void PearInstallFoundationGuards(void) {
     PearLog(@"[PearRuntime][data] Foundation nil-data guards installed");
 }
 
+/// `-[NSBundle classNamed:]` for system frameworks, as an iOS app expects it.
+///
+/// In a Mac Catalyst process NSBundle describes a system framework with the
+/// iOS (flat) layout, `GameController.framework/GameController`, while the
+/// class is loaded from the macOS image `GameController.framework/Versions/A/
+/// GameController`. `classNamed:` compares the two paths and returns nil for
+/// every class. Unity's iOS player loads GameController exactly this way
+/// (`[[NSBundle bundleWithPath:@"/System/Library/Frameworks/GameController.
+/// framework"] classNamed:@"GCController"]`), so with nil it never saw a
+/// controller: Zenless Zone Zero and Genshin Impact offered touch controls
+/// only. When the lookup fails for a bundle under /System and the named class
+/// really comes from that framework's directory, return it.
+static void PearInstallSystemBundleClassLookup(void) {
+    if (getenv("PEAR_NO_BUNDLE_CLASS_FIX")) return;
+    Method method = class_getInstanceMethod(NSBundle.class, @selector(classNamed:));
+    if (!method) return;
+    IMP original = method_getImplementation(method);
+    method_setImplementation(method, imp_implementationWithBlock(^Class(NSBundle *self, NSString *name) {
+        Class found = ((Class (*)(id, SEL, NSString *))original)(self, @selector(classNamed:), name);
+        if (found || name.length == 0) return found;
+        NSString *bundlePath = self.bundlePath;
+        if (![bundlePath hasPrefix:@"/System/"]) return nil;
+        Class candidate = NSClassFromString(name);
+        const char *image = candidate ? class_getImageName(candidate) : NULL;
+        if (!image) return nil;
+        NSString *imagePath = @(image);
+        NSString *framework = [@"/" stringByAppendingString:bundlePath.lastPathComponent];
+        if (![imagePath hasPrefix:[bundlePath stringByAppendingString:@"/"]] &&
+            ![imagePath containsString:[framework stringByAppendingString:@"/"]]) return nil;
+        static dispatch_once_t logged;
+        dispatch_once(&logged, ^{
+            PearLog(@"[PearRuntime][bundle] %@ classNamed:%@ resolved from %@",
+                    bundlePath.lastPathComponent, name, imagePath);
+        });
+        return candidate;
+    }));
+}
+
 __attribute__((constructor))
 static void PearFoundationShimInit(void) {
     PEAR_MODULE_GUARD();
     @autoreleasepool {
+        PearInstallSystemBundleClassLookup();
         PearInstallFoundationGuards();
     }
 }
