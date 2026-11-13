@@ -36,6 +36,10 @@ static Class PearRoutedClassName(const char *name) {
     if (!name) return Nil;
     if (!strcmp(name, "EAGLContext")) return PearEAGLContext.class;
     if (!strcmp(name, "EAGLSharegroup")) return PearEAGLSharegroup.class;
+    // GLKit's view classes run on the system OpenGL ES; the ANGLE versions
+    // live in GLKitAdapter.mm.
+    if (!strcmp(name, "GLKView")) return objc_getClass("PearGLKView");
+    if (!strcmp(name, "GLKViewController")) return objc_getClass("PearGLKViewController");
     return Nil;
 }
 static Class PearRoutedNSClass(NSString *name) {
@@ -121,6 +125,10 @@ void *PearANGLEGameSymbol(const char *name) {
     if (!strcmp(name, "OBJC_CLASS_$_EAGLSharegroup")) return (__bridge void *)PearEAGLSharegroup.class;
     if (!strcmp(name, "OBJC_METACLASS_$_EAGLContext")) return (__bridge void *)object_getClass(PearEAGLContext.class);
     if (!strcmp(name, "OBJC_METACLASS_$_EAGLSharegroup")) return (__bridge void *)object_getClass(PearEAGLSharegroup.class);
+    if (!strcmp(name, "OBJC_CLASS_$_GLKView")) return (__bridge void *)objc_getClass("PearGLKView");
+    if (!strcmp(name, "OBJC_METACLASS_$_GLKView")) return (__bridge void *)objc_getMetaClass("PearGLKView");
+    if (!strcmp(name, "OBJC_CLASS_$_GLKViewController")) return (__bridge void *)objc_getClass("PearGLKViewController");
+    if (!strcmp(name, "OBJC_METACLASS_$_GLKViewController")) return (__bridge void *)objc_getMetaClass("PearGLKViewController");
     if (!strcmp(name, "glDeleteRenderbuffers") || !strcmp(name, "glDeleteRenderbuffersOES")) return (void *)PearRoutedDeleteRenderbuffers;
     if (!strcmp(name, "EAGLGetVersion")) return (void *)PearRoutedVersion;
     if (!strcmp(name, "EAGLGetProcAddress") || !strcmp(name, "eglGetProcAddress")) return (void *)PearRoutedProc;
@@ -144,6 +152,8 @@ static bool PearRoutingCandidate(const char *name) {
         !strcmp(name, "OBJC_METACLASS_$_EAGLContext") || !strcmp(name, "OBJC_METACLASS_$_EAGLSharegroup") ||
         !strcmp(name, "objc_getClass") || !strcmp(name, "objc_lookUpClass") ||
         !strcmp(name, "objc_getMetaClass") ||
+        !strcmp(name, "OBJC_CLASS_$_GLKView") || !strcmp(name, "OBJC_METACLASS_$_GLKView") ||
+        !strcmp(name, "OBJC_CLASS_$_GLKViewController") || !strcmp(name, "OBJC_METACLASS_$_GLKViewController") ||
         !strcmp(name, "dlsym") || !strcmp(name, "dlopen") || !strcmp(name, "CFBundleGetFunctionPointerForName");
 }
 
