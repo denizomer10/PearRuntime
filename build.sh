@@ -8,6 +8,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+source "$ROOT/bridge/context-aliases.sh"
 if [[ ! -f "$ROOT/third_party/angle/include/EGL/egl.h" ]]; then
   echo "ERROR: ANGLE headers are missing. Initialize the pinned fork:" >&2
   echo "  git -C '$ROOT' submodule update --init --depth 1 third_party/angle" >&2
@@ -100,6 +101,7 @@ echo ">> Linking $OUT (Mac Catalyst)"
   -dynamiclib \
   -Wl,-undefined,dynamic_lookup \
   -Wl,-dead_strip \
+  "${PEAR_EAGL_ALIAS_FLAGS[@]}" \
   -fobjc-arc \
   -framework Foundation \
   -framework UIKit \
@@ -196,3 +198,4 @@ cat > "$MARKETPLACE/Versions/A/Resources/Info.plist" <<PLIST
 </plist>
 PLIST
 file "$MARKETPLACE/MarketplaceKit"
+bash "$ROOT/build-angle-bridge.sh" "$OUT"

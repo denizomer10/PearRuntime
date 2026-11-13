@@ -19,6 +19,7 @@
 
 static std::atomic<bool> gRoutingReady{false};
 static std::string &PearAppRoot() { static std::string root; return root; }
+static std::string &PearBridgePath() { static std::string path; return path; }
 BOOL PearANGLEGameRoutingEnabled(void) { return gRoutingReady.load(std::memory_order_acquire); }
 static bool PearIsGLName(const char *name) {
     return name && name[0] == 'g' && name[1] == 'l' && name[2] >= 'A' && name[2] <= 'Z';
@@ -57,6 +58,16 @@ static void *PearRoutedDlsym(void *handle, const char *name) {
     // Preserve RTLD_NEXT's caller-image semantics on unrelated lookups.
     [[clang::musttail]] return dlsym(handle, name);
 }
+static void *PearRoutedDlopen(const char *path, int mode) {
+    if (path && (strstr(path, "OpenGLES.framework/") || !strcmp(path, "OpenGLES"))) {
+        if (PearBridgePath().empty()) {
+            PearANGLETrace("[PearRuntime][angle-route] missing ANGLE ABI bridge; system OpenGLES load refused\n");
+            return nullptr;
+        }
+        return dlopen(PearBridgePath().c_str(), mode);
+    }
+    [[clang::musttail]] return dlopen(path, mode);
+}
 static void *PearRoutedBundleProc(CFBundleRef bundle, CFStringRef name) {
     char symbol[256];
     if (name && CFStringGetCString(name, symbol, sizeof(symbol), kCFStringEncodingUTF8)) {
@@ -80,6 +91,7 @@ void *PearANGLEGameSymbol(const char *name) {
     if (!strcmp(name, "objc_lookUpClass")) return (void *)PearRoutedLookupClass;
     if (!strcmp(name, "objc_getMetaClass")) return (void *)PearRoutedMetaClass;
     if (!strcmp(name, "dlsym")) return (void *)PearRoutedDlsym;
+    if (!strcmp(name, "dlopen")) return (void *)PearRoutedDlopen;
     if (!strcmp(name, "CFBundleGetFunctionPointerForName")) return (void *)PearRoutedBundleProc;
     if (PearIsGLName(name)) return PearANGLEGetProcAddress(name);
     return nullptr;
@@ -94,7 +106,7 @@ static bool PearRoutingCandidate(const char *name) {
         !strcmp(name, "OBJC_METACLASS_$_EAGLContext") || !strcmp(name, "OBJC_METACLASS_$_EAGLSharegroup") ||
         !strcmp(name, "objc_getClass") || !strcmp(name, "objc_lookUpClass") ||
         !strcmp(name, "objc_getMetaClass") ||
-        !strcmp(name, "dlsym") || !strcmp(name, "CFBundleGetFunctionPointerForName");
+        !strcmp(name, "dlsym") || !strcmp(name, "dlopen") || !strcmp(name, "CFBundleGetFunctionPointerForName");
 }
 
 struct PearImportPatch { uintptr_t *slot; uintptr_t replacement; };
@@ -121,14 +133,19 @@ static bool PearReadAddend(const uint8_t *&p, const uint8_t *end, bool &nonzero)
 
 static bool PearReadBindings(const uint8_t *begin, size_t size, bool lazy,
     const std::vector<const segment_command_64 *> &segments, intptr_t slide,
-    std::vector<PearImportPatch> &patches) {
+    const std::vector<std::string> &dylibs, std::vector<PearImportPatch> &patches) {
     const uint8_t *p = begin, *end = begin + size;
     unsigned segment = UINT_MAX, type = BIND_TYPE_POINTER;
     uint64_t offset = 0;
     bool hasAddend = false;
+    int ordinal = 0;
     const char *symbol = nullptr;
     auto bind = [&]() -> bool {
         if (!PearRoutingCandidate(symbol)) return true;
+        // A converted image already links our typed exports. Keep those slots
+        // intact; only dynamic lookup APIs still need import routing there.
+        if (ordinal > 0 && (size_t)ordinal <= dylibs.size() &&
+            dylibs[ordinal - 1].find("libPearOpenGLES.dylib") != std::string::npos) return true;
         if (segment >= segments.size() || type != BIND_TYPE_POINTER || hasAddend) {
             PearANGLETrace( "[PearRuntime][angle-route] invalid binding %s segment=%u type=%u addend=%d\n", symbol, segment, type, hasAddend);
             return false;
@@ -150,11 +167,13 @@ static bool PearReadBindings(const uint8_t *begin, size_t size, bool lazy,
         switch (opcode) {
             case BIND_OPCODE_DONE:
                 if (!lazy) return true;
-                segment = UINT_MAX; offset = 0; symbol = nullptr; type = BIND_TYPE_POINTER; hasAddend = false;
+                segment = UINT_MAX; offset = 0; symbol = nullptr; type = BIND_TYPE_POINTER; hasAddend = false; ordinal = 0;
                 break;
-            case BIND_OPCODE_SET_DYLIB_ORDINAL_IMM: case BIND_OPCODE_SET_DYLIB_SPECIAL_IMM: break;
+            case BIND_OPCODE_SET_DYLIB_ORDINAL_IMM: ordinal = imm; break;
+            case BIND_OPCODE_SET_DYLIB_SPECIAL_IMM: ordinal = imm ? (int8_t)(imm | 0xf0) : 0; break;
             case BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB:
-                if (!PearReadULEB(p, end, value)) return false;
+                if (!PearReadULEB(p, end, value) || value > INT_MAX) return false;
+                ordinal = (int)value;
                 break;
             case BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM:
                 symbol = (const char *)p;
@@ -240,13 +259,14 @@ static void PearRouteImage(const mach_header *header, intptr_t slide) {
     const std::string leaf = path.substr(path.find_last_of('/') + 1);
     if (leaf == "libPearRuntime.dylib" || leaf == "libcxxcompat.dylib" || leaf == "libswiftUIKit.dylib" ||
         path.find("MarketplaceKit.framework/") != std::string::npos ||
-        leaf == "libEGL.dylib" || leaf == "libGLESv2.dylib") return;
+        leaf == "libEGL.dylib" || leaf == "libGLESv2.dylib" || leaf == "libPearOpenGLES.dylib") return;
     auto fail = [&]() { PearANGLETrace( "[PearRuntime][angle-route] REFUSED image %s; no mixed GL fallback\n", image.dli_fname); _exit(78); };
     if (header->magic != MH_MAGIC_64) { fail(); return; }
     const mach_header_64 *h = (const mach_header_64 *)header;
     if (h->cputype != CPU_TYPE_ARM64 || (h->cpusubtype & ~CPU_SUBTYPE_MASK) == CPU_SUBTYPE_ARM64E) { fail(); return; }
     const uint8_t *cursor = (const uint8_t *)(h + 1), *commandsEnd = cursor + h->sizeofcmds;
     std::vector<const segment_command_64 *> segments;
+    std::vector<std::string> dylibs;
     const segment_command_64 *linkedit = nullptr;
     const dyld_info_command *dyld = nullptr;
     bool chained = false;
@@ -262,6 +282,16 @@ static void PearRouteImage(const mach_header *header, intptr_t slide) {
         if ((command->cmd == LC_DYLD_INFO || command->cmd == LC_DYLD_INFO_ONLY) && command->cmdsize >= sizeof(dyld_info_command))
             dyld = (const dyld_info_command *)command;
         if (command->cmd == LC_DYLD_CHAINED_FIXUPS) chained = true;
+        if ((command->cmd == LC_LOAD_DYLIB || command->cmd == LC_LOAD_WEAK_DYLIB ||
+             command->cmd == LC_REEXPORT_DYLIB || command->cmd == LC_LOAD_UPWARD_DYLIB || command->cmd == LC_LAZY_LOAD_DYLIB) &&
+            command->cmdsize >= sizeof(dylib_command)) {
+            auto *d = (const dylib_command *)command;
+            if (d->dylib.name.offset >= command->cmdsize) { fail(); return; }
+            const char *name = (const char *)command + d->dylib.name.offset;
+            size_t maximum = command->cmdsize - d->dylib.name.offset;
+            if (strnlen(name, maximum) == maximum) { fail(); return; }
+            dylibs.emplace_back(name);
+        }
         cursor += command->cmdsize;
     }
     if (chained || !linkedit || !dyld) {
@@ -276,7 +306,7 @@ static void PearRouteImage(const mach_header *header, intptr_t slide) {
             PearANGLETrace("[PearRuntime][angle-route] invalid bind range %u+%u linkedit=%llu+%llu\n", offset,size,linkedit->fileoff,linkedit->filesize);
             return false;
         }
-        return PearReadBindings((const uint8_t *)(base + offset), size, lazy, segments, slide, patches);
+        return PearReadBindings((const uint8_t *)(base + offset), size, lazy, segments, slide, dylibs, patches);
     };
     if (!read(dyld->bind_off, dyld->bind_size, false)) {
         PearANGLETrace("[PearRuntime][angle-route] regular bindings failed off=%u size=%u linkeditVM=%llx file=%llu slide=%lx\n",dyld->bind_off,dyld->bind_size,linkedit->vmaddr,linkedit->fileoff,(unsigned long)slide);
@@ -290,18 +320,21 @@ static void PearRouteImage(const mach_header *header, intptr_t slide) {
 
 __attribute__((constructor)) static void PearEnableGameRouting() {
     const char *backend = getenv("PEAR_GRAPHICS_BACKEND");
-    if (!backend || strcmp(backend, "angle")) return;
+    for (uint32_t index = 0; index < _dyld_image_count(); ++index) {
+        const char *path = _dyld_get_image_name(index);
+        const char *leaf = strrchr(path, '/');
+        if (leaf && !strcmp(leaf + 1, "libPearOpenGLES.dylib")) { PearBridgePath() = path; break; }
+    }
+    if (backend && strcmp(backend, "angle")) {
+        PearANGLETrace("[PearRuntime][angle-route] unsupported backend; only ANGLE is available\n");
+        _exit(78);
+    }
+    if (!backend && PearBridgePath().empty()) return;
     if (!PearRuntimeModuleEnabled("graphics-gl")) {
         PearANGLETrace("[PearRuntime][angle-route] ANGLE requires the graphics-gl module\n");
         _exit(78);
     }
     @autoreleasepool {
-        const char *directory = getenv("PEAR_ANGLE_LIB_DIR");
-        NSError *error = nil;
-        if (!directory || !PearANGLEInitialize([NSString stringWithUTF8String:directory], &error)) {
-            PearANGLETrace( "[PearRuntime][angle-route] initialization failed: %s\n", error.localizedDescription.UTF8String ?: "PEAR_ANGLE_LIB_DIR missing");
-            _exit(78);
-        }
         char executable[PATH_MAX]; uint32_t length = sizeof(executable);
         if (_NSGetExecutablePath(executable, &length) != 0) _exit(78);
         char canonical[PATH_MAX];
@@ -309,10 +342,18 @@ __attribute__((constructor)) static void PearEnableGameRouting() {
         PearAppRoot() = canonical;
         size_t app = PearAppRoot().find(".app/");
         if (app != std::string::npos) PearAppRoot().resize(app + 4);
+        const char *directory = getenv("PEAR_ANGLE_LIB_DIR");
+        NSString *libraries = directory ? [NSString stringWithUTF8String:directory] :
+            [[NSString stringWithUTF8String:PearAppRoot().c_str()] stringByAppendingPathComponent:@"Frameworks/PearANGLE"];
+        NSError *error = nil;
+        if (!PearANGLEInitialize(libraries, &error)) {
+            PearANGLETrace("[PearRuntime][angle-route] initialization failed: %s\n", error.localizedDescription.UTF8String);
+            _exit(78);
+        }
         gRoutingReady.store(true, std::memory_order_release);
         _dyld_register_func_for_add_image(PearRouteImage);
         auto installGeometry = (void (*)(void))dlsym(RTLD_DEFAULT, "PearANGLEInstallGeometryHooks");
         if (installGeometry) installGeometry();
-        PearANGLETrace( "[PearRuntime][angle-route] enabled explicit ANGLE routing\n");
+        PearANGLETrace("[PearRuntime][angle-route] ANGLE is the only GL backend\n");
     }
 }

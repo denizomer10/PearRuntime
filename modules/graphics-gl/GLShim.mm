@@ -1,23 +1,9 @@
-// GLShim.mm
-//
-// macOS's iOSSupport OpenGLES framework does NOT export EAGLGetProcAddress,
-// which iOS apps use to resolve OpenGL entry points. When it is missing apps
-// fail with "Failed to create OpenGLES context" (OpenGL ES titles do this).
-//
-// We define EAGLGetProcAddress in the runtime. The app resolves it dynamically
-// (dlsym over the global namespace), so our definition is found, and we back it
-// with dlsym so the real GL entry points are returned.
-//
-// The same module also clamps an EAGL drawable that was sized from the whole
-// display to the app's key window. Older titles can create their GL surface
-// before the window is attached and never resize it; the result is a rendered
-// image larger than the window, with the bottom/right clipped. Opt out with
-// PEAR_NO_GL_FIT=1. With PEAR_DEBUG_GL it logs how an app sizes its GL surface.
+// GLShim.mm: geometry and touch bridge for the source-built ANGLE renderer.
+// System OpenGLES/EAGL implementations are never queried or used as fallback.
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
-#import <dlfcn.h>
 #import <string.h>
 #import <math.h>
 #import <atomic>
@@ -52,19 +38,7 @@ static CGSize PearDeclaredDrawableSize(CGSize size) {
     return PearOrientDrawableSize(size, landscape, portrait);
 }
 
-static void *OpenGLESHandle(void) {
-    static void *handle;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        handle = dlopen("/System/iOSSupport/System/Library/Frameworks/OpenGLES.framework/OpenGLES",
-                        RTLD_NOW | RTLD_GLOBAL);
-    });
-    return handle;
-}
-
-static void *PearGLProc(const char *name) {
-    return PearANGLEGameRoutingEnabled() ? PearANGLEGetProcAddress(name) : dlsym(OpenGLESHandle(), name);
-}
+static void *PearGLProc(const char *name) { return PearANGLEGetProcAddress(name); }
 static CGSize gGLDrawableSize = { 0, 0 };
 /// The size the engine itself created its drawable at. This is the coordinate
 /// space its hit-testing uses. It must not follow window resizes: the fit
@@ -235,18 +209,7 @@ static void PearUpdateDrawableCrop(void) {
 }
 
 extern "C" void *EAGLGetProcAddress(const char *name) {
-    if (name == NULL) return NULL;
-    if (PearANGLEGameRoutingEnabled()) return PearANGLEGameSymbol(name);
-
-    void *symbol = dlsym(RTLD_DEFAULT, name);
-    if (symbol == NULL) {
-        void *handle = OpenGLESHandle();
-        if (handle) symbol = dlsym(handle, name);
-    }
-    if (symbol == NULL) {
-        PearLog(@"[PearRuntime][gl] EAGLGetProcAddress(%s) -> NOT FOUND", name);
-    }
-    return symbol;
+    return PearANGLEGameSymbol(name);
 }
 
 #pragma mark - Drawable fit
@@ -534,7 +497,8 @@ static void PearInstallEAGLTouchLogging(void) {
 static void PearInstallEAGLHook(void) {
     static BOOL installed = NO;
     if (installed) return;
-    Class context = PearANGLEGameRoutingEnabled() ? PearEAGLContext.class : NSClassFromString(@"EAGLContext");
+    if (!PearANGLEGameRoutingEnabled()) return;
+    Class context = PearEAGLContext.class;
     if (!context) return;
     SEL selector = NSSelectorFromString(@"renderbufferStorage:fromDrawable:");
     Method method = class_getInstanceMethod(context, selector);
@@ -670,7 +634,8 @@ static void PearInstallLegacyTouchLogging(void) {
 __attribute__((constructor))
 static void PearGLShimInit(void) {
     PEAR_MODULE_GUARD();
-    // The OpenGLES framework (and EAGLContext) loads with the app, so retry.
+    if (!PearANGLEGameRoutingEnabled()) return;
+    // Retry while the application connects its own drawable/window.
     for (int i = 0; i < 40; i++) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * 0.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
