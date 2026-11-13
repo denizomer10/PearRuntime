@@ -7,3 +7,4 @@
 BOOL PearANGLEInitialize(NSString *directory, NSError *__autoreleasing *error);
 void *PearANGLEGetProcAddress(const char *name);
 EGLDisplay PearANGLEDisplay(void);
+void PearANGLETrace(const char *format, ...) __attribute__((format(printf, 1, 2)));

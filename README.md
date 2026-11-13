@@ -111,14 +111,14 @@ Presentation currently covers matching RGBA8 color attachment 0; GLES2 copies
 require identical pixel extents, while GLES3 core blit can scale. Native bounds
 or backing-scale changes require explicit detach/rebind at a frame boundary;
 the EAGL adapter must rebuild renderbuffer and input geometry together. GLES1
-presentation and EAGL renderbuffer/import routing remain separate work.
+presentation remains unsupported. The renderbuffer/import adapters are described below.
 
 Use the pinned ANGLE fork's thread-exit and host-layer fixes (`f405241`). Old
 staged libraries reproduce EGL_BAD_ACCESS after a current context's thread
 exits. The PearSilicon parent repository contains the source-build script and
 real Catalyst/Metal shader, framebuffer and thread-lifecycle tests.
 
-### EAGL selector and drawable adapters (not activated for games)
+### EAGL selector and drawable adapters
 
 `PearEAGLContext.h` implements public context/sharegroup/storage/presentation
 selectors using separately named original classes. `PearANGLEDrawable.h`
@@ -128,10 +128,29 @@ retained backing keeps the source renderbuffer contents.
 
 Successful allocations publish immutable logical-bounds/pixel-size/scale
 snapshots with generations. Input-thread queries do not require a GL context;
-old generations and changed layer geometry are rejected. Engine GL deletion
-and same-name reuse still need import-wrapper tracking. RGB565/sRGB,
+old generations and changed layer geometry are rejected. Routed GL deletion
+invalidates storage metadata before names can be reused. RGB565/sRGB,
 multisampling, scheduled presentation and GLES1 presentation are not implemented.
 
-The classes do not replace system EAGLContext and do not redirect a game's
-linked or dynamically resolved GL calls. That routing and the game's atomic
-render/input resize transaction must be integrated before activation.
+The classes retain separate Objective-C names. Opt-in game import routing can
+now bind EAGL class references and GL/proc lookups to them; system images and
+default launches remain unchanged.
+
+### Experimental game import routing
+
+Set `PEAR_GRAPHICS_BACKEND=angle` and an absolute `PEAR_ANGLE_LIB_DIR` when
+injecting this runtime before app startup. `ANGLEGameRouting.mm` patches classic
+Mach-O app/embedded-image import slots, including GL calls, EAGL classes,
+proc-address/dlsym/CFBundle function lookup and dynamic class lookup. The GL
+geometry shim uses ANGLE queries in this mode. Renderbuffer deletion invalidates
+its geometry record. Unsupported images fail explicitly; no system-GL fallback.
+Chained/threaded fixups and arm64e remain unsupported. `graphics-gl` must be on.
+
+Native and synthetic current/previous touch coordinates share the GL layer
+conversion. Transient resize rejects a frame without erasing valid storage.
+The shared screen cache is refreshed on the main thread for worker consumers.
+
+In isolated test copies, the user confirmed Cut the Rope's ANGLE layout/touch
+and Minecraft's native Metal layout/input/pointer lock. This does not translate
+Minecraft's native Metal calls into ANGLE or establish compatibility for every
+game. The parent repository documents test commands and remaining packaging work.

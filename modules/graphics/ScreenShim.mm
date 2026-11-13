@@ -46,62 +46,68 @@ static UIWindow *PearMainWindow(void) {
 /// a fixed drawable exists its size is authoritative: a Mac window resize (full
 /// screen in particular) must not rotate or rescale the coordinate space the
 /// engine laid its controls out in.
+static os_unfair_lock gScreenBoundsLock = OS_UNFAIR_LOCK_INIT;
 static CGSize gReportedOverride = {0, 0};
+static CGSize gWindowCachedSize = {0, 0};
+static uint64_t gWindowCachedAt;
+static _Atomic BOOL gScreenRefreshQueued = NO;
+static double PearDisplayScale(id screen);
 
 void PearSetScreenOverride(CGSize size) {
+    os_unfair_lock_lock(&gScreenBoundsLock);
     gReportedOverride = size;
+    os_unfair_lock_unlock(&gScreenBoundsLock);
 }
 
-void PearClearScreenOverride(void) {
-    gReportedOverride = CGSizeZero;
-}
+void PearClearScreenOverride(void) { PearSetScreenOverride(CGSizeZero); }
 
-/// The screen geometry to report: the window's bounds, with the display's scale.
-static CGRect PearReportedBounds(void) {
-    if (gReportedOverride.width > 0 && gReportedOverride.height > 0) {
-        return CGRectMake(0, 0, gReportedOverride.width, gReportedOverride.height);
-    }
-
-    // Engines query UIScreen every frame, often from their render thread.
-    // Walking the scene/window tree each time costs main-thread time and is
-    // not thread-safe, so the window size is cached briefly: the main thread
-    // refreshes it at most every 50 ms (fast enough to follow a live resize),
-    // other threads read the last main-thread value.
-    static os_unfair_lock cacheLock = OS_UNFAIR_LOCK_INIT;
-    static CGSize cachedSize = {0, 0};
-    static uint64_t cachedAt = 0;
-    const uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-    const BOOL main = [NSThread isMainThread];
-    os_unfair_lock_lock(&cacheLock);
-    CGSize cached = cachedSize;
-    uint64_t age = now - cachedAt;
-    os_unfair_lock_unlock(&cacheLock);
-    if (cached.width > 0 && cached.height > 0 && (!main || age < 50 * NSEC_PER_MSEC)) {
-        return CGRectMake(0, 0, cached.width, cached.height);
-    }
-
+static void PearRefreshWindowBounds(void) {
+    NSCAssert(NSThread.isMainThread, @"Screen geometry is produced on the main thread");
     UIWindow *window = PearMainWindow();
-    if (window && window.bounds.size.width > 0 && window.bounds.size.height > 0) {
-        CGRect bounds = window.bounds;
-        if (main) {
-            os_unfair_lock_lock(&cacheLock);
-            cachedSize = bounds.size;
-            cachedAt = now;
-            os_unfair_lock_unlock(&cacheLock);
-        }
-        return bounds;
-    }
+    CGSize size = window.bounds.size;
+    if (size.width <= 0 || size.height <= 0) return;
+    os_unfair_lock_lock(&gScreenBoundsLock);
+    BOOL changed = !CGSizeEqualToSize(size, gWindowCachedSize);
+    gWindowCachedSize = size;
+    gWindowCachedAt = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    os_unfair_lock_unlock(&gScreenBoundsLock);
+    if (changed && getenv("PEAR_DEBUG_METAL"))
+        PearLog(@"[PearRuntime][screen] published window geometry %@", NSStringFromCGSize(size));
+}
 
-    // Before the first scene/window is connected, UIKit can report an empty
-    // screen. Engines that build a Metal render target from that size create a
-    // zero-width/zero-height texture and abort. Report a conservative
-    // landscape surface until the real window is available; the value follows
-    // the window immediately afterwards.
-    static BOOL loggedFallback = NO;
-    if (!loggedFallback) {
-        loggedFallback = YES;
-        PearLog(@"[PearRuntime][screen] no window yet; reporting 1024x768 fallback");
+static void PearQueueScreenRefresh(void) {
+    if (atomic_exchange(&gScreenRefreshQueued, YES)) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        PearRefreshWindowBounds();
+        atomic_store(&gScreenRefreshQueued, NO);
+    });
+}
+
+/// Render threads consume a main-thread snapshot, never the UIKit window tree.
+/// A stale snapshot queues one coalesced refresh instead of remaining frozen
+/// indefinitely when a Metal engine only queries UIScreen on its render thread.
+static CGRect PearReportedBounds(void) {
+    const uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    os_unfair_lock_lock(&gScreenBoundsLock);
+    CGSize override = gReportedOverride, cached = gWindowCachedSize;
+    uint64_t age = now - gWindowCachedAt;
+    os_unfair_lock_unlock(&gScreenBoundsLock);
+    if (override.width > 0 && override.height > 0)
+        return CGRectMake(0, 0, override.width, override.height);
+    if (age >= 50 * NSEC_PER_MSEC || cached.width <= 0 || cached.height <= 0) {
+        if (NSThread.isMainThread) {
+            PearRefreshWindowBounds();
+            os_unfair_lock_lock(&gScreenBoundsLock);
+            cached = gWindowCachedSize;
+            os_unfair_lock_unlock(&gScreenBoundsLock);
+        } else {
+            PearQueueScreenRefresh();
+        }
     }
+    if (cached.width > 0 && cached.height > 0) return CGRectMake(0, 0, cached.width, cached.height);
+    static _Atomic BOOL loggedFallback = NO;
+    if (!atomic_exchange(&loggedFallback, YES))
+        PearLog(@"[PearRuntime][screen] no window yet; reporting 1024x768 fallback");
     return CGRectMake(0, 0, 1024, 768);
 }
 
@@ -226,14 +232,18 @@ static void PearInstallScreenShim(void) {
         return CGRectMake(0, 0, round(reported.size.width * scale), round(reported.size.height * scale));
     }));
 
-    // Moving the window between a Retina panel and a 1x external display
-    // changes the backing scale; refresh the cache on the main thread.
-    for (NSString *name in @[ @"NSWindowDidChangeBackingPropertiesNotification",
-                              @"NSWindowDidChangeScreenNotification" ]) {
+    // AppKit notifications can precede UIKit's final bounds. Refresh once now
+    // and once after layout settles; render-thread reads can also queue refresh.
+    for (NSString *name in @[ @"NSWindowDidResizeNotification", @"NSWindowDidEnterFullScreenNotification",
+                              @"NSWindowDidExitFullScreenNotification", UIWindowDidBecomeKeyNotification,
+                              @"NSWindowDidChangeBackingPropertiesNotification", @"NSWindowDidChangeScreenNotification" ]) {
         [NSNotificationCenter.defaultCenter addObserverForName:name object:nil
             queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *note) {
                 atomic_store(&gDisplayScale, 0);
+                PearRefreshWindowBounds();
                 PearDisplayScale(nil);
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
+                    dispatch_get_main_queue(), ^{ PearRefreshWindowBounds(); });
             }];
     }
 

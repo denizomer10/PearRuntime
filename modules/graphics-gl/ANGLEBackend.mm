@@ -3,6 +3,22 @@
 #include <dlfcn.h>
 #include <atomic>
 #include <mutex>
+#include <cstdarg>
+#include <cstdio>
+
+void PearANGLETrace(const char *format, ...) {
+    va_list arguments, copy;
+    va_start(arguments, format);
+    va_copy(copy, arguments);
+    vfprintf(stderr, format, arguments);
+    const char *path = getenv("PEAR_LOG_FILE");
+    if (path) {
+        FILE *file = fopen(path, "a");
+        if (file) { vfprintf(file, format, copy); fclose(file); }
+    }
+    va_end(copy);
+    va_end(arguments);
+}
 
 static std::mutex gANGLELock;
 static std::atomic<bool> gANGLEReady{false};

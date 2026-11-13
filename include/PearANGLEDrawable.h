@@ -25,6 +25,8 @@ typedef struct {
                      colorFormat:(PearANGLEColorFormat)format retainedBacking:(BOOL)retained
                            error:(NSError *__autoreleasing *)error;
 - (BOOL)presentBoundRenderbuffer:(NSUInteger)target error:(NSError *__autoreleasing *)error;
+// Called by routed GL deletion before ANGLE can recycle an object name.
+- (void)forgetDrawableRenderbuffers:(const unsigned int *)names count:(int)count;
 // A snapshot becomes invalid when the host's bounds/scale or storage changes.
 // Snapshot/mapping queries are safe on an input thread without a current GL
 // context. They do not query or mutate GL objects.

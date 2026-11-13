@@ -108,6 +108,14 @@ static BOOL PearStorageMatches(GLuint name, PearANGLEStorage *storage) {
 }
 
 @implementation PearANGLEContext (Drawable)
+- (void)forgetDrawableRenderbuffers:(const unsigned int *)names count:(int)count {
+    if (!names || count <= 0 || PearANGLEContext.currentContext != self) return;
+    PearANGLEDrawableState *state = objc_getAssociatedObject(self, &gDrawableStateKey);
+    if (!state) return;
+    @synchronized(state) {
+        for (int index = 0; index < count; ++index) [state.storage removeObjectForKey:@(names[index])];
+    }
+}
 - (BOOL)allocateBoundRenderbuffer:(NSUInteger)target fromLayer:(CALayer *)layer
                      colorFormat:(PearANGLEColorFormat)format retainedBacking:(BOOL)retained
                            error:(NSError *__autoreleasing *)error {
@@ -164,9 +172,15 @@ static BOOL PearStorageMatches(GLuint name, PearANGLEStorage *storage) {
     gl.get(GL_RENDERBUFFER_BINDING, &name);
     PearANGLEDrawableState *state = PearDrawableState(self);
     PearANGLEStorage *storage = PearStoredDrawable(state, (GLuint)name);
-    if (!name || !PearGeometryMatches(storage) || !PearStorageMatches((GLuint)name, storage)) {
+    if (!name || !storage)
+        return PearDrawableError(error, 10, @"No drawable storage for the bound renderbuffer");
+    // UIKit may transiently resize the layer before the logical fit is restored.
+    // Reject that frame, but keep valid GL storage so presentation can recover.
+    if (!PearGeometryMatches(storage))
+        return PearDrawableError(error, 12, @"Layer geometry changed; waiting for fit or explicit reallocation");
+    if (!PearStorageMatches((GLuint)name, storage)) {
         PearForgetDrawable(state, (GLuint)name);
-        return PearDrawableError(error, 10, @"Drawable storage is missing or stale; reallocate before presentation");
+        return PearDrawableError(error, 10, @"Renderbuffer storage changed; reallocate before presentation");
     }
     if (![self bindDrawableLayer:storage.layer error:error]) return NO;
     if (!state.framebuffer) {

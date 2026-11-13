@@ -30,6 +30,7 @@ static void PearReleaseEAGLAdapter(void *value) {
 
 @interface PearEAGLContext ()
 @property(atomic, strong, readwrite) NSError *lastError;
+@property(nonatomic) BOOL reportedPresentation;
 @end
 
 @implementation PearEAGLContext
@@ -46,6 +47,7 @@ static void PearReleaseEAGLAdapter(void *value) {
     _angleContext = [[PearANGLEContext alloc] initWithClientVersion:(NSInteger)api sharegroup:_sharegroup.angleGroup error:&error];
     if (!_angleContext) return nil;
     _API = api;
+    if (getenv("PEAR_GRAPHICS_BACKEND")) PearANGLETrace( "[PearRuntime][angle] context GLES%lu created\n", (unsigned long)api);
     return self;
 }
 + (PearEAGLContext *)currentContext {
@@ -99,12 +101,23 @@ static void PearReleaseEAGLAdapter(void *value) {
     BOOL result = [_angleContext allocateBoundRenderbuffer:target fromLayer:drawable colorFormat:PearANGLEColorRGBA8
                                          retainedBacking:[retained boolValue] error:&error];
     self.lastError = error;
+    if (getenv("PEAR_GRAPHICS_BACKEND")) PearANGLETrace( "[PearRuntime][angle] storage %lux%lu result=%d error=%s\n",
+        (unsigned long)_angleContext.pixelWidth, (unsigned long)_angleContext.pixelHeight, result,
+        error.localizedDescription.UTF8String ?: "none");
     return result;
 }
 - (BOOL)presentRenderbuffer:(NSUInteger)target {
     NSError *error = nil;
     BOOL result = [_angleContext presentBoundRenderbuffer:target error:&error];
     self.lastError = error;
+    if (getenv("PEAR_GRAPHICS_BACKEND")) {
+        static unsigned failures;
+        if (!result && failures++ < 8) PearANGLETrace( "[PearRuntime][angle] presentation failed: %s\n", error.localizedDescription.UTF8String);
+        if (result && !self.reportedPresentation) {
+            self.reportedPresentation = YES;
+            PearANGLETrace("[PearRuntime][angle] first presentation succeeded\n");
+        }
+    }
     return result;
 }
 - (BOOL)presentRenderbuffer:(NSUInteger)target atTime:(CFTimeInterval)time {

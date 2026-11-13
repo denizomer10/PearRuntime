@@ -23,6 +23,9 @@
 #import <atomic>
 #import "PearRuntime.h"
 #import "PearTouchGeometry.h"
+#import "PearANGLEGameRouting.h"
+#import "PearEAGLContext.h"
+#import "PearGLTouch.h"
 
 extern void PearRecordFramePresented(void);
 
@@ -59,6 +62,9 @@ static void *OpenGLESHandle(void) {
     return handle;
 }
 
+static void *PearGLProc(const char *name) {
+    return PearANGLEGameRoutingEnabled() ? PearANGLEGetProcAddress(name) : dlsym(OpenGLESHandle(), name);
+}
 static CGSize gGLDrawableSize = { 0, 0 };
 /// The size the engine itself created its drawable at. This is the coordinate
 /// space its hit-testing uses. It must not follow window resizes: the fit
@@ -121,8 +127,8 @@ static void PearUpdateDrawableCrop(void) {
         typedef void (*PearReadPixels)(int, int, int, int, unsigned, unsigned, void *);
         static PearGetIntegerv getIntegervDebug;
         static PearReadPixels readPixelsDebug;
-        if (!getIntegervDebug) getIntegervDebug = (PearGetIntegerv)dlsym(OpenGLESHandle(), "glGetIntegerv");
-        if (!readPixelsDebug) readPixelsDebug = (PearReadPixels)dlsym(OpenGLESHandle(), "glReadPixels");
+        if (!getIntegervDebug) getIntegervDebug = (PearGetIntegerv)PearGLProc("glGetIntegerv");
+        if (!readPixelsDebug) readPixelsDebug = (PearReadPixels)PearGLProc("glReadPixels");
         int vp[4] = { 0, 0, 0, 0 };
         unsigned char center[4] = { 0, 0, 0, 0 };
         unsigned char corner[4] = { 0, 0, 0, 0 };
@@ -161,8 +167,7 @@ static void PearUpdateDrawableCrop(void) {
     typedef void (*PearGetIntegervFn)(int pname, int *params);
     static PearGetIntegervFn getIntegerv;
     if (getIntegerv == NULL) {
-        void *handle = OpenGLESHandle();
-        getIntegerv = (PearGetIntegervFn)dlsym(handle ? handle : RTLD_DEFAULT, "glGetIntegerv");
+        getIntegerv = (PearGetIntegervFn)PearGLProc("glGetIntegerv");
     }
     if (getIntegerv == NULL) return;
 
@@ -231,6 +236,7 @@ static void PearUpdateDrawableCrop(void) {
 
 extern "C" void *EAGLGetProcAddress(const char *name) {
     if (name == NULL) return NULL;
+    if (PearANGLEGameRoutingEnabled()) return PearANGLEGameSymbol(name);
 
     void *symbol = dlsym(RTLD_DEFAULT, name);
     if (symbol == NULL) {
@@ -305,76 +311,51 @@ static CGSize gPendingWindowSize = { 0, 0 };
 static CFAbsoluteTime gPendingWindowSince = 0;
 static BOOL gTouchRemapInstalled = NO;
 
-/// Maps a point in the current window's space back to the coordinate space the
-/// app laid its controls out in. The visible content is the native drawable
-/// fitted to the current window; the inverse of that fit gives the point in the
-/// drawable, and applying the reference fit gives the window point the engine
-/// expects. Returns `point` unchanged when no fit/reference is available.
-static CGPoint PearRemapWindowPoint(CGPoint point, CGSize currentWindow) {
-    (void)currentWindow;
-    if (!gFitApplied || !NSThread.isMainThread) return point;
-    CALayer *drawable = gDrawableLayer;
-    UIWindow *window = PearGLWindowForLayer(drawable);
-    if (!drawable || !window) return point;
-    // Use the displayed layer tree, including its current bounds origin,
-    // parent offsets and live-resize transform. Launch-time dimensions can
-    // disagree with the engine after it reallocates its renderbuffer.
-    return [drawable convertPoint:point fromLayer:window.layer];
-}
-
 /// Legacy GL titles ask for `locationInView:window` (or `nil`, which means the
 /// window) and divide that point by their design scale. When the Mac window is
 /// resized, the view is fitted but that window point is not, so the engine sees
 /// a shifted coordinate. Rewrite only the window-space answer; the touch's
 /// location in the GL view itself is left untouched.
+CGPoint PearGLMapTouchPoint(UITouch *touch, UIView *view, CGPoint point) {
+    if (!gFitApplied || !NSThread.isMainThread) return point;
+    CALayer *drawable = gDrawableLayer;
+    id delegate = drawable.delegate;
+    UIView *renderView = [delegate isKindOfClass:UIView.class] ? delegate : nil;
+    UIView *target = touch.view;
+    if (!renderView || !target || ![target isDescendantOfView:renderView]) return point;
+    UIWindow *window = renderView.window ?: PearGLKeyWindow();
+    if (!window) return point;
+    BOOL windowSpace = !view || [view isKindOfClass:UIWindow.class] ||
+        (view.layer != drawable && view.window == window && CGSizeEqualToSize(view.bounds.size, window.bounds.size));
+    if (!windowSpace) return point;
+    // Root-view coordinates may include an offset inside the window.
+    CGPoint windowPoint = view && view != window ? [view.layer convertPoint:point toLayer:window.layer] : point;
+    CGPoint remapped = [drawable convertPoint:windowPoint fromLayer:window.layer];
+    if (getenv("PEAR_DEBUG_TOUCH") && touch.phase != UITouchPhaseMoved &&
+        (fabs(remapped.x - point.x) > 0.5 || fabs(remapped.y - point.y) > 0.5))
+        PearLog(@"[PearRuntime][touch] mapped %@: %@ -> %@", NSStringFromClass(view.class) ?: @"nil",
+                NSStringFromCGPoint(point), NSStringFromCGPoint(remapped));
+    return remapped;
+}
+
 static void PearInstallTouchRemap(void) {
     if (gTouchRemapInstalled) return;
     Class touchClass = NSClassFromString(@"UITouch");
     if (!touchClass) return;
-    SEL selector = @selector(locationInView:);
-    Method method = class_getInstanceMethod(touchClass, selector);
-    if (!method) return;
     gTouchRemapInstalled = YES;
-
-    IMP original = method_getImplementation(method);
-    const char *types = method_getTypeEncoding(method);
-    IMP replacement = imp_implementationWithBlock(^CGPoint(id self, UIView *view) {
-        CGPoint point = ((CGPoint (*)(id, SEL, UIView *))original)(self, selector, view);
-        id delegate = gDrawableLayer.delegate;
-        UIView *renderView = [delegate isKindOfClass:UIView.class] ? delegate : nil;
-        UIView *target = [(UITouch *)self view];
-        if (!renderView || !target || ![target isDescendantOfView:renderView]) return point;
-
-        // `nil` means window coordinates. A UIWindow (or a root view whose
-        // bounds match the window) is the same space for a full-window GL app.
-        CGSize windowSize = CGSizeZero;
-        if (!view) {
-            id delegate = gDrawableLayer.delegate;
-            UIView *glView = [delegate isKindOfClass:UIView.class] ? (UIView *)delegate : nil;
-            UIWindow *window = glView.window ?: PearGLKeyWindow();
-            if (window) windowSize = window.bounds.size;
-        } else if ([view isKindOfClass:UIWindow.class]) {
-            windowSize = view.bounds.size;
-        } else if (view.window &&
-                   CGSizeEqualToSize(view.bounds.size, view.window.bounds.size) &&
-                   view.layer != gDrawableLayer) {
-            windowSize = view.window.bounds.size;
-        }
-        if (windowSize.width < 1 || windowSize.height < 1) return point;
-
-        CGPoint remapped = PearRemapWindowPoint(point, windowSize);
-        if (getenv("PEAR_DEBUG_TOUCH") &&
-            (fabs(remapped.x - point.x) > 0.5 || fabs(remapped.y - point.y) > 0.5)) {
-            PearLog(@"[PearRuntime][touch] remap window %@: (%.1f,%.1f) -> (%.1f,%.1f)",
-                    NSStringFromClass([view class]) ?: @"nil",
-                    point.x, point.y, remapped.x, remapped.y);
-        }
-        return remapped;
-    });
-    if (!class_addMethod(touchClass, selector, replacement, types)) {
-        method_setImplementation(method, replacement);
+    for (NSString *name in @[@"locationInView:", @"previousLocationInView:"]) {
+        SEL selector = NSSelectorFromString(name);
+        Method method = class_getInstanceMethod(touchClass, selector);
+        if (!method) continue;
+        IMP original = method_getImplementation(method);
+        IMP replacement = imp_implementationWithBlock(^CGPoint(UITouch *touch, UIView *view) {
+            CGPoint point = ((CGPoint (*)(id, SEL, UIView *))original)(touch, selector, view);
+            return PearGLMapTouchPoint(touch, view, point);
+        });
+        if (!class_addMethod(touchClass, selector, replacement, method_getTypeEncoding(method)))
+            method_setImplementation(method, replacement);
     }
-    PearLog(@"[PearRuntime][touch] window-space touch remap installed");
+    PearLog(@"[PearRuntime][touch] current/previous window-space touch mapping installed");
 }
 
 /// Fits the drawable into the key window while keeping the engine's coordinate
@@ -505,6 +486,10 @@ static void PearFitDrawable(CALayer *layer) {
 
 #pragma mark - Legacy touch diagnostics
 
+// The opt-in router installs these before the game allocates its first drawable.
+static void PearInstallEAGLHook(void);
+extern "C" void PearANGLEInstallGeometryHooks(void) { PearInstallEAGLHook(); }
+
 /// Logs touches the legacy GL view receives, before the engine converts them.
 /// The stream is what tells a delivery problem from a coordinate-scale problem.
 static void PearInstallEAGLTouchLogging(void) {
@@ -549,7 +534,7 @@ static void PearInstallEAGLTouchLogging(void) {
 static void PearInstallEAGLHook(void) {
     static BOOL installed = NO;
     if (installed) return;
-    Class context = NSClassFromString(@"EAGLContext");
+    Class context = PearANGLEGameRoutingEnabled() ? PearEAGLContext.class : NSClassFromString(@"EAGLContext");
     if (!context) return;
     SEL selector = NSSelectorFromString(@"renderbufferStorage:fromDrawable:");
     Method method = class_getInstanceMethod(context, selector);
@@ -604,7 +589,7 @@ static void PearInstallEAGLHook(void) {
         if (result && [drawable isKindOfClass:CALayer.class]) {
             typedef void (*GetRenderbufferParameter)(unsigned int, unsigned int, int *);
             static GetRenderbufferParameter query;
-            if (!query) query = (GetRenderbufferParameter)dlsym(OpenGLESHandle(), "glGetRenderbufferParameteriv");
+            if (!query) query = (GetRenderbufferParameter)PearGLProc("glGetRenderbufferParameteriv");
             if (query) {
                 int width = 0, height = 0;
                 query((unsigned int)target, 0x8D42 /* GL_RENDERBUFFER_WIDTH */, &width);

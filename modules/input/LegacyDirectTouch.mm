@@ -6,6 +6,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import "PearGLTouch.h"
 
 @interface PearLegacyTouch : UITouch
 @property(nonatomic, weak) UIWindow *pearWindow;
@@ -26,10 +27,12 @@
 - (CGFloat)force { return self.pearPhase == UITouchPhaseEnded || self.pearPhase == UITouchPhaseCancelled ? 0 : 1; }
 - (CGFloat)maximumPossibleForce { return 1; }
 - (CGPoint)locationInView:(UIView *)view {
-    return view ? [self.pearWindow convertPoint:self.pearPoint toView:view] : self.pearPoint;
+    CGPoint point = view ? [self.pearWindow convertPoint:self.pearPoint toView:view] : self.pearPoint;
+    return PearGLMapTouchPoint(self, view, point);
 }
 - (CGPoint)previousLocationInView:(UIView *)view {
-    return view ? [self.pearWindow convertPoint:self.pearPrevious toView:view] : self.pearPrevious;
+    CGPoint point = view ? [self.pearWindow convertPoint:self.pearPrevious toView:view] : self.pearPrevious;
+    return PearGLMapTouchPoint(self, view, point);
 }
 - (CGPoint)preciseLocationInView:(UIView *)view { return [self locationInView:view]; }
 - (CGPoint)precisePreviousLocationInView:(UIView *)view { return [self previousLocationInView:view]; }
