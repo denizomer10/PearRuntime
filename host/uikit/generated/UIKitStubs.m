@@ -113,11 +113,6 @@
 @implementation UIProgressView
 @end
 
-@interface UIScrollView : UIView
-@end
-@implementation UIScrollView
-@end
-
 @interface UISelectionFeedbackGenerator : UIFeedbackGenerator
 @end
 @implementation UISelectionFeedbackGenerator
@@ -141,11 +136,6 @@
 @interface UITextRange : NSObject
 @end
 @implementation UITextRange
-@end
-
-@interface UITextView : UIScrollView
-@end
-@implementation UITextView
 @end
 
 @interface UIUserNotificationSettings : NSObject
@@ -179,14 +169,5 @@ PEAR_UIKIT_EXPORT NSString *const UIDeviceBatteryLevelDidChangeNotification = @"
 PEAR_UIKIT_EXPORT NSString *const UIDeviceBatteryStateDidChangeNotification = @"UIDeviceBatteryStateDidChangeNotification";
 PEAR_UIKIT_EXPORT NSString *const UIDeviceOrientationDidChangeNotification = @"UIDeviceOrientationDidChangeNotification";
 PEAR_UIKIT_EXPORT NSString *const UIImagePickerControllerOriginalImage = @"UIImagePickerControllerOriginalImage";
-PEAR_UIKIT_EXPORT NSString *const UIKeyboardDidHideNotification = @"UIKeyboardDidHideNotification";
-PEAR_UIKIT_EXPORT NSString *const UIKeyboardDidShowNotification = @"UIKeyboardDidShowNotification";
-PEAR_UIKIT_EXPORT NSString *const UIKeyboardFrameBeginUserInfoKey = @"UIKeyboardFrameBeginUserInfoKey";
-PEAR_UIKIT_EXPORT NSString *const UIKeyboardFrameEndUserInfoKey = @"UIKeyboardFrameEndUserInfoKey";
-PEAR_UIKIT_EXPORT NSString *const UIKeyboardWillHideNotification = @"UIKeyboardWillHideNotification";
-PEAR_UIKIT_EXPORT NSString *const UIKeyboardWillShowNotification = @"UIKeyboardWillShowNotification";
-PEAR_UIKIT_EXPORT NSString *const UITextViewTextDidBeginEditingNotification = @"UITextViewTextDidBeginEditingNotification";
-PEAR_UIKIT_EXPORT NSString *const UITextViewTextDidChangeNotification = @"UITextViewTextDidChangeNotification";
-PEAR_UIKIT_EXPORT NSString *const UITextViewTextDidEndEditingNotification = @"UITextViewTextDidEndEditingNotification";
 PEAR_UIKIT_EXPORT const double UIWindowLevelNormal = 0.0; // CGFloat
 #pragma GCC visibility pop

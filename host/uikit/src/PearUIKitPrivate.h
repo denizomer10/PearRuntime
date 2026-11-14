@@ -25,6 +25,8 @@ void PearBackendInstallQuartzCoreCompat(void);
 BOOL PearBackendOpenURL(NSURL *url);
 void PearBackendRun(void (^didFinishLaunching)(void));
 void PearBackendSetIdleTimerDisabled(BOOL disabled);
+// Starts PEAR_HOST_INPUT_SCRIPT, if set, once launch has finished.
+void PearBackendStartInputScript(void);
 // Shows a native alert; reply receives the chosen button index (-1 if none).
 void PearBackendPresentAlert(NSString *title, NSString *message, NSArray<NSString *> *buttons, void (^reply)(NSInteger index));
 
@@ -38,6 +40,23 @@ void PearUIKitApplicationDidEnterBackground(void);
 void PearUIKitApplicationWillEnterForeground(void);
 void PearUIKitApplicationWillTerminate(void);
 
+// Keyboard: hardware keys become UIPress events for the first responder (or the
+// key window's root view); while a text responder (UIKeyInput) is first
+// responder, text and edit commands go to it instead.
+typedef NS_ENUM(NSInteger, PearEditCommand) {
+    PearEditDeleteBackward,
+    PearEditNewline,
+    PearEditMoveLeft,
+    PearEditMoveRight,
+    PearEditCancel,
+};
+void PearUIKitDeliverKey(NSInteger hidUsage, NSString *chars, NSString *charsNoMods, NSInteger modifiers, BOOL down,
+                         NSTimeInterval timestamp);
+BOOL PearUIKitTextInputActive(void);
+void PearUIKitDeliverText(NSString *text);
+void PearUIKitDeliverEditCommand(PearEditCommand command);
+UIResponder *_Nullable PearUIKitFirstResponder(void);
+
 // ---- shared state -----------------------------------------------------------
 void PearUIKitRegisterWindow(UIWindow *window);
 void PearUIKitSetKeyWindow(UIWindow *_Nullable window);
@@ -48,6 +67,19 @@ void PearUIKitScreenDidChange(CGSize pointSize, CGFloat scale);
 @interface UITouch ()
 - (instancetype)initWithView:(UIView *)view window:(UIWindow *)window location:(CGPoint)p timestamp:(NSTimeInterval)t;
 - (void)pear_moveTo:(CGPoint)p phase:(UITouchPhase)phase timestamp:(NSTimeInterval)t;
+@end
+
+@interface UIKey ()
+- (instancetype)initWithCharacters:(NSString *)c ignoringModifiers:(NSString *)ci modifiers:(NSInteger)m keyCode:(NSInteger)k;
+@end
+@interface UIPress ()
+- (instancetype)initWithKey:(UIKey *)key type:(NSInteger)type phase:(NSInteger)phase timestamp:(NSTimeInterval)t;
+@end
+@interface UIPressesEvent ()
+- (instancetype)initWithPresses:(NSSet *)presses timestamp:(NSTimeInterval)t;
+@end
+@interface UITextView ()
+- (void)pear_moveCursor:(NSInteger)delta;
 @end
 
 @interface UIEvent ()

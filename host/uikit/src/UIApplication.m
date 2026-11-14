@@ -181,7 +181,10 @@ PEAR_UIKIT_EXPORT int UIApplicationMain(int argc, char *argv[], NSString *princi
             NSArray *nibWindows = @[];
             if (mainNib.length) {
                 UINib *nib = [UINib nibWithNibName:mainNib bundle:nil];
-                [nib pear_instantiateWithOwner:app options:nil visibleWindows:&nibWindows];
+                // UIKit keeps the main nib's top-level objects for the life of the
+                // app (the delegate outlet itself is not retained).
+                static NSArray *mainNibObjects __attribute__((unused));
+                mainNibObjects = [nib pear_instantiateWithOwner:app options:nil visibleWindows:&nibWindows];
             }
             id delegate = app.delegate;
             if (!delegate) PearHostLog("app", "no application delegate after launch setup");
@@ -203,6 +206,7 @@ PEAR_UIKIT_EXPORT int UIApplicationMain(int argc, char *argv[], NSString *princi
             post(UIApplicationDidFinishLaunchingNotification);
             PearHostLog("app", "launch complete; %lu window(s)", (unsigned long)gWindows.count);
             PearUIKitApplicationDidBecomeActive();
+            PearBackendStartInputScript();
           } @catch (NSException *e) {
             // AppKit swallows exceptions thrown from launch notifications; an
             // iOS app would have crashed here, so say so loudly and stop.

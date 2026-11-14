@@ -116,11 +116,31 @@ loglanıyor), `+[CADisplayLink displayLinkWithTarget:selector:]` (macOS'ta yok,
 NSView display link'ine bağlandı), Backtrace'in MobileCoreServices sembolleri
 (CoreServices'e yönlendirildi), Swift çalışma zamanı rpath'i.
 
+### Klavye ve metin girişi
+
+- Donanım tuşları `UIPress`/`UIKey` (HID usage kodlarıyla) olarak ilk
+  yanıtlayıcıya, yoksa key window'un root view'una gider (`host/uikit/src/UIKeyInput.m`).
+  Minecraft oyun içi tuşları ayrıca macOS GameController'ın `GCKeyboard`'undan
+  okur; o yol sistemin kendisidir.
+- Bir metin yanıtlayıcısı (UIKeyInput, ör. UITextView) ilk yanıtlayıcıyken
+  tuşlar AppKit'in `interpretKeyEvents` sistemiyle metne ve düzenleme
+  komutlarına çevrilir; UITextView delegesi iOS'taki sırayla çağrılır
+  (`shouldChangeTextInRange` → değişiklik → `textViewDidChange`). Klavye
+  bildirimleri sıfır yükseklikte bir klavyeyle gönderilir.
+- Minecraft: karakterleri `shouldChangeTextInRange` içinde kendisi işler (NO
+  döndürür, iOS'ta da böyle). Kullanıcı gerçek klavyeyle yazmayı doğruladı
+  (2026-11-14).
+- Test: `PEAR_HOST_INPUT_SCRIPT` (wait/tap/key/hold/type/call/log) ve
+  `PEAR_HOST_TRACE_INPUT=1` (tuşun gittiği responder zinciri, metin
+  değişiklikleri, AppKit komutları). Betikli tuşlar NSEvent seviyesindedir;
+  GCKeyboard'a ulaşmaz (o yol için gerçek klavye ya da Accessibility izni
+  gerekir). Örnek: `call rootvc showKeyboard:startingText:characterLimit:isMultiline: "" 20 NO`.
+
 ## Minecraft'ın son çalışmadaki eksikleri (`docs/runs/minecraft-1.26.60-2026-11-14-missing.jsonl`)
 
 | API | Etki / yapılacak |
 | --- | --- |
-| `-[UITextView setDelegate:/setAutocorrectionType:/setAutocapitalizationType:/setSmartQuotesType:]` | UITextView yalnızca stub; oyun içi metin girişi (sohbet, dünya adı) için gerçek bir metin girişi (UITextInput + AppKit metin girişi) gerekiyor. |
+| ~~UITextView~~ | uygulandı (yukarıda). IME/marked text (Çince/Japonca giriş) henüz yok. |
 | `UIAccessibilityIsVoiceOverRunning()` | NO döndürmeli. |
 
 ## Bilinen sorunlar
@@ -156,7 +176,7 @@ NSView display link'ine bağlandı), Backtrace'in MobileCoreServices sembolleri
 3. Ses ve kayıt/yüklemeyi doğrula; `missing.jsonl` sıfıra inene kadar devam.
 4. PearSilicon'a "PearHost modu" seçeneği (IPA'dan doğrudan; Catalyst dönüşümü atlanır): `host-prepare.sh` adımlarını
    kurulum hattına taşı, uygulama başına mod seçimi.
-5. Minecraft: UITextView/metin girişi, dokunma/fare ve klavye ile oynanış.
+5. Minecraft: fare ile bakış/pointer lock ve dokunma; IME (marked text).
    Diğer oyunlarla sayım (`docs/census/`): Asphalt 6 (32-bit, PearLegacyEngine),
    Miku Flick. Her yeni oyun yeni sınıflar getirir;
    üretici stub'ları otomatik ekler.

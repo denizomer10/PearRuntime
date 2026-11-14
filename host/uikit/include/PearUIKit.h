@@ -276,6 +276,23 @@ typedef NS_OPTIONS(NSUInteger, UIRectEdge) {
 - (void)makeKeyWindow;
 @end
 
+@interface UIScrollView : UIView
+@property (nonatomic) CGPoint contentOffset;
+@property (nonatomic) CGSize contentSize;
+@property (nonatomic) UIEdgeInsets contentInset;
+@property (nonatomic, getter=isScrollEnabled) BOOL scrollEnabled;
+@property (nonatomic, weak, nullable) id delegate;
+@end
+
+@interface UITextView : UIScrollView
+@property (nonatomic, null_resettable, copy) NSString *text;
+@property (nonatomic) NSRange selectedRange;
+@property (nonatomic, getter=isEditable) BOOL editable;
+- (void)insertText:(NSString *)text;
+- (void)deleteBackward;
+- (BOOL)hasText;
+@end
+
 @interface UIAlertAction : NSObject <NSCopying>
 + (instancetype)actionWithTitle:(nullable NSString *)title style:(NSInteger)style handler:(void (^__nullable)(UIAlertAction *action))handler;
 @property (nonatomic, readonly, nullable) NSString *title;
@@ -348,6 +365,33 @@ typedef NS_OPTIONS(NSUInteger, UIRectEdge) {
 @property (nonatomic, readonly) NSTimeInterval timestamp;
 - (nullable NSSet<UITouch *> *)allTouches;
 @end
+
+@interface UIKey : NSObject <NSCopying>
+@property (nonatomic, readonly) NSString *characters;
+@property (nonatomic, readonly) NSString *charactersIgnoringModifiers;
+@property (nonatomic, readonly) NSInteger modifierFlags;
+@property (nonatomic, readonly) NSInteger keyCode;
+@end
+
+@interface UIPress : NSObject
+@property (nonatomic, readonly) NSTimeInterval timestamp;
+@property (nonatomic, readonly) NSInteger phase;
+@property (nonatomic, readonly) NSInteger type;
+@property (nonatomic, readonly, nullable) UIKey *key;
+@property (nonatomic, readonly) CGFloat force;
+@end
+
+@interface UIPressesEvent : UIEvent
+@property (nonatomic, readonly) NSSet<UIPress *> *allPresses;
+@end
+
+@interface UIResponder (UIPresses)
+- (void)pressesBegan:(NSSet<UIPress *> *)presses withEvent:(nullable UIPressesEvent *)event;
+- (void)pressesEnded:(NSSet<UIPress *> *)presses withEvent:(nullable UIPressesEvent *)event;
+- (void)pressesChanged:(NSSet<UIPress *> *)presses withEvent:(nullable UIPressesEvent *)event;
+- (void)pressesCancelled:(NSSet<UIPress *> *)presses withEvent:(nullable UIPressesEvent *)event;
+@end
+
 
 #pragma GCC visibility pop
 

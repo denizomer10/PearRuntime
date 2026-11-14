@@ -158,6 +158,7 @@ static NSString *sysctlString(const char *name) {
 // ---- UIResponder ---------------------------------------------------------------
 
 static __weak UIResponder *gFirstResponder;
+UIResponder *PearUIKitFirstResponder(void) { return gFirstResponder; }
 
 @implementation UIResponder
 - (UIResponder *)nextResponder { return nil; }

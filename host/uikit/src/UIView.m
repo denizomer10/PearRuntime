@@ -295,6 +295,39 @@
 - (BOOL)endEditing:(BOOL)force { return YES; }
 @end
 
+// ---- UIScrollView (geometry only; scrolling gestures are not hosted yet) ----
+
+@implementation UIScrollView {
+    CGPoint _offset;
+    CGSize _contentSize;
+    UIEdgeInsets _inset;
+    BOOL _scrollDisabled;
+    __weak id _scrollDelegate;
+}
+- (CGPoint)contentOffset { return _offset; }
+- (void)setContentOffset:(CGPoint)o {
+    _offset = o;
+    CGRect b = self.bounds;
+    b.origin = o;
+    self.bounds = b;
+}
+- (void)setContentOffset:(CGPoint)o animated:(BOOL)a { self.contentOffset = o; }
+- (CGSize)contentSize { return _contentSize; }
+- (void)setContentSize:(CGSize)s { _contentSize = s; }
+- (UIEdgeInsets)contentInset { return _inset; }
+- (void)setContentInset:(UIEdgeInsets)i { _inset = i; }
+- (BOOL)isScrollEnabled { return !_scrollDisabled; }
+- (void)setScrollEnabled:(BOOL)e { _scrollDisabled = !e; }
+- (id)delegate { return _scrollDelegate; }
+- (void)setDelegate:(id)d { _scrollDelegate = d; }
+- (BOOL)showsVerticalScrollIndicator { return NO; }
+- (void)setShowsVerticalScrollIndicator:(BOOL)s {}
+- (BOOL)showsHorizontalScrollIndicator { return NO; }
+- (void)setShowsHorizontalScrollIndicator:(BOOL)s {}
+- (BOOL)bounces { return NO; }
+- (void)setBounces:(BOOL)b {}
+@end
+
 // ---- UIViewController -----------------------------------------------------------
 
 @implementation UIViewController {

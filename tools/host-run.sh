@@ -1,6 +1,7 @@
 #!/bin/bash
 # Runs a PearHost-prepared app with its own container and collects a run folder:
 #   tools/host-run.sh <prepared.app> <run-dir> [seconds]
+# PEAR_HOST_INPUT_SCRIPT=<file> is passed through (scripted taps/keys/text).
 # run-dir/stdout.log, pear.log, missing.jsonl (one line per first missing call,
 # summary lines at exit), exit.txt. The process is stopped after [seconds] (default 45).
 set -uo pipefail
