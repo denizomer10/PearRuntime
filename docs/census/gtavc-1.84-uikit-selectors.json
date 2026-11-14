@@ -1,0 +1,1885 @@
+{
+ "CGRectValue": [
+  "UIGeometry.h"
+ ],
+ "URL": [
+  "UIDocumentInteractionController.h",
+  "UIOpenURLContext.h",
+  "UIPasteboard.h",
+  "UIPrintServiceExtension.h",
+  "UIPrinter.h"
+ ],
+ "accessibilityActivate": [
+  "UIAccessibility.h"
+ ],
+ "accessibilityContainer": [
+  "UIAccessibilityElement.h"
+ ],
+ "accessibilityDecrement": [
+  "UIAccessibility.h"
+ ],
+ "accessibilityElementAtIndex:": [
+  "UIAccessibilityContainer.h"
+ ],
+ "accessibilityElementCount": [
+  "UIAccessibilityContainer.h"
+ ],
+ "accessibilityElements": [
+  "UIAccessibilityContainer.h"
+ ],
+ "accessibilityFrame": [
+  "UIAccessibility.h",
+  "UIAccessibilityElement.h"
+ ],
+ "accessibilityHint": [
+  "UIAccessibility.h",
+  "UIAccessibilityElement.h"
+ ],
+ "accessibilityIncrement": [
+  "UIAccessibility.h"
+ ],
+ "accessibilityLabel": [
+  "UIAccessibility.h",
+  "UIAccessibilityElement.h"
+ ],
+ "accessibilityTraits": [
+  "UIAccessibility.h",
+  "UIAccessibilityElement.h"
+ ],
+ "accessibilityValue": [
+  "UIAccessibility.h",
+  "UIAccessibilityElement.h"
+ ],
+ "actionWithTitle:style:handler:": [
+  "UIAlertController.h",
+  "UIViewController.h"
+ ],
+ "addAction:": [
+  "UIAlertController.h"
+ ],
+ "addSubview:": [
+  "UIView.h"
+ ],
+ "addTextFieldWithConfigurationHandler:": [
+  "UIAlertController.h"
+ ],
+ "alertControllerWithTitle:message:preferredStyle:": [
+  "UIAlertController.h"
+ ],
+ "alignment": [
+  "NSParagraphStyle.h",
+  "UICollectionViewCompositionalLayout.h",
+  "UIContentUnavailableConfiguration.h",
+  "UIListContentTextProperties.h",
+  "UIStackView.h"
+ ],
+ "application:configurationForConnectingSceneSession:options:": [
+  "UIApplication.h"
+ ],
+ "application:continueUserActivity:restorationHandler:": [
+  "UIApplication.h"
+ ],
+ "application:didChangeStatusBarFrame:": [
+  "UIApplication.h"
+ ],
+ "application:didChangeStatusBarOrientation:": [
+  "UIApplication.h"
+ ],
+ "application:didDecodeRestorableStateWithCoder:": [
+  "UIApplication.h"
+ ],
+ "application:didDiscardSceneSessions:": [
+  "UIApplication.h"
+ ],
+ "application:didFailToContinueUserActivityWithType:error:": [
+  "UIApplication.h"
+ ],
+ "application:didFailToRegisterForRemoteNotificationsWithError:": [
+  "UIApplication.h"
+ ],
+ "application:didFinishLaunchingWithOptions:": [
+  "UIApplication.h"
+ ],
+ "application:didReceiveLocalNotification:": [
+  "UIApplication.h"
+ ],
+ "application:didReceiveRemoteNotification:": [
+  "UIApplication.h"
+ ],
+ "application:didReceiveRemoteNotification:fetchCompletionHandler:": [
+  "UIApplication.h"
+ ],
+ "application:didRegisterForRemoteNotificationsWithDeviceToken:": [
+  "UIApplication.h"
+ ],
+ "application:didRegisterUserNotificationSettings:": [
+  "UIApplication.h"
+ ],
+ "application:didUpdateUserActivity:": [
+  "UIApplication.h"
+ ],
+ "application:handleActionWithIdentifier:forLocalNotification:completionHandler:": [
+  "UIApplication.h"
+ ],
+ "application:handleActionWithIdentifier:forLocalNotification:withResponseInfo:completionHandler:": [
+  "UIApplication.h"
+ ],
+ "application:handleActionWithIdentifier:forRemoteNotification:completionHandler:": [
+  "UIApplication.h"
+ ],
+ "application:handleActionWithIdentifier:forRemoteNotification:withResponseInfo:completionHandler:": [
+  "UIApplication.h"
+ ],
+ "application:handleEventsForBackgroundURLSession:completionHandler:": [
+  "UIApplication.h"
+ ],
+ "application:handleIntent:completionHandler:": [
+  "UIApplication.h"
+ ],
+ "application:handleOpenURL:": [
+  "UIApplication.h"
+ ],
+ "application:handleWatchKitExtensionRequest:reply:": [
+  "UIApplication.h"
+ ],
+ "application:handlerForIntent:": [
+  "UIApplication.h"
+ ],
+ "application:openURL:options:": [
+  "UIApplication.h"
+ ],
+ "application:openURL:sourceApplication:annotation:": [
+  "UIApplication.h"
+ ],
+ "application:performActionForShortcutItem:completionHandler:": [
+  "UIApplication.h"
+ ],
+ "application:performFetchWithCompletionHandler:": [
+  "UIApplication.h"
+ ],
+ "application:shouldAllowExtensionPointIdentifier:": [
+  "UIApplication.h"
+ ],
+ "application:shouldRestoreApplicationState:": [
+  "UIApplication.h"
+ ],
+ "application:shouldRestoreSecureApplicationState:": [
+  "UIApplication.h"
+ ],
+ "application:shouldSaveApplicationState:": [
+  "UIApplication.h"
+ ],
+ "application:shouldSaveSecureApplicationState:": [
+  "UIApplication.h"
+ ],
+ "application:supportedInterfaceOrientationsForWindow:": [
+  "UIApplication.h"
+ ],
+ "application:userDidAcceptCloudKitShareWithMetadata:": [
+  "UIApplication.h"
+ ],
+ "application:viewControllerWithRestorationIdentifierPath:coder:": [
+  "UIApplication.h"
+ ],
+ "application:willChangeStatusBarFrame:": [
+  "UIApplication.h"
+ ],
+ "application:willChangeStatusBarOrientation:duration:": [
+  "UIApplication.h"
+ ],
+ "application:willContinueUserActivityWithType:": [
+  "UIApplication.h"
+ ],
+ "application:willEncodeRestorableStateWithCoder:": [
+  "UIApplication.h"
+ ],
+ "application:willFinishLaunchingWithOptions:": [
+  "UIApplication.h"
+ ],
+ "applicationDidBecomeActive:": [
+  "UIApplication.h"
+ ],
+ "applicationDidEnterBackground:": [
+  "UIApplication.h"
+ ],
+ "applicationDidFinishLaunching:": [
+  "UIApplication.h"
+ ],
+ "applicationDidReceiveMemoryWarning:": [
+  "UIApplication.h"
+ ],
+ "applicationProtectedDataDidBecomeAvailable:": [
+  "UIApplication.h"
+ ],
+ "applicationProtectedDataWillBecomeUnavailable:": [
+  "UIApplication.h"
+ ],
+ "applicationShouldAutomaticallyLocalizeKeyCommands:": [
+  "UIApplication.h"
+ ],
+ "applicationShouldRequestHealthAuthorization:": [
+  "UIApplication.h"
+ ],
+ "applicationSignificantTimeChange:": [
+  "UIApplication.h"
+ ],
+ "applicationState": [
+  "UIApplication.h"
+ ],
+ "applicationWillEnterForeground:": [
+  "UIApplication.h"
+ ],
+ "applicationWillResignActive:": [
+  "UIApplication.h"
+ ],
+ "applicationWillTerminate:": [
+  "UIApplication.h"
+ ],
+ "attributes": [
+  "UIAction.h",
+  "UICommand.h",
+  "UIKeyCommand.h",
+  "UIMenuLeaf.h",
+  "UITextFormattingViewControllerFormattingStyle.h"
+ ],
+ "autocapitalizationType": [
+  "UITextInputTraits.h"
+ ],
+ "autocorrectionType": [
+  "UITextInputTraits.h"
+ ],
+ "baseWritingDirectionForPosition:inDirection:": [
+  "UITextInput.h"
+ ],
+ "batteryLevel": [
+  "UIDevice.h"
+ ],
+ "batteryState": [
+  "UIDevice.h"
+ ],
+ "becomeFirstResponder": [
+  "UIResponder.h"
+ ],
+ "beginFloatingCursorAtPoint:": [
+  "UITextInput.h"
+ ],
+ "beginGeneratingDeviceOrientationNotifications": [
+  "UIDevice.h"
+ ],
+ "beginningOfDocument": [
+  "UITextInput.h"
+ ],
+ "behavior": [
+  "UIUserNotificationSettings.h",
+  "UIWritingToolsCoordinator.h"
+ ],
+ "bounds": [
+  "NSTextAttachment.h",
+  "UIBezierPath.h",
+  "UICollectionViewCompositionalLayout.h",
+  "UICollectionViewLayout.h",
+  "UIDynamicBehavior.h",
+  "UIGraphicsRenderer.h",
+  "UIScreen.h",
+  "UIView.h"
+ ],
+ "brightness": [
+  "UIScreen.h"
+ ],
+ "canBecomeFirstResponder": [
+  "UIResponder.h"
+ ],
+ "canOpenURL:": [
+  "UIApplication.h"
+ ],
+ "caretRectForPosition:": [
+  "UITextInput.h"
+ ],
+ "category": [
+  "UIAccessibilityCustomAction.h",
+  "UILocalNotification.h"
+ ],
+ "characterOffsetOfPosition:withinRange:": [
+  "UITextInput.h"
+ ],
+ "characterRangeAtPoint:": [
+  "UITextInput.h"
+ ],
+ "characterRangeByExtendingPosition:inDirection:": [
+  "UITextInput.h"
+ ],
+ "clearColor": [
+  "UIColor.h"
+ ],
+ "closestPositionToPoint:": [
+  "UITextInput.h"
+ ],
+ "closestPositionToPoint:withinRange:": [
+  "UITextInput.h"
+ ],
+ "compare:": [
+  "NSTextRange.h"
+ ],
+ "comparePosition:toPosition:": [
+  "UITextInput.h"
+ ],
+ "configuration": [
+  "UIButton.h",
+  "UICollectionViewCompositionalLayout.h",
+  "UIContentConfiguration.h",
+  "UIContentUnavailableView.h",
+  "UIFontPickerViewController.h",
+  "UIImage.h",
+  "UIImageReader.h",
+  "UIListContentConfiguration.h",
+  "UIPasteControl.h",
+  "UISceneSession.h",
+  "UITextFormattingViewController.h"
+ ],
+ "contentScaleFactor": [
+  "UIView.h"
+ ],
+ "contents": [
+  "NSTextAttachment.h",
+  "NSTextListElement.h"
+ ],
+ "copy": [
+  "UIBarAppearance.h",
+  "UIBarButtonItemAppearance.h",
+  "UITabBarAppearance.h"
+ ],
+ "current": [
+  "UITextInputContext.h"
+ ],
+ "currentDevice": [
+  "UIDevice.h"
+ ],
+ "data": [
+  "NSDataAsset.h"
+ ],
+ "dataFromRange:documentAttributes:error:": [
+  "NSAttributedString.h"
+ ],
+ "date": [
+  "UIDatePicker.h"
+ ],
+ "delegate": [
+  "NSLayoutManager.h",
+  "NSTextContentManager.h",
+  "NSTextLayoutManager.h",
+  "NSTextStorage.h",
+  "NSTextViewportLayoutController.h",
+  "UIAccelerometer.h",
+  "UIActionSheet.h",
+  "UIAlertView.h",
+  "UIApplication.h",
+  "UICalendarSelectionMultiDate.h",
+  "UICalendarSelectionSingleDate.h",
+  "UICalendarSelectionWeekOfYear.h",
+  "UICalendarView.h",
+  "UICloudSharingController.h",
+  "UICollectionView.h",
+  "UIColorPickerViewController.h",
+  "UIContextMenuInteraction.h",
+  "UIDocumentBrowserViewController.h",
+  "UIDocumentInteractionController.h",
+  "UIDocumentMenuViewController.h",
+  "UIDocumentPickerViewController.h",
+  "UIDragInteraction.h",
+  "UIDropInteraction.h",
+  "UIDynamicAnimator.h",
+  "UIEditMenuInteraction.h",
+  "UIFindInteraction.h",
+  "UIFontPickerViewController.h",
+  "UIGestureRecognizer.h",
+  "UIImagePickerController.h",
+  "UIIndirectScribbleInteraction.h",
+  "UILargeContentViewer.h",
+  "UINavigationBar.h",
+  "UINavigationController.h",
+  "UIPageControlProgress.h",
+  "UIPageViewController.h",
+  "UIPencilInteraction.h",
+  "UIPickerView.h",
+  "UIPointerInteraction.h",
+  "UIPopoverController.h",
+  "UIPopoverPresentationController.h",
+  "UIPresentationController.h",
+  "UIPreviewInteraction.h",
+  "UIPrintInteractionController.h",
+  "UIPrinterPickerController.h",
+  "UIScene.h",
+  "UIScreenshotService.h",
+  "UIScribbleInteraction.h",
+  "UIScrollView.h",
+  "UISearchBar.h",
+  "UISearchController.h",
+  "UISearchDisplayController.h",
+  "UISheetPresentationController.h",
+  "UISplitViewController.h",
+  "UITabBar.h",
+  "UITabBarController.h",
+  "UITabBarControllerSidebar.h",
+  "UITableView.h",
+  "UITextField.h",
+  "UITextFormattingCoordinator.h",
+  "UITextFormattingViewController.h",
+  "UITextInteraction.h",
+  "UITextSelectionDisplayInteraction.h",
+  "UITextView.h",
+  "UIToolTipInteraction.h",
+  "UIToolbar.h",
+  "UIVideoEditorController.h",
+  "UIViewController.h",
+  "UIWebView.h",
+  "UIWritingToolsCoordinator.h"
+ ],
+ "deleteBackward": [
+  "UITextInput.h"
+ ],
+ "description": [
+  "UIActivityCollaborationModeRestriction.h"
+ ],
+ "dictationRecognitionFailed": [
+  "UITextInput.h"
+ ],
+ "dictationRecordingDidEnd": [
+  "UITextInput.h"
+ ],
+ "dismissViewControllerAnimated:completion:": [
+  "UIViewController.h"
+ ],
+ "displayGamut": [
+  "UITraitCollection.h"
+ ],
+ "displayLinkWithTarget:selector:": [
+  "UIScreen.h",
+  "UIWindowScene.h"
+ ],
+ "displayName": [
+  "UIPrintServiceExtension.h",
+  "UIPrinter.h"
+ ],
+ "duration": [
+  "UIFocusAnimationCoordinator.h",
+  "UIImage.h",
+  "UIViewControllerTransitioning.h",
+  "UIViewPropertyAnimator.h",
+  "UIWritingToolsCoordinatorAnimationParameters.h"
+ ],
+ "editMenuForTextRange:suggestedActions:": [
+  "UITextInput.h"
+ ],
+ "enablesReturnKeyAutomatically": [
+  "UITextInputTraits.h"
+ ],
+ "end": [
+  "UITextInput.h"
+ ],
+ "endEditing:": [
+  "UITextField.h"
+ ],
+ "endFloatingCursor": [
+  "UITextInput.h"
+ ],
+ "endOfDocument": [
+  "UITextInput.h"
+ ],
+ "firstRectForRange:": [
+  "UITextInput.h"
+ ],
+ "fontName": [
+  "UIFont.h"
+ ],
+ "force": [
+  "UIPress.h",
+  "UITouch.h"
+ ],
+ "format": [
+  "UIGraphicsRenderer.h"
+ ],
+ "frame": [
+  "UICollectionViewCompositionalLayout.h",
+  "UICollectionViewLayout.h",
+  "UIFocus.h",
+  "UIView.h",
+  "UIViewReservedRegion.h"
+ ],
+ "frameForDictationResultPlaceholder:": [
+  "UITextInput.h"
+ ],
+ "generalPasteboard": [
+  "UIPasteboard.h"
+ ],
+ "hasText": [
+  "UITextInput.h"
+ ],
+ "hash": [
+  "NSTextRange.h"
+ ],
+ "height": [
+  "UISplitArrangement.h"
+ ],
+ "identifier": [
+  "NSLayoutConstraint.h",
+  "UIAction.h",
+  "UIBarButtonItem.h",
+  "UIContextMenuConfiguration.h",
+  "UIDeferredMenuElement.h",
+  "UIDocumentBrowserAction.h",
+  "UIEditMenuInteraction.h",
+  "UILayoutGuide.h",
+  "UIMenu.h",
+  "UIPointerRegion.h",
+  "UISearchTab.h",
+  "UISheetPresentationController.h",
+  "UIStoryboardSegue.h",
+  "UITab.h",
+  "UITrait.h",
+  "UIUserNotificationSettings.h",
+  "UIViewReservedRegion.h",
+  "UIWritingToolsCoordinatorContext.h"
+ ],
+ "identifierForVendor": [
+  "UIDevice.h"
+ ],
+ "images": [
+  "UIImage.h",
+  "UIPasteboard.h"
+ ],
+ "impactOccurred": [
+  "UIImpactFeedbackGenerator.h"
+ ],
+ "impactOccurredWithIntensity:": [
+  "UIImpactFeedbackGenerator.h"
+ ],
+ "indexOfAccessibilityElement:": [
+  "UIAccessibilityContainer.h"
+ ],
+ "init": [
+  "NSAdaptiveImageGlyph.h",
+  "NSDataAsset.h",
+  "NSDiffableDataSourceSectionSnapshot.h",
+  "NSLayoutManager.h",
+  "NSShadow.h",
+  "NSTextAttachment.h",
+  "NSTextContentManager.h",
+  "NSTextLayoutFragment.h",
+  "NSTextLayoutManager.h",
+  "NSTextLineFragment.h",
+  "NSTextRange.h",
+  "NSTextSelection.h",
+  "NSTextSelectionNavigation.h",
+  "NSTextTable.h",
+  "NSTextViewportLayoutController.h",
+  "UIAccessibilityLocationDescriptor.h",
+  "UIAction.h",
+  "UIActivityCollaborationModeRestriction.h",
+  "UIActivityItemProvider.h",
+  "UIActivityItemsConfiguration.h",
+  "UIActivityViewController.h",
+  "UIApplicationShortcutItem.h",
+  "UIArrangementViewController.h",
+  "UIBackgroundConfiguration.h",
+  "UIBandSelectionInteraction.h",
+  "UIBarAppearance.h",
+  "UIBarButtonItem.h",
+  "UIBarButtonItemAppearance.h",
+  "UIBarButtonItemBadge.h",
+  "UIBarItem.h",
+  "UIBezierPath.h",
+  "UIButtonConfiguration.h",
+  "UICalendarSelection.h",
+  "UICalendarViewDecoration.h",
+  "UICellAccessory.h",
+  "UICollectionLayoutList.h",
+  "UICollectionView.h",
+  "UICollectionViewCompositionalLayout.h",
+  "UICollectionViewLayout.h",
+  "UICollectionViewTransitionLayout.h",
+  "UIColorPickerViewController.h",
+  "UICommand.h",
+  "UIContentUnavailableConfiguration.h",
+  "UIContentUnavailableConfigurationState.h",
+  "UIContentUnavailableView.h",
+  "UIContextMenuInteraction.h",
+  "UICornerConfiguration.h",
+  "UICornerRadius.h",
+  "UIDeferredMenuElement.h",
+  "UIDiffableDataSource.h",
+  "UIDocumentBrowserAction.h",
+  "UIDocumentBrowserViewController.h",
+  "UIDocumentProperties.h",
+  "UIDragInteraction.h",
+  "UIDragItem.h",
+  "UIDragPreview.h",
+  "UIDropInteraction.h",
+  "UIEditMenuInteraction.h",
+  "UIEventAttribution.h",
+  "UIFeedbackGenerator.h",
+  "UIFieldBehavior.h",
+  "UIFindInteraction.h",
+  "UIFindSession.h",
+  "UIFocusEffect.h",
+  "UIFocusMovementHint.h",
+  "UIFocusSystem.h",
+  "UIFontDescriptor.h",
+  "UIFontMetrics.h",
+  "UIGestureRecognizer.h",
+  "UIHinge.h",
+  "UIHingeInteraction.h",
+  "UIHoverEffect.h",
+  "UIHoverStyle.h",
+  "UIImageAsset.h",
+  "UIImageConfiguration.h",
+  "UIIndirectScribbleInteraction.h",
+  "UIKeyCommand.h",
+  "UIListContentConfiguration.h",
+  "UIListSeparatorConfiguration.h",
+  "UILocalNotification.h",
+  "UILookToScrollInteraction.h",
+  "UIMenu.h",
+  "UIMenuElement.h",
+  "UIMenuSystem.h",
+  "UIMotionEffect.h",
+  "UIOpenURLContext.h",
+  "UIOverlayArrangement.h",
+  "UIPageControlProgress.h",
+  "UIPasteConfiguration.h",
+  "UIPencilInteraction.h",
+  "UIPhotoSearchSuggestion.h",
+  "UIPointerAccessory.h",
+  "UIPointerLockState.h",
+  "UIPointerRegion.h",
+  "UIPointerStyle.h",
+  "UIPresentationController.h",
+  "UIPreviewInteraction.h",
+  "UIPreviewParameters.h",
+  "UIReferenceLibraryViewController.h",
+  "UIRefreshControl.h",
+  "UIScene.h",
+  "UISceneAccessory.h",
+  "UISceneAccessoryRegistration.h",
+  "UISceneActivationConditions.h",
+  "UISceneClosureConfirmation.h",
+  "UISceneConfiguration.h",
+  "UISceneDestructionCondition.h",
+  "UISceneOptions.h",
+  "UISceneSession.h",
+  "UISceneSessionActivationRequest.h",
+  "UISceneSizeRestrictions.h",
+  "UISceneSystemProtectionManager.h",
+  "UISceneWindowingBehaviors.h",
+  "UISceneWindowingControlStyle.h",
+  "UIScreenshotService.h",
+  "UIScribbleInteraction.h",
+  "UIScrollView.h",
+  "UISearchBar.h",
+  "UISearchTextField.h",
+  "UIShape.h",
+  "UISheetPresentationController.h",
+  "UISliderTrackConfiguration.h",
+  "UISplitArrangement.h",
+  "UISpringLoadedInteraction.h",
+  "UIStatusBarManager.h",
+  "UIStoryboardSegue.h",
+  "UISymbolContentTransition.h",
+  "UISymbolEffectCompletion.h",
+  "UITab.h",
+  "UITabAccessory.h",
+  "UITabBarAppearance.h",
+  "UITabBarControllerSidebar.h",
+  "UITabBarItem.h",
+  "UITabSidebarItem.h",
+  "UITableView.h",
+  "UITargetedPreview.h",
+  "UITextCursorDropPositionAnimator.h",
+  "UITextDragPreviewRenderer.h",
+  "UITextFormattingCoordinator.h",
+  "UITextFormattingViewController.h",
+  "UITextFormattingViewControllerChangeValue.h",
+  "UITextFormattingViewControllerComponent.h",
+  "UITextFormattingViewControllerConfiguration.h",
+  "UITextFormattingViewControllerFormattingDescriptor.h",
+  "UITextInputContext.h",
+  "UITextInputTraits.h",
+  "UITextItem.h",
+  "UITextSelectionDisplayInteraction.h",
+  "UITimingParameters.h",
+  "UIToolTipInteraction.h",
+  "UITraitCollection.h",
+  "UIUpdateActionPhase.h",
+  "UIUpdateInfo.h",
+  "UIUpdateLink.h",
+  "UIUserNotificationSettings.h",
+  "UIView.h",
+  "UIViewConfigurationState.h",
+  "UIViewControllerTransition.h",
+  "UIViewLayoutRegion.h",
+  "UIViewReservedRegion.h",
+  "UIWindow.h",
+  "UIWindowSceneActivationConfiguration.h",
+  "UIWindowSceneActivationInteraction.h",
+  "UIWindowSceneGeometry.h",
+  "UIWindowSceneGeometryPreferences.h",
+  "UIWindowSceneGeometryPreferencesIOS.h",
+  "UIWindowSceneGeometryPreferencesMac.h",
+  "UIWindowSceneGeometryPreferencesVision.h",
+  "UIWindowScenePlacement.h",
+  "UIWritingToolsCoordinatorAnimationParameters.h",
+  "UIWritingToolsCoordinatorContext.h"
+ ],
+ "initWithAccessibilityContainer:": [
+  "UIAccessibilityElement.h"
+ ],
+ "initWithActivityItems:applicationActivities:": [
+  "UIActivityViewController.h"
+ ],
+ "initWithCoder:": [
+  "NSAdaptiveImageGlyph.h",
+  "NSLayoutManager.h",
+  "NSShadow.h",
+  "NSTextContainer.h",
+  "NSTextContentManager.h",
+  "NSTextLayoutFragment.h",
+  "NSTextLayoutManager.h",
+  "NSTextLineFragment.h",
+  "NSTextList.h",
+  "NSTextSelection.h",
+  "NSTextTable.h",
+  "UIActivityIndicatorView.h",
+  "UIActivityViewController.h",
+  "UIAlertView.h",
+  "UIBarAppearance.h",
+  "UIBarButtonItem.h",
+  "UIBarButtonItemAppearance.h",
+  "UIBarButtonItemGroup.h",
+  "UIBarItem.h",
+  "UIBezierPath.h",
+  "UIButton.h",
+  "UICellAccessory.h",
+  "UICloudSharingController.h",
+  "UICollectionView.h",
+  "UICollectionViewController.h",
+  "UICollectionViewLayout.h",
+  "UICollectionViewTransitionLayout.h",
+  "UICommand.h",
+  "UIContentUnavailableConfigurationState.h",
+  "UIContentUnavailableView.h",
+  "UIControl.h",
+  "UIDocumentMenuViewController.h",
+  "UIDocumentPickerViewController.h",
+  "UIFontDescriptor.h",
+  "UIGestureRecognizer.h",
+  "UIImageAsset.h",
+  "UIInputView.h",
+  "UIKeyCommand.h",
+  "UIListContentConfiguration.h",
+  "UILocalNotification.h",
+  "UIMenu.h",
+  "UIMenuElement.h",
+  "UIMotionEffect.h",
+  "UINavigationController.h",
+  "UINavigationItem.h",
+  "UIPageViewController.h",
+  "UIPasteControl.h",
+  "UIPrintInfo.h",
+  "UIProgressView.h",
+  "UIReferenceLibraryViewController.h",
+  "UISceneActivationConditions.h",
+  "UISearchBar.h",
+  "UISearchController.h",
+  "UISegmentedControl.h",
+  "UISplitViewController.h",
+  "UIStackView.h",
+  "UISwitch.h",
+  "UITabBarAppearance.h",
+  "UITabBarItem.h",
+  "UITableView.h",
+  "UITableViewCell.h",
+  "UITableViewController.h",
+  "UITableViewHeaderFooterView.h",
+  "UITextView.h",
+  "UITimingParameters.h",
+  "UITraitCollection.h",
+  "UIUserNotificationSettings.h",
+  "UIView.h",
+  "UIViewConfigurationState.h",
+  "UIViewController.h",
+  "UIVisualEffectView.h"
+ ],
+ "initWithConfiguration:": [
+  "UIContentUnavailableView.h",
+  "UIFontPickerViewController.h",
+  "UIListContentConfiguration.h",
+  "UIPasteControl.h",
+  "UITextFormattingViewController.h"
+ ],
+ "initWithDelegate:": [
+  "UICalendarSelectionMultiDate.h",
+  "UICalendarSelectionSingleDate.h",
+  "UICalendarSelectionWeekOfYear.h",
+  "UIContextMenuInteraction.h",
+  "UIDragInteraction.h",
+  "UIDropInteraction.h",
+  "UIEditMenuInteraction.h",
+  "UIIndirectScribbleInteraction.h",
+  "UILargeContentViewer.h",
+  "UIPencilInteraction.h",
+  "UIPointerInteraction.h",
+  "UIScribbleInteraction.h",
+  "UIWritingToolsCoordinator.h"
+ ],
+ "initWithFrame:": [
+  "UIActivityIndicatorView.h",
+  "UIAlertView.h",
+  "UIButton.h",
+  "UIContentUnavailableView.h",
+  "UIControl.h",
+  "UIListContentConfiguration.h",
+  "UIPasteControl.h",
+  "UIProgressView.h",
+  "UISearchBar.h",
+  "UISegmentedControl.h",
+  "UIStackView.h",
+  "UISwitch.h",
+  "UIView.h",
+  "UIWindow.h"
+ ],
+ "initWithSize:": [
+  "NSTextContainer.h",
+  "UIGraphicsImageRenderer.h",
+  "UIRegion.h",
+  "UIWindowSceneGeometryPreferencesVision.h"
+ ],
+ "initWithStyle:": [
+  "UIBarButtonItemAppearance.h",
+  "UIImpactFeedbackGenerator.h",
+  "UISplitViewController.h",
+  "UITabBarAppearance.h",
+  "UITableViewController.h"
+ ],
+ "inputDelegate": [
+  "UITextInput.h"
+ ],
+ "insertDictationResult:": [
+  "UITextInput.h"
+ ],
+ "insertDictationResultPlaceholder": [
+  "UITextInput.h"
+ ],
+ "insertText:": [
+  "UITextInput.h"
+ ],
+ "insertText:alternatives:style:": [
+  "UITextInput.h"
+ ],
+ "insertTextPlaceholderWithSize:": [
+  "UITextInput.h"
+ ],
+ "instantiateViewControllerWithIdentifier:": [
+  "UIStoryboard.h"
+ ],
+ "invalidate": [
+  "UIPointerInteraction.h",
+  "UITextLoupeSession.h",
+  "UITextSearching.h"
+ ],
+ "isAccessibilityElement": [
+  "UIAccessibility.h",
+  "UIAccessibilityElement.h"
+ ],
+ "isActive": [
+  "NSLayoutConstraint.h",
+  "UISearchController.h",
+  "UISearchDisplayController.h",
+  "UIViewReservedRegion.h"
+ ],
+ "isBatteryMonitoringEnabled": [
+  "UIDevice.h"
+ ],
+ "isCancelled": [
+  "UIViewControllerTransitionCoordinator.h"
+ ],
+ "isEmpty": [
+  "NSTextRange.h",
+  "UIBezierPath.h",
+  "UITextInput.h"
+ ],
+ "isEqual:": [
+  "NSTextRange.h"
+ ],
+ "isHidden": [
+  "UIArrangementViewController.h",
+  "UIBarButtonItem.h",
+  "UIBarButtonItemGroup.h",
+  "UICellAccessory.h",
+  "UICollectionViewCompositionalLayout.h",
+  "UICollectionViewLayout.h",
+  "UIScrollView.h",
+  "UITab.h",
+  "UITabBarControllerSidebar.h",
+  "UIView.h"
+ ],
+ "isIdleTimerDisabled": [
+  "UIApplication.h"
+ ],
+ "isSecureTextEntry": [
+  "UITextInputTraits.h"
+ ],
+ "keyWindow": [
+  "UIApplication.h",
+  "UIWindowScene.h"
+ ],
+ "keyboardAppearance": [
+  "UITextInputTraits.h"
+ ],
+ "keyboardType": [
+  "UITextInputTraits.h"
+ ],
+ "launchOptions": [
+  "UIDocumentViewController.h"
+ ],
+ "layer": [
+  "UIView.h"
+ ],
+ "layerClass": [
+  "UIView.h"
+ ],
+ "layoutSubviews": [
+  "UIView.h"
+ ],
+ "length": [
+  "NSLayoutConstraint.h",
+  "UIAttachmentBehavior.h"
+ ],
+ "loadView": [
+  "NSTextAttachment.h",
+  "UIViewController.h"
+ ],
+ "localizedDescription": [
+  "UISearchSuggestion.h"
+ ],
+ "localizedTitle": [
+  "UIApplicationShortcutItem.h",
+  "UIDocumentBrowserAction.h"
+ ],
+ "locationInView:": [
+  "UIContextMenuInteraction.h",
+  "UIDragSession.h",
+  "UIEditMenuInteraction.h",
+  "UIGestureRecognizer.h",
+  "UISpringLoadedInteraction.h",
+  "UITouch.h"
+ ],
+ "mainScreen": [
+  "UIScreen.h"
+ ],
+ "makeKeyAndVisible": [
+  "UIWindow.h"
+ ],
+ "markedTextRange": [
+  "UITextInput.h"
+ ],
+ "markedTextStyle": [
+  "UITextInput.h"
+ ],
+ "maximumFramesPerSecond": [
+  "UIScreen.h"
+ ],
+ "maximumPossibleForce": [
+  "UITouch.h"
+ ],
+ "message": [
+  "UIAlertController.h",
+  "UIAlertView.h"
+ ],
+ "mode": [
+  "UIPushBehavior.h",
+  "UITabBarController.h"
+ ],
+ "name": [
+  "NSDataAsset.h",
+  "NSLayoutAnchor.h",
+  "UIAccessibilityCustomAction.h",
+  "UIAccessibilityCustomRotor.h",
+  "UIAccessibilityLocationDescriptor.h",
+  "UICollectionViewCompositionalLayout.h",
+  "UIDevice.h",
+  "UIDocumentInteractionController.h",
+  "UIGestureRecognizer.h",
+  "UIPasteboard.h",
+  "UISceneConfiguration.h",
+  "UITrait.h"
+ ],
+ "nativeBounds": [
+  "UIScreen.h"
+ ],
+ "nativeScale": [
+  "UIScreen.h"
+ ],
+ "new": [
+  "NSTextAttachment.h",
+  "NSTextRange.h",
+  "NSTextSelectionNavigation.h",
+  "NSTextViewportLayoutController.h",
+  "UIAccessibilityLocationDescriptor.h",
+  "UIAction.h",
+  "UIActivityCollaborationModeRestriction.h",
+  "UIActivityItemsConfiguration.h",
+  "UIBackgroundConfiguration.h",
+  "UIBandSelectionInteraction.h",
+  "UIBarButtonItemAppearance.h",
+  "UIButtonConfiguration.h",
+  "UICalendarSelection.h",
+  "UICellAccessory.h",
+  "UICollectionLayoutList.h",
+  "UICollectionView.h",
+  "UICollectionViewCompositionalLayout.h",
+  "UICommand.h",
+  "UIContentUnavailableConfiguration.h",
+  "UIContentUnavailableConfigurationState.h",
+  "UIContentUnavailableView.h",
+  "UIContextMenuInteraction.h",
+  "UICornerConfiguration.h",
+  "UICornerRadius.h",
+  "UIDeferredMenuElement.h",
+  "UIDiffableDataSource.h",
+  "UIDocumentProperties.h",
+  "UIDragInteraction.h",
+  "UIDragItem.h",
+  "UIDragPreview.h",
+  "UIDropInteraction.h",
+  "UIEditMenuInteraction.h",
+  "UIEventAttribution.h",
+  "UIFindInteraction.h",
+  "UIFindSession.h",
+  "UIFocusEffect.h",
+  "UIFocusMovementHint.h",
+  "UIFocusSystem.h",
+  "UIHinge.h",
+  "UIHingeInteraction.h",
+  "UIHoverEffect.h",
+  "UIHoverStyle.h",
+  "UIImageConfiguration.h",
+  "UIIndirectScribbleInteraction.h",
+  "UIListContentConfiguration.h",
+  "UIListSeparatorConfiguration.h",
+  "UILookToScrollInteraction.h",
+  "UIMenu.h",
+  "UIMenuElement.h",
+  "UIMenuSystem.h",
+  "UIOpenURLContext.h",
+  "UIPageControlProgress.h",
+  "UIPencilInteraction.h",
+  "UIPointerAccessory.h",
+  "UIPointerLockState.h",
+  "UIPointerRegion.h",
+  "UIPointerStyle.h",
+  "UIScene.h",
+  "UISceneClosureConfirmation.h",
+  "UISceneDestructionCondition.h",
+  "UISceneOptions.h",
+  "UISceneSession.h",
+  "UISceneSessionActivationRequest.h",
+  "UISceneSizeRestrictions.h",
+  "UISceneSystemProtectionManager.h",
+  "UISceneWindowingBehaviors.h",
+  "UIScreenshotService.h",
+  "UIScribbleInteraction.h",
+  "UIScrollView.h",
+  "UISearchTextField.h",
+  "UIShape.h",
+  "UISheetPresentationController.h",
+  "UISliderTrackConfiguration.h",
+  "UISpringLoadedInteraction.h",
+  "UIStatusBarManager.h",
+  "UISymbolContentTransition.h",
+  "UISymbolEffectCompletion.h",
+  "UITab.h",
+  "UITabAccessory.h",
+  "UITabBarAppearance.h",
+  "UITabBarControllerSidebar.h",
+  "UITabSidebarItem.h",
+  "UITableView.h",
+  "UITargetedPreview.h",
+  "UITextDragPreviewRenderer.h",
+  "UITextFormattingViewControllerChangeValue.h",
+  "UITextFormattingViewControllerComponent.h",
+  "UITextInputContext.h",
+  "UITextInputTraits.h",
+  "UITextItem.h",
+  "UITextSelectionDisplayInteraction.h",
+  "UIToolTipInteraction.h",
+  "UIUpdateActionPhase.h",
+  "UIUpdateInfo.h",
+  "UIUpdateLink.h",
+  "UIViewConfigurationState.h",
+  "UIViewControllerTransition.h",
+  "UIViewLayoutRegion.h",
+  "UIViewReservedRegion.h",
+  "UIWindowSceneActivationConfiguration.h",
+  "UIWindowSceneActivationInteraction.h",
+  "UIWindowSceneGeometry.h",
+  "UIWindowSceneGeometryPreferences.h",
+  "UIWindowScenePlacement.h"
+ ],
+ "nextResponder": [
+  "UIResponder.h"
+ ],
+ "notificationOccurred:": [
+  "UINotificationFeedbackGenerator.h"
+ ],
+ "objectForKey:": [
+  "UIFontDescriptor.h"
+ ],
+ "objectForKeyedSubscript:": [
+  "UIConfigurationState.h"
+ ],
+ "offset": [
+  "UICollectionViewCompositionalLayout.h",
+  "UIShadowProperties.h"
+ ],
+ "offsetFromPosition:toPosition:": [
+  "UITextInput.h"
+ ],
+ "openURL:": [
+  "UIApplication.h"
+ ],
+ "orientation": [
+  "UIDevice.h",
+  "UIPrintInfo.h"
+ ],
+ "passwordRules": [
+  "UITextInputTraits.h"
+ ],
+ "path": [
+  "UIShadowProperties.h",
+  "UIShape.h"
+ ],
+ "percentComplete": [
+  "UIViewControllerTransitionCoordinator.h",
+  "UIViewControllerTransitioning.h"
+ ],
+ "popoverPresentationController": [
+  "UIViewController.h"
+ ],
+ "positionFromPosition:inDirection:offset:": [
+  "UITextInput.h"
+ ],
+ "positionFromPosition:offset:": [
+  "UITextInput.h"
+ ],
+ "positionWithinRange:atCharacterOffset:": [
+  "UITextInput.h"
+ ],
+ "positionWithinRange:farthestInDirection:": [
+  "UITextInput.h"
+ ],
+ "preferredInterfaceOrientationForPresentation": [
+  "UIViewController.h"
+ ],
+ "preferredScreenEdgesDeferringSystemGestures": [
+  "UIViewController.h"
+ ],
+ "prefersHomeIndicatorAutoHidden": [
+  "UIViewController.h"
+ ],
+ "prefersPointerLocked": [
+  "UIViewController.h"
+ ],
+ "prefersStatusBarHidden": [
+  "UIViewController.h"
+ ],
+ "prepare": [
+  "UIFeedbackGenerator.h"
+ ],
+ "presentViewController:animated:completion:": [
+  "UIViewController.h"
+ ],
+ "previousLocationInView:": [
+  "UITouch.h"
+ ],
+ "range": [
+  "UITextItem.h",
+  "UIWritingToolsCoordinatorContext.h"
+ ],
+ "removeDictationResultPlaceholder:willInsertResult:": [
+  "UITextInput.h"
+ ],
+ "removeFromSuperview": [
+  "UIView.h"
+ ],
+ "removeTextPlaceholder:": [
+  "UITextInput.h"
+ ],
+ "replaceRange:withText:": [
+  "UITextInput.h"
+ ],
+ "request": [
+  "UISceneSessionActivationRequest.h",
+  "UIWebView.h"
+ ],
+ "reset": [
+  "UIGestureRecognizerSubclass.h"
+ ],
+ "resignFirstResponder": [
+  "UIResponder.h"
+ ],
+ "returnKeyType": [
+  "UITextInputTraits.h"
+ ],
+ "safeAreaInsets": [
+  "UIView.h"
+ ],
+ "scale": [
+  "UIGraphicsImageRenderer.h",
+  "UIImage.h",
+  "UIPinchGestureRecognizer.h",
+  "UIScreen.h"
+ ],
+ "screen": [
+  "UIWindow.h",
+  "UIWindowScene.h"
+ ],
+ "screens": [
+  "UIScreen.h"
+ ],
+ "selectedTextRange": [
+  "UITextInput.h",
+  "UITextSearching.h"
+ ],
+ "selectionAffinity": [
+  "UITextInput.h"
+ ],
+ "selectionChanged": [
+  "UISelectionFeedbackGenerator.h"
+ ],
+ "selectionRectsForRange:": [
+  "UITextInput.h"
+ ],
+ "sender": [
+  "UIAction.h",
+  "UIMenuLeaf.h",
+  "UIStoryboardSegue.h",
+  "UISymbolEffectCompletion.h"
+ ],
+ "set": [
+  "UIColor.h"
+ ],
+ "setAccessibilityElements:": [
+  "UIAccessibilityContainer.h"
+ ],
+ "setApplicationIconBadgeNumber:": [
+  "UIApplication.h",
+  "UILocalNotification.h"
+ ],
+ "setAttributedMarkedText:selectedRange:": [
+  "UITextInput.h"
+ ],
+ "setAttributes:": [
+  "UIAction.h",
+  "UICommand.h",
+  "UIKeyCommand.h",
+  "UIMenuLeaf.h"
+ ],
+ "setAutocapitalizationType:": [
+  "UITextInputTraits.h"
+ ],
+ "setAutocorrectionType:": [
+  "UITextInputTraits.h"
+ ],
+ "setAutoresizingMask:": [
+  "UIView.h"
+ ],
+ "setBackgroundColor:": [
+  "NSTextTable.h",
+  "UIBackgroundConfiguration.h",
+  "UIBarAppearance.h",
+  "UIBarButtonItemBadge.h",
+  "UICellAccessory.h",
+  "UICollectionLayoutList.h",
+  "UIContextualAction.h",
+  "UIPopoverController.h",
+  "UIPopoverPresentationController.h",
+  "UIPreviewParameters.h",
+  "UITableView.h"
+ ],
+ "setBadge:": [
+  "UIBarButtonItemBadge.h"
+ ],
+ "setBaseWritingDirection:forRange:": [
+  "UITextInput.h"
+ ],
+ "setBatteryMonitoringEnabled:": [
+  "UIDevice.h"
+ ],
+ "setBounds:": [
+  "NSTextAttachment.h",
+  "UICollectionViewLayout.h",
+  "UIView.h"
+ ],
+ "setBrightness:": [
+  "UIScreen.h"
+ ],
+ "setClearsContextBeforeDrawing:": [
+  "UIView.h"
+ ],
+ "setClearsOnBeginEditing:": [
+  "UITextField.h"
+ ],
+ "setClearsOnInsertion:": [
+  "UITextField.h",
+  "UITextView.h"
+ ],
+ "setContentScaleFactor:": [
+  "UIView.h"
+ ],
+ "setDelegate:": [
+  "NSLayoutManager.h",
+  "NSTextContentManager.h",
+  "NSTextLayoutManager.h",
+  "NSTextStorage.h",
+  "NSTextViewportLayoutController.h",
+  "UIAccelerometer.h",
+  "UIActionSheet.h",
+  "UIAlertView.h",
+  "UIApplication.h",
+  "UICalendarView.h",
+  "UICloudSharingController.h",
+  "UICollectionView.h",
+  "UIColorPickerViewController.h",
+  "UIDocumentBrowserViewController.h",
+  "UIDocumentInteractionController.h",
+  "UIDocumentMenuViewController.h",
+  "UIDocumentPickerViewController.h",
+  "UIDynamicAnimator.h",
+  "UIFontPickerViewController.h",
+  "UIGestureRecognizer.h",
+  "UIImagePickerController.h",
+  "UINavigationBar.h",
+  "UINavigationController.h",
+  "UIPageControlProgress.h",
+  "UIPageViewController.h",
+  "UIPencilInteraction.h",
+  "UIPickerView.h",
+  "UIPopoverController.h",
+  "UIPopoverPresentationController.h",
+  "UIPresentationController.h",
+  "UIPreviewInteraction.h",
+  "UIPrintInteractionController.h",
+  "UIPrinterPickerController.h",
+  "UIScene.h",
+  "UIScreenshotService.h",
+  "UIScrollView.h",
+  "UISearchBar.h",
+  "UISearchController.h",
+  "UISearchDisplayController.h",
+  "UISheetPresentationController.h",
+  "UISplitViewController.h",
+  "UITabBar.h",
+  "UITabBarController.h",
+  "UITabBarControllerSidebar.h",
+  "UITableView.h",
+  "UITextField.h",
+  "UITextFormattingCoordinator.h",
+  "UITextFormattingViewController.h",
+  "UITextInteraction.h",
+  "UITextView.h",
+  "UIToolTipInteraction.h",
+  "UIToolbar.h",
+  "UIVideoEditorController.h",
+  "UIWebView.h"
+ ],
+ "setEdgesForExtendedLayout:": [
+  "UIViewController.h"
+ ],
+ "setEnabled:": [
+  "UIAlertController.h",
+  "UIBandSelectionInteraction.h",
+  "UIBarItem.h",
+  "UIContentUnavailableButtonProperties.h",
+  "UIControl.h",
+  "UIDragInteraction.h",
+  "UIFocusGuide.h",
+  "UIGestureRecognizer.h",
+  "UIHingeInteraction.h",
+  "UIHoverStyle.h",
+  "UILabel.h",
+  "UIPencilInteraction.h",
+  "UIPointerInteraction.h",
+  "UISceneAccessoryRegistration.h",
+  "UISearchBar.h",
+  "UITab.h",
+  "UIToolTipInteraction.h",
+  "UIUpdateLink.h"
+ ],
+ "setEnablesReturnKeyAutomatically:": [
+  "UITextInputTraits.h"
+ ],
+ "setExcludedActivityTypes:": [
+  "UIActivityViewController.h"
+ ],
+ "setHeight:": [
+  "UISplitArrangement.h"
+ ],
+ "setIdentifier:": [
+  "NSLayoutConstraint.h",
+  "UIBarButtonItem.h",
+  "UILayoutGuide.h",
+  "UIUserNotificationSettings.h"
+ ],
+ "setIdleTimerDisabled:": [
+  "UIApplication.h"
+ ],
+ "setInputDelegate:": [
+  "UITextInput.h"
+ ],
+ "setKeyboardAppearance:": [
+  "UITextInputTraits.h"
+ ],
+ "setKeyboardType:": [
+  "UITextInputTraits.h"
+ ],
+ "setLaunchOptions:": [
+  "UIDocumentViewController.h"
+ ],
+ "setLocale:": [
+  "UICalendarView.h",
+  "UIDatePicker.h"
+ ],
+ "setMarkedText:selectedRange:": [
+  "UIInputViewController.h",
+  "UITextInput.h"
+ ],
+ "setMarkedTextStyle:": [
+  "UITextInput.h"
+ ],
+ "setMessage:": [
+  "UIAlertController.h",
+  "UIAlertView.h"
+ ],
+ "setModalPresentationStyle:": [
+  "UIViewController.h"
+ ],
+ "setMultipleTouchEnabled:": [
+  "UIView.h"
+ ],
+ "setName:": [
+  "UIAccessibilityCustomAction.h",
+  "UIAccessibilityCustomRotor.h",
+  "UIDocumentInteractionController.h",
+  "UIGestureRecognizer.h"
+ ],
+ "setObject:forKeyedSubscript:": [
+  "UIConfigurationState.h"
+ ],
+ "setOffset:": [
+  "UIShadowProperties.h"
+ ],
+ "setPasswordRules:": [
+  "UITextInputTraits.h"
+ ],
+ "setPlaceholder:": [
+  "UISearchBar.h",
+  "UITextField.h"
+ ],
+ "setReturnKeyType:": [
+  "UITextInputTraits.h"
+ ],
+ "setRootViewController:": [
+  "UIWindow.h"
+ ],
+ "setScreen:": [
+  "UIWindow.h"
+ ],
+ "setSecureTextEntry:": [
+  "UITextInputTraits.h"
+ ],
+ "setSelectedTextRange:": [
+  "UITextInput.h"
+ ],
+ "setSelectionAffinity:": [
+  "UITextInput.h"
+ ],
+ "setSize:": [
+  "NSTextContainer.h",
+  "UICollectionViewLayout.h",
+  "UIWindowSceneGeometryPreferencesVision.h"
+ ],
+ "setSmartDashesType:": [
+  "UITextInputTraits.h"
+ ],
+ "setSmartInsertDeleteType:": [
+  "UITextInputTraits.h"
+ ],
+ "setSmartQuotesType:": [
+  "UITextInputTraits.h"
+ ],
+ "setSourceRect:": [
+  "UIPopoverPresentationController.h",
+  "UIViewController.h"
+ ],
+ "setSourceView:": [
+  "UIPopoverPresentationController.h",
+  "UISheetPresentationController.h"
+ ],
+ "setSpellCheckingType:": [
+  "UITextInputTraits.h"
+ ],
+ "setString:": [
+  "UIPasteboard.h"
+ ],
+ "setTag:": [
+  "UIBarItem.h",
+  "UIView.h"
+ ],
+ "setText:": [
+  "UIContentUnavailableConfiguration.h",
+  "UIConversationEntry.h",
+  "UILabel.h",
+  "UIListContentConfiguration.h",
+  "UIPrintFormatter.h",
+  "UISearchBar.h",
+  "UITableViewCell.h",
+  "UITextField.h",
+  "UITextView.h"
+ ],
+ "setTextContentType:": [
+  "UITextInputTraits.h"
+ ],
+ "setTimeZone:": [
+  "UICalendarView.h",
+  "UIDatePicker.h",
+  "UILocalNotification.h"
+ ],
+ "setTitle:": [
+  "UIAction.h",
+  "UIActionSheet.h",
+  "UIAlertController.h",
+  "UIAlertView.h",
+  "UIBarItem.h",
+  "UIButtonConfiguration.h",
+  "UIColorWell.h",
+  "UICommand.h",
+  "UIContextualAction.h",
+  "UIDocumentViewControllerLaunchOptions.h",
+  "UIKeyCommand.h",
+  "UIMenuController.h",
+  "UIMenuLeaf.h",
+  "UINavigationItem.h",
+  "UIScene.h",
+  "UISliderTrackConfiguration.h",
+  "UISwitch.h",
+  "UITab.h",
+  "UITableView.h",
+  "UIUserNotificationSettings.h",
+  "UIViewController.h",
+  "UIWindowSceneActivationAction.h"
+ ],
+ "setURL:": [
+  "UIDocumentInteractionController.h",
+  "UIPasteboard.h",
+  "UIPrintServiceExtension.h"
+ ],
+ "setUserInfo:": [
+  "UIApplicationShortcutItem.h",
+  "UILocalNotification.h",
+  "UISceneSession.h",
+  "UITab.h"
+ ],
+ "setValue:": [
+  "UISlider.h",
+  "UIStepper.h"
+ ],
+ "setView:": [
+  "NSTextAttachment.h",
+  "UIViewController.h"
+ ],
+ "setWidth:": [
+  "UIBarButtonItem.h",
+  "UISplitArrangement.h"
+ ],
+ "setWindow:": [
+  "UIApplication.h",
+  "UIWindowScene.h"
+ ],
+ "sharedApplication": [
+  "UIApplication.h"
+ ],
+ "shouldAutorotate": [
+  "UIViewController.h"
+ ],
+ "shouldChangeTextInRange:replacementText:": [
+  "UITextInput.h"
+ ],
+ "size": [
+  "NSStringDrawing.h",
+  "NSTextContainer.h",
+  "UICollectionViewLayout.h",
+  "UIImage.h",
+  "UIScreenMode.h",
+  "UITargetedPreview.h",
+  "UIWindowSceneGeometryPreferencesVision.h"
+ ],
+ "smartDashesType": [
+  "UITextInputTraits.h"
+ ],
+ "smartInsertDeleteType": [
+  "UITextInputTraits.h"
+ ],
+ "smartQuotesType": [
+  "UITextInputTraits.h"
+ ],
+ "spellCheckingType": [
+  "UITextInputTraits.h"
+ ],
+ "start": [
+  "UITextInput.h"
+ ],
+ "state": [
+  "NSTextLayoutFragment.h",
+  "UIAction.h",
+  "UIBandSelectionInteraction.h",
+  "UICommand.h",
+  "UIControl.h",
+  "UIGestureRecognizer.h",
+  "UIGestureRecognizerSubclass.h",
+  "UIKeyCommand.h",
+  "UIMenuLeaf.h",
+  "UISpringLoadedInteraction.h",
+  "UIViewAnimating.h",
+  "UIWritingToolsCoordinator.h"
+ ],
+ "status": [
+  "UIFocusDebugger.h",
+  "UIHinge.h"
+ ],
+ "statusBarOrientation": [
+  "UIApplication.h"
+ ],
+ "storyboardWithName:bundle:": [
+  "UIStoryboard.h"
+ ],
+ "string": [
+  "UIPasteboard.h"
+ ],
+ "stringValue": [
+  "UIBarButtonItemBadge.h"
+ ],
+ "subtype": [
+  "UIEvent.h"
+ ],
+ "supportedInterfaceOrientations": [
+  "UIViewController.h"
+ ],
+ "systemFontOfSize:": [
+  "UIFont.h"
+ ],
+ "systemFontSize": [
+  "UIInterface.h"
+ ],
+ "systemImageNamed:": [
+  "UIImage.h"
+ ],
+ "systemVersion": [
+  "UIDevice.h"
+ ],
+ "text": [
+  "UICellAccessory.h",
+  "UIContentUnavailableConfiguration.h",
+  "UIConversationEntry.h",
+  "UILabel.h",
+  "UIListContentConfiguration.h",
+  "UIPrintFormatter.h",
+  "UISearchBar.h",
+  "UITableViewCell.h",
+  "UITextField.h",
+  "UITextInput.h",
+  "UITextView.h"
+ ],
+ "textContentType": [
+  "UITextInputTraits.h"
+ ],
+ "textField:editMenuForCharactersInRange:suggestedActions:": [
+  "UITextField.h"
+ ],
+ "textField:shouldChangeCharactersInRange:replacementString:": [
+  "UITextField.h"
+ ],
+ "textField:willDismissEditMenuWithAnimator:": [
+  "UITextField.h"
+ ],
+ "textField:willPresentEditMenuWithAnimator:": [
+  "UITextField.h"
+ ],
+ "textFieldDidBeginEditing:": [
+  "UITextField.h"
+ ],
+ "textFieldDidChangeSelection:": [
+  "UITextField.h"
+ ],
+ "textFieldDidEndEditing:": [
+  "UITextField.h"
+ ],
+ "textFieldDidEndEditing:reason:": [
+  "UITextField.h"
+ ],
+ "textFieldShouldBeginEditing:": [
+  "UITextField.h"
+ ],
+ "textFieldShouldClear:": [
+  "UITextField.h"
+ ],
+ "textFieldShouldEndEditing:": [
+  "UITextField.h"
+ ],
+ "textFieldShouldReturn:": [
+  "UITextField.h"
+ ],
+ "textFields": [
+  "UIAlertController.h"
+ ],
+ "textInRange:": [
+  "UITextInput.h"
+ ],
+ "textInputView": [
+  "UITextInput.h"
+ ],
+ "textRangeFromPosition:toPosition:": [
+  "UITextInput.h"
+ ],
+ "textStylingAtPosition:inDirection:": [
+  "UITextInput.h"
+ ],
+ "timeZone": [
+  "UICalendarView.h",
+  "UIDatePicker.h",
+  "UILocalNotification.h"
+ ],
+ "timestamp": [
+  "UIAccelerometer.h",
+  "UIEvent.h",
+  "UIPencilInteraction.h",
+  "UIPress.h",
+  "UITouch.h"
+ ],
+ "title": [
+  "UIAction.h",
+  "UIActionSheet.h",
+  "UIAlertController.h",
+  "UIAlertView.h",
+  "UIBarItem.h",
+  "UIButtonConfiguration.h",
+  "UIColorWell.h",
+  "UICommand.h",
+  "UIContextualAction.h",
+  "UIDocumentViewControllerLaunchOptions.h",
+  "UIKeyCommand.h",
+  "UIMenuController.h",
+  "UIMenuElement.h",
+  "UIMenuLeaf.h",
+  "UINavigationItem.h",
+  "UIScene.h",
+  "UISliderTrackConfiguration.h",
+  "UISwitch.h",
+  "UITab.h",
+  "UITableView.h",
+  "UITextFormattingViewControllerFormattingStyle.h",
+  "UIUserNotificationSettings.h",
+  "UIViewController.h",
+  "UIWindowSceneActivationAction.h"
+ ],
+ "tokenizer": [
+  "UITextInput.h"
+ ],
+ "touchesBegan:withEvent:": [
+  "UIGestureRecognizerSubclass.h",
+  "UIResponder.h"
+ ],
+ "touchesCancelled:withEvent:": [
+  "UIGestureRecognizerSubclass.h",
+  "UIResponder.h"
+ ],
+ "touchesEnded:withEvent:": [
+  "UIGestureRecognizerSubclass.h",
+  "UIResponder.h"
+ ],
+ "touchesMoved:withEvent:": [
+  "UIGestureRecognizerSubclass.h",
+  "UIResponder.h"
+ ],
+ "traitCollection": [
+  "UICollectionViewCompositionalLayout.h",
+  "UIConfigurationState.h",
+  "UIContentUnavailableConfigurationState.h",
+  "UIImage.h",
+  "UIImageConfiguration.h",
+  "UITraitCollection.h",
+  "UIViewConfigurationState.h",
+  "UIWindowScene.h"
+ ],
+ "type": [
+  "UIApplicationShortcutItem.h",
+  "UIEvent.h",
+  "UIMotionEffect.h",
+  "UIPress.h",
+  "UITouch.h"
+ ],
+ "unmarkText": [
+  "UIInputViewController.h",
+  "UITextInput.h"
+ ],
+ "updateFloatingCursorAtPoint:": [
+  "UITextInput.h"
+ ],
+ "userInfo": [
+  "UIApplicationShortcutItem.h",
+  "UILocalNotification.h",
+  "UISceneSession.h",
+  "UITab.h"
+ ],
+ "userInterfaceIdiom": [
+  "UIDevice.h",
+  "UITraitCollection.h"
+ ],
+ "value": [
+  "UISlider.h",
+  "UIStepper.h"
+ ],
+ "view": [
+  "NSTextAttachment.h",
+  "UIAccessibilityLocationDescriptor.h",
+  "UIDragPreview.h",
+  "UIGestureRecognizer.h",
+  "UIInteraction.h",
+  "UIPreviewInteraction.h",
+  "UIPrintFormatter.h",
+  "UITargetedPreview.h",
+  "UITouch.h",
+  "UIViewController.h"
+ ],
+ "viewDidUnload": [
+  "UIViewController.h"
+ ],
+ "viewWithTag:": [
+  "UIView.h"
+ ],
+ "width": [
+  "UIBarButtonItem.h",
+  "UISplitArrangement.h"
+ ],
+ "willDismissEditMenuWithAnimator:": [
+  "UITextInput.h"
+ ],
+ "willPresentEditMenuWithAnimator:": [
+  "UITextInput.h"
+ ],
+ "window": [
+  "UIApplication.h",
+  "UIPress.h",
+  "UITouch.h",
+  "UIView.h",
+  "UIWindowScene.h"
+ ]
+}
