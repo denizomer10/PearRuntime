@@ -6,34 +6,33 @@ iOSSupport olmadan oynanış sahnesine ulaşıyor; Minecraft (Bedrock, Metal,
 nib tabanlı açılış) ana ekrana ve dünya yüklemesine ulaşıyor. Güncel durum, çalıştırma adımları ve sıradaki işler için
 [HANDOFF.md](HANDOFF.md).
 
-## 1. Hedef mimari
+## 1. Hedef ve mimari
+
+**Hedef (2026-11-14 itibarıyla):** önce macOS'ta, yalnızca Apple silicon ve
+yalnızca Metal ile sağlam bir altyapı. Linux, Vulkan, x86 ve PC arka uçları
+kapsam dışıdır; ilgili kod PearANGLE'dan da silindi.
 
 ```
- ┌──────────────────────────────── uygulama (iOS IPA) ─────────────────────────────────┐
- │  arm64 iOS uygulaması                     │  32-bit iOS uygulaması (armv6/armv7)       │
- ├───────────────────────────────────────────┼───────────────────────────────────────────┤
- │  PearHost (host/)                          │  PearLegacyEngine (touchHLE çatalı)        │
- │   UIKit ve iOS'a özel çerçevelerin kendi   │   kendi HLE çerçeveleri                     │
- │   uygulaması; eksik çağrı raporlayıcısı    │                                            │
- ├───────────────────────────────────────────┴───────────────────────────────────────────┤
- │  Darwin sistem katmanı                                                                   │
- │   macOS: sistemin kendi libSystem / libobjc / CoreFoundation / Foundation / Metal'i      │
- │   Linux: PearDarwin (yazılacak) – Mach-O yükleyici, dyld, Mach/BSD → Linux sistem         │
- │          çağrıları (xnu referans), objc4, CoreFoundation, Foundation                     │
- ├──────────────────────────────────────────────────────────────────────────────────────────┤
- │  CPU: Apple silicon / arm64 Linux'ta doğal yürütme                                        │
- │       PearLegacyJIT: ARMv7→arm64 (bugün); A64→x86-64 (Dynarmic'in A64 ön ucu + x64 arka   │
- │       ucu ile, x86-64 Linux için)                                                         │
- ├──────────────────────────────────────────────────────────────────────────────────────────┤
- │  Grafik: PearANGLE (OpenGL ES → Metal / Vulkan), PearMetal (Metal → Vulkan, yazılacak)   │
- ├──────────────────────────────────────────────────────────────────────────────────────────┤
- │  Pencere/girdi arka ucu: AppKit (macOS, host/uikit/backend/appkit) │ SDL/Wayland (Linux)  │
- └──────────────────────────────────────────────────────────────────────────────────────────┘
+ ┌───────────────────────────── uygulama (iOS IPA) ─────────────────────────────┐
+ │  arm64 iOS uygulaması                    │  32-bit iOS (armv6/armv7)          │
+ ├──────────────────────────────────────────┼────────────────────────────────────┤
+ │  PearHost (host/)                         │  PearLegacyEngine + PearLegacyJIT  │
+ │   UIKit, MetalKit (UIView MTKView),       │   (touchHLE / Dynarmic çatalları,  │
+ │   OpenGLES (EAGL) yeniden uygulamaları;   │    ARMv7 → arm64)                  │
+ │   eksik çağrı raporlayıcısı               │                                    │
+ ├──────────────────────────────────────────┴────────────────────────────────────┤
+ │  macOS'un kendisi: libSystem, libobjc, CoreFoundation, Foundation, Metal,      │
+ │  GameController, GameKit, StoreKit, AVFoundation … (iOSSupport hiç yüklenmez) │
+ ├────────────────────────────────────────────────────────────────────────────────┤
+ │  Grafik: Metal (doğrudan) ve OpenGL ES → PearANGLE (yalnızca Metal arka ucu)  │
+ ├────────────────────────────────────────────────────────────────────────────────┤
+ │  Pencere/girdi: AppKit arka ucu (host/uikit/backend/appkit)                   │
+ └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 Bugünkü Catalyst yolu (`modules/`, `build.sh`) değişmeden duruyor ve
 PearSilicon'un varsayılanı olarak kalıyor. Yeni yol `host/` altında; uygulama
-başına seçilecek.
+başına seçilecek. PearANGLE'ın Catalyst derlemesi bu yüzden korunuyor.
 
 ### Neden macOS platformu?
 
@@ -46,8 +45,7 @@ gerekmez (Linux'ta gerekir). macOS'ta karşılığı olmayanlar (UIKit, iAd,
 OpenGLES) ve macOS'taki karşılığı iOS ABI'sinden farklı olanlar (MetalKit:
 MTKView macOS'ta NSView) PearHost imajlarına yönlendirilir.
 
-Bu, Linux hedefiyle aynı modeldir: uygulama, "iOS" yerine bizim sağladığımız
-bir platform üzerinde çalışır.
+Uygulama, "iOS" yerine bizim sağladığımız bir platform üzerinde çalışır.
 
 ## 2. Temiz oda kuralları
 
@@ -94,14 +92,13 @@ uygulama yazmak.
   NOTICE korunur).
 - PearLegacyEngine MPL-2.0, PearLegacyJIT (Dynarmic) 0BSD/GPL bileşenleri
   açısından ayrıca kontrol edilmeli.
+- PearANGLE: BSD-3 (ANGLE); dağıtılan üçüncü taraf lisansları `THIRD_PARTY_LICENSES.txt`.
 
 ## 4. xnu'nun rolü
 
-xnu, Linux tarafında (PearDarwin) Darwin sistem çağrısı ABI'sinin
-referansıdır: BSD sistem çağrısı numaraları ve semantiği
-(`bsd/kern/syscalls.master`), Mach trap'leri (`osfmk/kern/syscall_sw.c`),
-`mach_msg`, port ve görev modeli, Mach-O ve `posix_spawn` davranışı. macOS
-hedefinde gerek yoktur; uygulama gerçek çekirdekle konuşur.
+macOS hedefinde uygulama gerçek çekirdekle konuşur; xnu kaynakları sistem
+çağrısı davranışını anlamak için referanstır (ör. bir oyunun beklediği hata
+kodları, Mach port davranışı).
 
 ## 5. Yol haritası
 
@@ -112,4 +109,4 @@ hedefinde gerek yoktur; uygulama gerçek çekirdekle konuşur.
 | 2 | Oyun servisleri: girdi eşleme, pointer lock, sanal gamepad, depolama yolları; Catalyst modüllerinin host'a taşınması | sırada |
 | 3 | Genel UIKit: metin, kaydırma, tablo/koleksiyon, Auto Layout, gezinme | sonra |
 | 4 | SwiftUI | ayrı karar |
-| 5 | Linux: PearDarwin + SDL/Wayland arka ucu + PearANGLE/Vulkan; ardından PearMetal | sonra |
+| — | Linux / Vulkan / x86 | kapsam dışı (2026-11-14 kararı) |

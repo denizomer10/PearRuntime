@@ -4,7 +4,7 @@ Bir sonraki ajan veya geliştirici buradan başlasın. Mimari ve temiz oda
 kuralları: [independent-runtime.md](independent-runtime.md). Bu dosya her
 oturum sonunda güncellenir.
 
-- Dal: `independent-runtime` (PearRuntime)
+- Dal: `independent-runtime` (PearRuntime), `apple-silicon` (PearANGLE, `third_party/angle`)
 - Son güncelleme: 2026-11-14
 
 ## Durum
@@ -58,6 +58,21 @@ Minecraft (Bedrock) 1.26.60, orijinal IPA'dan, iOSSupport ve Catalyst olmadan:
 | `tools/host-run.sh` | kopyayı kendi container'ında çalıştırır, rapor klasörü üretir |
 | `docs/census/` | uygulama başına sayım JSON'ları (stub üretiminin girdisi) |
 | `docs/runs/` | saklanan eksik çağrı raporları |
+
+## PearANGLE (OpenGL ES)
+
+- `third_party/angle`, PearANGLE'ın `apple-silicon` dalında: yalnızca Metal
+  arka ucu, yalnızca arm64 Apple hedefleri (`gni/angle.gni` bunu assert eder).
+  D3D, GL, Vulkan, WebGPU, null, OpenCL, HLSL/WGSL/SPIR-V çevirmenleri ve
+  Windows/Android/Linux/Fuchsia kodu silindi; DEPS yalnızca Metal derlemesinin
+  ihtiyaçlarını çeker (checkout ~1,6 GB).
+- Derleme: `host/build-pearangle.sh --sync` (ilk sefer) / `host/build-pearangle.sh`
+  → `build/host/PearANGLE-src`; `host/build-host.sh` OpenGLES.framework'ü
+  buna bağlar. Başka bir ANGLE derlemesi kullanılmaz.
+- Doğrulama: `tools/tests/pearangle-smoke.c` (EGL pbuffer, GLES 3.0, Metal
+  renderer, temizle/geri oku) geçiyor.
+- PearANGLE'ın Catalyst derlemesi (şu an dağıtılan Catalyst yolu) bu dalda
+  henüz yeniden derlenmedi; iOS/Catalyst kodu korunuyor.
 
 ## Çalıştırma
 
@@ -156,10 +171,9 @@ NSView display link'ine bağlandı), Backtrace'in MobileCoreServices sembolleri
 4. Çoklu dokunma yok (tek fare = tek dokunma). Catalyst `input` modülündeki
    keymapper/sanal gamepad henüz host'a taşınmadı.
 5. Ses yolu (AVAudioSession macOS'ta) doğrulanmadı.
-6. Host OpenGLES, PearLegacyEngine'in macOS ANGLE derlemesini kullanıyor
-   (`PEAR_HOST_ANGLE_DIR`, varsayılan `~/PearLegacyEngine/vendor/angle/out/MacMetal`,
-   upstream ANGLE). PearANGLE çatalının macOS-platform derlemesine geçilmeli.
-   EAGLContext henüz yok (nil döner); GLES oyunları için `modules/graphics-gl`
+6. Host OpenGLES yalnızca PearANGLE kullanır (`host/build-pearangle.sh`,
+   macOS arm64, yalnızca Metal; çıktı `build/host/PearANGLE-src`). PearANGLE
+   eksikleri PearANGLE'da uygulanır. EAGLContext henüz yok (nil döner); GLES oyunları için `modules/graphics-gl`
    EAGL-on-EGL kodu host'a taşınmalı.
 7. macOS display link'i `setFrameInterval:` vb. için istisna fırlatıyor; host,
    kurulumda bu selector'ları deneyip fırlatanları değiştiriyor (log: "provided by
@@ -180,10 +194,7 @@ NSView display link'ine bağlandı), Backtrace'in MobileCoreServices sembolleri
    Diğer oyunlarla sayım (`docs/census/`): Asphalt 6 (32-bit, PearLegacyEngine),
    Miku Flick. Her yeni oyun yeni sınıflar getirir;
    üretici stub'ları otomatik ekler.
-6. Linux hazırlığı: arka ucu (`backend/appkit`) SDL/Wayland eşleniğiyle
-   çoğaltmak için `PearUIKitPrivate.h` arayüzü zaten platformdan bağımsız.
-   PearDarwin (Mach-O yükleyici + Darwin ABI) ayrı bir proje olarak
-   başlatılmalı; xnu sistem çağrısı referansıdır.
-7. PearLegacyJIT entegrasyonu: x86-64 Linux için Dynarmic'in A64 ön ucu ile
-   arm64 → x86-64 çeviri. Önce PearDarwin'in arm64 Linux'ta doğal çalışması
-   gerekir.
+6. EAGL (OpenGL ES) host'a: `modules/graphics-gl` EAGL-on-EGL kodu
+   PearANGLE üzerine taşınacak; GLES oyunlarıyla sınanacak.
+7. Kapsam: yalnızca macOS, Apple silicon, Metal. Linux/Vulkan/x86 kapsam dışı
+   (2026-11-14). PearLegacyJIT 32-bit yolunda (ARMv7 → arm64) kalır.

@@ -68,12 +68,14 @@ for fw in iAd; do
 done
 
 # OpenGLES.framework: macOS has none for macOS-platform processes. GL entry
-# points are re-exported from ANGLE; EAGL symbols are ours (host/opengles).
-# PEAR_HOST_ANGLE_DIR must hold macOS-platform libEGL/libGLESv2 builds.
-ANGLE_DIR="${PEAR_HOST_ANGLE_DIR:-$HOME/PearLegacyEngine/vendor/angle/out/MacMetal}"
+# points are re-exported from PearANGLE (our fork, Metal only); EAGL symbols
+# are ours (host/opengles). Build PearANGLE with host/build-pearangle.sh.
+# No other ANGLE build is used.
+ANGLE_DIR="${PEAR_HOST_ANGLE_DIR:-$OUT_DIR/PearANGLE-src}"
 if [[ -f "$ANGLE_DIR/libGLESv2.dylib" ]]; then
   rm -rf "$OUT_DIR/PearANGLE"; mkdir -p "$OUT_DIR/PearANGLE" "$OUT_DIR/OpenGLES.framework"
   # Copy libEGL/libGLESv2 and every @rpath library they pull in (component builds).
+  cp "$ANGLE_DIR/LICENSE.ANGLE" "$OUT_DIR/PearANGLE/" 2>/dev/null || true
   todo=(libGLESv2.dylib libEGL.dylib)
   while ((${#todo[@]})); do
     lib="${todo[0]}"; todo=("${todo[@]:1}")
@@ -88,7 +90,7 @@ if [[ -f "$ANGLE_DIR/libGLESv2.dylib" ]]; then
     -L"$OUT_DIR/PearANGLE" -Wl,-reexport-lGLESv2 -Wl,-rpath,@loader_path/../PearANGLE
   echo ">> $OUT_DIR/OpenGLES.framework/OpenGLES (GL from $ANGLE_DIR)"
 else
-  echo "!! no macOS ANGLE build at $ANGLE_DIR; OpenGLES.framework not built" >&2
+  echo "!! no PearANGLE build at $ANGLE_DIR; run host/build-pearangle.sh --sync. OpenGLES.framework not built" >&2
 fi
 
 # MetalKit.framework: iOS apps expect MTKView to be a UIView (host/metalkit).
