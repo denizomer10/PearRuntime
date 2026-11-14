@@ -168,11 +168,23 @@ PEAR_UIKIT_EXPORT int UIApplicationMain(int argc, char *argv[], NSString *princi
         id delegate = nil;
         if (delegateClassName.length) delegate = [[classNamed(delegateClassName, Nil) alloc] init];
         else if ([app conformsToProtocol:NSProtocolFromString(@"UIApplicationDelegate")]) delegate = app;
-        if (!delegate && NSBundle.mainBundle.infoDictionary[@"UIMainStoryboardFile"])
-            PearMissingReport(PearMissingBehavior, "UIApplicationMain", "main storyboard launch", NULL);
         [app pear_retainDelegate:delegate];
+        NSDictionary *info = NSBundle.mainBundle.infoDictionary;
+        NSString *mainNib = info[@"NSMainNibFile~ipad"] ?: info[@"NSMainNibFile"];
+        if (!delegateClassName.length && info[@"UIMainStoryboardFile"])
+            PearMissingReport(PearMissingBehavior, "UIApplicationMain", "main storyboard launch", NULL);
 
         PearBackendRun(^{
+          @try {
+            // Documented: the main nib is loaded with the application as owner
+            // before launch; it usually connects the app delegate.
+            NSArray *nibWindows = @[];
+            if (mainNib.length) {
+                UINib *nib = [UINib nibWithNibName:mainNib bundle:nil];
+                [nib pear_instantiateWithOwner:app options:nil visibleWindows:&nibWindows];
+            }
+            id delegate = app.delegate;
+            if (!delegate) PearHostLog("app", "no application delegate after launch setup");
             NSDictionary *options = @{};
             SEL will = @selector(application:willFinishLaunchingWithOptions:);
             SEL did = @selector(application:didFinishLaunchingWithOptions:);
@@ -185,10 +197,19 @@ PEAR_UIKIT_EXPORT int UIApplicationMain(int argc, char *argv[], NSString *princi
             } else if ([delegate respondsToSelector:@selector(applicationDidFinishLaunching:)]) {
                 ((void (*)(id, SEL, id))objc_msgSend)(delegate, @selector(applicationDidFinishLaunching:), app);
             }
+            for (UIWindow *w in nibWindows)
+                if (!w.isKeyWindow) [w makeKeyAndVisible];
             gLaunched = YES;
             post(UIApplicationDidFinishLaunchingNotification);
             PearHostLog("app", "launch complete; %lu window(s)", (unsigned long)gWindows.count);
             PearUIKitApplicationDidBecomeActive();
+          } @catch (NSException *e) {
+            // AppKit swallows exceptions thrown from launch notifications; an
+            // iOS app would have crashed here, so say so loudly and stop.
+            PearHostLog("app", "launch raised %s: %s", e.name.UTF8String, e.reason.UTF8String);
+            for (NSString *f in e.callStackSymbols) PearHostLog("app", "  %s", f.UTF8String);
+            abort();
+          }
         });
     }
     return 0;

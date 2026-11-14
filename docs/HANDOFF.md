@@ -27,6 +27,16 @@ Catalyst olmadan**:
   denenmedi**.
 - Ses, oyun içi oynanış, kayıt/yükleme **doğrulanmadı**.
 
+Minecraft (Bedrock) 1.26.60, orijinal IPA'dan, iOSSupport ve Catalyst olmadan:
+
+- `MainWindow.nib` (NIBArchive) bizim UINib yükleyicimizle açılıyor; uygulama
+  delegesi, pencere ve view controller nib bağlantılarıyla kuruluyor.
+- MTKView (bizim UIView tabanlı MetalKit'imiz) ile Metal çizimi: ana ekran
+  ve "Loading.. / Survive" dünya yükleme ekranı görüldü, log'da dünya açılıyor
+  ("Opening level ..."). Oynanış ve girdi denenmedi.
+- Keychain, Catalyst'teki `modules/storage/KeychainShim.mm` ile (aynı dosya,
+  host'a da derleniyor).
+
 ## Dosya düzeni
 
 | Yol | İçerik |
@@ -35,6 +45,11 @@ Catalyst olmadan**:
 | `host/uikit/include/PearUIKit.h` | kendi UIKit bildirimlerimiz (ABI değerleri genel başlıklarla aynı) |
 | `host/uikit/src/` | elle yazılmış sınıflar: UIApplication, UIView/UIWindow/UIViewController, UIScreen, UIDevice, UIResponder, UITouch/UIEvent, UIColor, UITraitCollection, UIAlertController |
 | `host/uikit/backend/appkit/` | macOS arka ucu: NSWindow, layer hosting, display link, fare → dokunma, NSAlert |
+| `host/uikit/src/UINib.m` | NIBArchive nib yükleyici: UINib, outlet bağlantıları, NSMainNibFile, NSBundle loadNibNamed:owner:options:, NSCoder geometri kategorisi |
+| `host/metalkit/MTKView.m` | MetalKit.framework: UIView tabanlı MTKView (macOS'unki NSView olduğu için) |
+| `host/opengles/EAGL.m` | OpenGLES.framework: GL'yi ANGLE'dan yeniden dışa aktarır; EAGL sabitleri; EAGLContext şimdilik nil döndürür |
+| `host/core/PearCatalystCompat.h` | UIKit'e bağlı olmayan Catalyst modüllerini host'a derlemek için (şu an KeychainShim) |
+| `tools/nibdump.py` | derlenmiş nib (NIBArchive) döküm aracı; biçim notları dosyanın başında |
 | `host/uikit/generated/` | `tools/gen-uikit-stubs.py` çıktısı; elle düzenlenmez |
 | `host/build-host.sh` | `build/host/UIKit.framework`, `iAd.framework` üretir |
 | `tools/ios-import-census.py` | bir uygulamanın hangi API'leri kullandığını çıkarır |
@@ -101,6 +116,13 @@ loglanıyor), `+[CADisplayLink displayLinkWithTarget:selector:]` (macOS'ta yok,
 NSView display link'ine bağlandı), Backtrace'in MobileCoreServices sembolleri
 (CoreServices'e yönlendirildi), Swift çalışma zamanı rpath'i.
 
+## Minecraft'ın son çalışmadaki eksikleri (`docs/runs/minecraft-1.26.60-2026-11-14-missing.jsonl`)
+
+| API | Etki / yapılacak |
+| --- | --- |
+| `-[UITextView setDelegate:/setAutocorrectionType:/setAutocapitalizationType:/setSmartQuotesType:]` | UITextView yalnızca stub; oyun içi metin girişi (sohbet, dünya adı) için gerçek bir metin girişi (UITextInput + AppKit metin girişi) gerekiyor. |
+| `UIAccessibilityIsVoiceOverRunning()` | NO döndürmeli. |
+
 ## Bilinen sorunlar
 
 1. `UIFont` sınıfı macOS'un `UIFoundation` özel çerçevesinde de var; objc iki
@@ -114,6 +136,16 @@ NSView display link'ine bağlandı), Backtrace'in MobileCoreServices sembolleri
 4. Çoklu dokunma yok (tek fare = tek dokunma). Catalyst `input` modülündeki
    keymapper/sanal gamepad henüz host'a taşınmadı.
 5. Ses yolu (AVAudioSession macOS'ta) doğrulanmadı.
+6. Host OpenGLES, PearLegacyEngine'in macOS ANGLE derlemesini kullanıyor
+   (`PEAR_HOST_ANGLE_DIR`, varsayılan `~/PearLegacyEngine/vendor/angle/out/MacMetal`,
+   upstream ANGLE). PearANGLE çatalının macOS-platform derlemesine geçilmeli.
+   EAGLContext henüz yok (nil döner); GLES oyunları için `modules/graphics-gl`
+   EAGL-on-EGL kodu host'a taşınmalı.
+7. macOS display link'i `setFrameInterval:` vb. için istisna fırlatıyor; host,
+   kurulumda bu selector'ları deneyip fırlatanları değiştiriyor (log: "provided by
+   the host").
+8. Launch bloğundaki istisnalar artık yığın izi ile loglanıp abort ediliyor
+   (AppKit bunları sessizce yutuyordu).
 
 ## Sıradaki işler (öncelik sırasıyla)
 
@@ -124,8 +156,9 @@ NSView display link'ine bağlandı), Backtrace'in MobileCoreServices sembolleri
 3. Ses ve kayıt/yüklemeyi doğrula; `missing.jsonl` sıfıra inene kadar devam.
 4. PearSilicon'a "PearHost modu" seçeneği (IPA'dan doğrudan; Catalyst dönüşümü atlanır): `host-prepare.sh` adımlarını
    kurulum hattına taşı, uygulama başına mod seçimi.
-5. Başka oyunlarla sayım (`docs/census/`): Minecraft, Asphalt 6 (32-bit,
-   PearLegacyEngine), Miku Flick. Her yeni oyun yeni sınıflar getirir;
+5. Minecraft: UITextView/metin girişi, dokunma/fare ve klavye ile oynanış.
+   Diğer oyunlarla sayım (`docs/census/`): Asphalt 6 (32-bit, PearLegacyEngine),
+   Miku Flick. Her yeni oyun yeni sınıflar getirir;
    üretici stub'ları otomatik ekler.
 6. Linux hazırlığı: arka ucu (`backend/appkit`) SDL/Wayland eşleniğiyle
    çoğaltmak için `PearUIKitPrivate.h` arayüzü zaten platformdan bağımsız.

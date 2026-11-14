@@ -4,6 +4,7 @@
 #import <AppKit/AppKit.h>
 #import <IOKit/pwr_mgt/IOPMLib.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import "../../src/PearUIKitPrivate.h"
 
 @interface PearHostView : NSView
@@ -114,6 +115,41 @@ static id pearDisplayLinkClassFactory(id self, SEL _cmd, id target, SEL selector
     return PearBackendDisplayLink(target, selector);
 }
 
+// iOS CADisplayLink API that macOS's display link lacks. Documented semantics:
+// frameInterval N = fire every Nth refresh; preferredFramesPerSecond = target
+// rate (0 = native). Both map onto preferredFrameRateRange.
+static const void *kFrameIntervalKey = &kFrameIntervalKey;
+static const void *kPreferredFPSKey = &kPreferredFPSKey;
+
+static void applyRate(CADisplayLink *link, double fps) API_AVAILABLE(macos(14.0)) {
+    double maxFPS = (double)PearBackendScreenInfo().maxFPS;
+    if (fps <= 0 || fps > maxFPS) fps = maxFPS;
+    link.preferredFrameRateRange = CAFrameRateRangeMake((float)fps, (float)fps, (float)fps);
+}
+static NSInteger pearFrameInterval(id self, SEL _cmd) {
+    NSNumber *n = objc_getAssociatedObject(self, kFrameIntervalKey);
+    return n ? n.integerValue : 1;
+}
+static void pearSetFrameInterval(id self, SEL _cmd, NSInteger interval) {
+    if (interval < 1) interval = 1;
+    objc_setAssociatedObject(self, kFrameIntervalKey, @(interval), OBJC_ASSOCIATION_RETAIN);
+    if (@available(macOS 14.0, *)) applyRate(self, (double)PearBackendScreenInfo().maxFPS / (double)interval);
+}
+static NSInteger pearPreferredFPS(id self, SEL _cmd) {
+    return [objc_getAssociatedObject(self, kPreferredFPSKey) integerValue];
+}
+static void pearSetPreferredFPS(id self, SEL _cmd, NSInteger fps) {
+    objc_setAssociatedObject(self, kPreferredFPSKey, @(fps), OBJC_ASSOCIATION_RETAIN);
+    if (@available(macOS 14.0, *)) applyRate(self, (double)fps);
+}
+
+static void addIfMissing(Class cls, SEL sel, IMP imp, const char *types) {
+    if (![cls instancesRespondToSelector:sel]) {
+        class_addMethod(cls, sel, imp, types);
+        PearHostLog("host", "-[%s %s] provided by the host", class_getName(cls), sel_getName(sel));
+    }
+}
+
 void PearBackendInstallQuartzCoreCompat(void) {
     Class cls = objc_getClass("CADisplayLink");
     if (!cls) {
@@ -124,6 +160,35 @@ void PearBackendInstallQuartzCoreCompat(void) {
     if (![cls respondsToSelector:sel]) {
         class_addMethod(object_getClass(cls), sel, (IMP)pearDisplayLinkClassFactory, "@@:@:");
         PearHostLog("host", "+[CADisplayLink displayLinkWithTarget:selector:] provided by the host");
+    }
+    // macOS's concrete display link class inherits these selectors but raises
+    // when they are sent (observed: -[_NSDisplayLink setFrameInterval:]).
+    // Probe a real instance; replace each selector that raises or is missing.
+    if (@available(macOS 14.0, *)) {
+        CADisplayLink *probe = [NSScreen.mainScreen displayLinkWithTarget:NSNull.null selector:@selector(class)];
+        Class concrete = probe ? object_getClass(probe) : cls;
+        struct { SEL sel; IMP imp; const char *types; BOOL setter; } table[] = {
+            {@selector(frameInterval), (IMP)pearFrameInterval, "q@:", NO},
+            {@selector(setFrameInterval:), (IMP)pearSetFrameInterval, "v@:q", YES},
+            {@selector(preferredFramesPerSecond), (IMP)pearPreferredFPS, "q@:", NO},
+            {@selector(setPreferredFramesPerSecond:), (IMP)pearSetPreferredFPS, "v@:q", YES},
+        };
+        for (size_t i = 0; i < sizeof table / sizeof table[0]; i++) {
+            BOOL works = NO;
+            if (probe && [probe respondsToSelector:table[i].sel]) {
+                @try {
+                    if (table[i].setter) ((void (*)(id, SEL, NSInteger))objc_msgSend)(probe, table[i].sel, 1);
+                    else ((NSInteger(*)(id, SEL))objc_msgSend)(probe, table[i].sel);
+                    works = YES;
+                } @catch (NSException *e) {
+                }
+            }
+            if (!works) {
+                class_replaceMethod(concrete, table[i].sel, table[i].imp, table[i].types);
+                PearHostLog("host", "-[%s %s] provided by the host", class_getName(concrete), sel_getName(table[i].sel));
+            }
+        }
+        [probe invalidate];
     }
 }
 

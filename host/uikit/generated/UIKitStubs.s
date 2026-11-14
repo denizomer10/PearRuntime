@@ -40,6 +40,58 @@ _UIAccessibilityRegisterGestureConflictWithZoom:
     bl _PearMissingReport
     ldp x29, x30, [sp], #16
     b _pear_missing_zero
+    .p2align 2
+    .globl _UIGraphicsBeginPDFContextToFile
+_UIGraphicsBeginPDFContextToFile:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    mov x0, #2
+    mov x1, #0
+    adrp x2, Lname3@PAGE
+    add x2, x2, Lname3@PAGEOFF
+    mov x3, x30
+    bl _PearMissingReport
+    ldp x29, x30, [sp], #16
+    b _pear_missing_zero
+    .p2align 2
+    .globl _UIGraphicsBeginPDFPageWithInfo
+_UIGraphicsBeginPDFPageWithInfo:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    mov x0, #2
+    mov x1, #0
+    adrp x2, Lname4@PAGE
+    add x2, x2, Lname4@PAGEOFF
+    mov x3, x30
+    bl _PearMissingReport
+    ldp x29, x30, [sp], #16
+    b _pear_missing_zero
+    .p2align 2
+    .globl _UIGraphicsEndPDFContext
+_UIGraphicsEndPDFContext:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    mov x0, #2
+    mov x1, #0
+    adrp x2, Lname5@PAGE
+    add x2, x2, Lname5@PAGEOFF
+    mov x3, x30
+    bl _PearMissingReport
+    ldp x29, x30, [sp], #16
+    b _pear_missing_zero
+    .p2align 2
+    .globl _UIGraphicsGetCurrentContext
+_UIGraphicsGetCurrentContext:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    mov x0, #2
+    mov x1, #0
+    adrp x2, Lname6@PAGE
+    add x2, x2, Lname6@PAGEOFF
+    mov x3, x30
+    bl _PearMissingReport
+    ldp x29, x30, [sp], #16
+    b _pear_missing_zero
     .section __TEXT,__cstring,cstring_literals
 Lname0:
     .asciz "UIAccessibilityIsVoiceOverRunning"
@@ -47,3 +99,11 @@ Lname1:
     .asciz "UIAccessibilityPostNotification"
 Lname2:
     .asciz "UIAccessibilityRegisterGestureConflictWithZoom"
+Lname3:
+    .asciz "UIGraphicsBeginPDFContextToFile"
+Lname4:
+    .asciz "UIGraphicsBeginPDFPageWithInfo"
+Lname5:
+    .asciz "UIGraphicsEndPDFContext"
+Lname6:
+    .asciz "UIGraphicsGetCurrentContext"

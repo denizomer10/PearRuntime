@@ -2,7 +2,8 @@
 
 Durum: 2026-11-14 itibarıyla ilk hedef (GTA: Vice City – Definitive Edition
 1.84, Unreal Engine 4, Metal) orijinal IPA'dan, Mac Catalyst dönüşümü ve
-iOSSupport olmadan oynanış sahnesine ulaşıyor. Güncel durum, çalıştırma adımları ve sıradaki işler için
+iOSSupport olmadan oynanış sahnesine ulaşıyor; Minecraft (Bedrock, Metal,
+nib tabanlı açılış) ana ekrana ve dünya yüklemesine ulaşıyor. Güncel durum, çalıştırma adımları ve sıradaki işler için
 [HANDOFF.md](HANDOFF.md).
 
 ## 1. Hedef mimari
@@ -41,8 +42,9 @@ başına seçilecek.
 yollarını macOS'un kendisinden çözer, `/System/iOSSupport` hiç devreye girmez.
 GameController, GameKit, StoreKit, AVFoundation, CoreMotion, UserNotifications
 gibi çerçevelerin macOS sürümleri aynı yolda bulunduğu için yeniden yazılması
-gerekmez (Linux'ta gerekir). Yalnızca macOS'ta karşılığı olmayanlar (UIKit,
-iAd, …) PearHost imajlarına yönlendirilir.
+gerekmez (Linux'ta gerekir). macOS'ta karşılığı olmayanlar (UIKit, iAd,
+OpenGLES) ve macOS'taki karşılığı iOS ABI'sinden farklı olanlar (MetalKit:
+MTKView macOS'ta NSView) PearHost imajlarına yönlendirilir.
 
 Bu, Linux hedefiyle aynı modeldir: uygulama, "iOS" yerine bizim sağladığımız
 bir platform üzerinde çalışır.

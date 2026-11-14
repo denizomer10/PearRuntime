@@ -32,11 +32,14 @@ void PearHostLog(const char *area, const char *fmt, ...) {
         gLogFile = path && *path ? fopen(path, "a") : NULL;
         if (!gLogFile) gLogFile = (FILE *)-1;
     }
-    if (area && *area) fprintf(stderr, "[PearRuntime][%s] %s\n", area, msg);
-    else fprintf(stderr, "[PearRuntime] %s\n", msg);
+    // area NULL: the message carries its own prefix (Catalyst modules).
+    const char *pre = area ? "[PearRuntime]" : "";
+    char tag[64] = "";
+    if (area && *area) snprintf(tag, sizeof tag, "[%s]", area);
+    const char *sep = area ? " " : "";
+    fprintf(stderr, "%s%s%s%s\n", pre, tag, sep, msg);
     if (gLogFile != (FILE *)-1) {
-        if (area && *area) fprintf(gLogFile, "[PearRuntime][%s] %s\n", area, msg);
-        else fprintf(gLogFile, "[PearRuntime] %s\n", msg);
+        fprintf(gLogFile, "%s%s%s%s\n", pre, tag, sep, msg);
         fflush(gLogFile);
     }
     os_unfair_lock_unlock(&gLogLock);

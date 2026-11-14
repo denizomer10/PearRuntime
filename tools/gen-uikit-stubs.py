@@ -36,6 +36,22 @@ STRING_TYPES = re.compile(r"\b(NSString|NSNotificationName|UIActivityType|NSAttr
                           r"UI\w*Identifier|UIPasteboardName|UIFontTextStyle|UIFontDescriptor\w*)\b")
 
 
+# Window levels are documented ordering values (normal < status bar < alert).
+WINDOW_LEVELS = {"UIWindowLevelNormal": 0.0, "UIWindowLevelStatusBar": 1000.0, "UIWindowLevelAlert": 2000.0}
+
+# Names a macOS framework already exports (AppKit re-exports UIFoundation:
+# NSParagraphStyle, NSFontAttributeName, ...). Our UIKit re-exports AppKit for
+# these instead of defining a second copy.
+def macos_exports():
+    sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
+    names = set()
+    for fw in ("AppKit", "UIFoundation"):
+        for t in glob.glob(os.path.join(sdk, f"System/Library/*Frameworks/{fw}.framework/*.tbd")):
+            text = open(t, errors="ignore").read()
+            names |= set(re.findall(r"\b_?(NS\w+)\b", text))
+    return names
+
+
 def headers():
     sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
     hd = os.path.join(sdk, "System/iOSSupport/System/Library/Frameworks/UIKit.framework/Headers")
@@ -63,9 +79,13 @@ def extern_decls(hdrs):
         t = re.sub(r"//[^\n]*", "", t)
         for stmt in t.split(";"):
             stmt = " ".join(stmt.split())
-            if not re.search(r"\b(?:UIKIT_EXTERN|extern)\b", stmt) or "{" in stmt or "@" in stmt:
+            if not re.search(r"\b(?:UIKIT_EXTERN|extern)\b", stmt):
                 continue
+            # The chunk may start with unrelated text (@end, a brace); keep only
+            # what follows the last extern keyword.
             body = stmt[stmt.rfind("extern") + 6:] if "UIKIT_EXTERN" not in stmt else stmt[stmt.rfind("UIKIT_EXTERN") + 12:]
+            if "{" in body or "@" in body or "}" in body:
+                continue
             body = attr.sub(" ", body).strip()
             m = re.match(r"(.*?)\b(\w+)\s*(\(.*\))?\s*$", body)
             if not m:
@@ -100,6 +120,10 @@ def main(argv):
     sup = superclasses(hdrs)
     decls = extern_decls(hdrs)
     have_classes, have_syms = implemented()
+    from_macos = macos_exports()
+    want_classes = {c for c in want_classes if not (c.startswith("NS") and c in from_macos)}
+    reexported = {n for n in want_syms if n.startswith("NS") and n in from_macos}
+    want_syms -= reexported
 
     # Close over superclasses that UIKit itself defines.
     todo = sorted(want_classes)
@@ -145,6 +169,10 @@ def main(argv):
             # as functions far more often than data; a stub that reports is the
             # safe guess either way.
             funcs.append(name)
+        elif kind == "data" and re.search(r"\b(UIWindowLevel|CGFloat|double)\b", typ):
+            m.append(f"PEAR_UIKIT_EXPORT const double {name} = {WINDOW_LEVELS.get(name, 0.0)}; // CGFloat")
+        elif kind == "data" and re.search(r"\bUIBackgroundTaskIdentifier\b", typ):
+            m.append(f"PEAR_UIKIT_EXPORT const unsigned long {name} = 0;  // documented invalid identifier")
         elif kind == "data" and "UIAccessibilityTraits" in typ:
             bit = 0 if name.endswith("None") else 1 << (len(placeholders) + 1)
             m.append(f"PEAR_UIKIT_EXPORT const uint64_t {name} = {bit}ULL; // trait bit chosen by PearHost")
@@ -174,6 +202,7 @@ def main(argv):
     with open(os.path.join(OUT, "UIKitStubs.s"), "w") as fh:
         fh.write("\n".join(s) + "\n")
 
+    print(f"re-exported from AppKit: {' '.join(sorted(reexported)) or '-'}")
     print(f"classes: {len(want_classes)} wanted, {len(order)} stubbed, {len(want_classes & have_classes)} implemented")
     print(f"symbols: {len(want_syms)} wanted, {len(funcs)} function stubs, {len(placeholders)} placeholder data, "
           f"{len(want_syms & have_syms)} implemented")

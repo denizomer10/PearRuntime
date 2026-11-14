@@ -67,6 +67,11 @@ void PearUIKitScreenDidChange(CGSize pointSize, CGFloat scale);
 - (void)pear_presentWithCompletion:(nullable void (^)(void))completion;
 @end
 
+@interface UINib ()
+- (NSArray *)pear_instantiateWithOwner:(nullable id)owner options:(nullable NSDictionary *)options
+                        visibleWindows:(NSArray *_Nullable *_Nullable)visible;
+@end
+
 @interface UIViewController ()
 - (void)pear_setPresenting:(nullable UIViewController *)vc;
 @end

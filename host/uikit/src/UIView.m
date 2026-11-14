@@ -38,8 +38,29 @@
     return self;
 }
 - (instancetype)initWithCoder:(NSCoder *)coder {
-    if ((self = [super init])) [self pear_commonInit:CGRectZero];
+    if ((self = [super init])) {
+        [self pear_commonInit:CGRectZero];
+        [self pear_decodeViewWithCoder:coder];
+    }
     return self;
+}
+
+// Keys as stored in the apps' compiled nibs (see tools/nibdump.py).
+- (void)pear_decodeViewWithCoder:(NSCoder *)c {
+    if ([c containsValueForKey:@"UIBounds"]) self.bounds = [c decodeCGRectForKey:@"UIBounds"];
+    if ([c containsValueForKey:@"UICenter"]) self.center = [c decodeCGPointForKey:@"UICenter"];
+    if ([c containsValueForKey:@"UIAutoresizingMask"]) _autoresizing = (UIViewAutoresizing)[c decodeIntegerForKey:@"UIAutoresizingMask"];
+    if ([c containsValueForKey:@"UIOpaque"]) self.opaque = [c decodeBoolForKey:@"UIOpaque"];
+    if ([c containsValueForKey:@"UIHidden"]) self.hidden = [c decodeBoolForKey:@"UIHidden"];
+    if ([c containsValueForKey:@"UIAlpha"]) self.alpha = [c decodeDoubleForKey:@"UIAlpha"];
+    if ([c containsValueForKey:@"UITag"]) _tag = [c decodeIntegerForKey:@"UITag"];
+    if ([c containsValueForKey:@"UIClearsContextBeforeDrawing"]) _clearsContext = [c decodeBoolForKey:@"UIClearsContextBeforeDrawing"];
+    if ([c containsValueForKey:@"UIMultipleTouchEnabled"]) _multipleTouch = [c decodeBoolForKey:@"UIMultipleTouchEnabled"];
+    if ([c containsValueForKey:@"UIUserInteractionDisabled"]) _userInteraction = ![c decodeBoolForKey:@"UIUserInteractionDisabled"];
+    id bg = [c decodeObjectForKey:@"UIBackgroundColor"];
+    if ([bg isKindOfClass:[UIColor class]]) self.backgroundColor = bg;
+    for (id sub in [c decodeObjectForKey:@"UISubviews"] ?: @[])
+        if ([sub isKindOfClass:[UIView class]]) [self addSubview:sub];
 }
 
 - (CALayer *)layer { return _layer; }
@@ -283,19 +304,49 @@
     UIRectEdge _edges;
     UIViewController *_presented;
     __weak UIViewController *_presenting;
+    NSString *_nibName;
+    NSBundle *_nibBundle;
 }
 - (instancetype)init { return [self initWithNibName:nil bundle:nil]; }
 - (instancetype)initWithNibName:(NSString *)nibName bundle:(NSBundle *)bundle {
     if ((self = [super init])) {
         _edges = UIRectEdgeAll;
-        if (nibName)
-            PearMissingReport(PearMissingBehavior, "UIViewController", "nib loading", __builtin_return_address(0));
+        _nibName = [nibName copy];
+        _nibBundle = bundle;
     }
     return self;
 }
-- (instancetype)initWithCoder:(NSCoder *)coder { return [self initWithNibName:nil bundle:nil]; }
+- (instancetype)initWithCoder:(NSCoder *)coder {
+    if ((self = [super init])) {
+        _edges = UIRectEdgeAll;
+        _nibName = [[coder decodeObjectForKey:@"UINibName"] copy];
+        if ([coder containsValueForKey:@"UIKeyEdgesForExtendedLayout"])
+            _edges = (UIRectEdge)[coder decodeIntegerForKey:@"UIKeyEdgesForExtendedLayout"];
+        id v = [coder decodeObjectForKey:@"UIView"];
+        if ([v isKindOfClass:[UIView class]]) self.view = v;
+    }
+    return self;
+}
 
-- (void)loadView { self.view = [[UIView alloc] initWithFrame:UIScreen.mainScreen.bounds]; }
+- (NSString *)nibName { return _nibName; }
+- (NSBundle *)nibBundle { return _nibBundle ?: NSBundle.mainBundle; }
+
+// Documented default: load the named nib with self as owner (its "view" outlet
+// sets the view); without a nib, create a plain view.
+- (void)loadView {
+    if (_nibName.length) {
+        UINib *nib = [UINib nibWithNibName:_nibName bundle:self.nibBundle];
+        if (nib) {
+            [nib instantiateWithOwner:self options:nil];
+            if (_view) return;
+        } else {
+            PearMissingReport(PearMissingBehavior, class_getName([self class]),
+                              [NSString stringWithFormat:@"nib %@ not in bundle; using a plain view", _nibName].UTF8String,
+                              __builtin_return_address(0));
+        }
+    }
+    self.view = [[UIView alloc] initWithFrame:UIScreen.mainScreen.bounds];
+}
 - (UIView *)view {
     if (!_view) {
         [self loadView];
@@ -398,6 +449,16 @@
 - (instancetype)initWithFrame:(CGRect)frame {
     if ((self = [super initWithFrame:frame])) {
         _screen = UIScreen.mainScreen;
+        [self pear_setWindow:self];
+        PearUIKitRegisterWindow(self);
+    }
+    return self;
+}
+- (instancetype)initWithCoder:(NSCoder *)coder {
+    if ((self = [super initWithCoder:coder])) {
+        _screen = UIScreen.mainScreen;
+        // Nib windows are designed for a phone-sized canvas; they fill the screen.
+        self.frame = UIScreen.mainScreen.bounds;
         [self pear_setWindow:self];
         PearUIKitRegisterWindow(self);
     }

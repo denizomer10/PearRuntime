@@ -16,7 +16,8 @@ extern "C" {
 #define PEAR_EXPORT __attribute__((visibility("default")))
 
 // Log with the "[PearRuntime][<area>]" prefix PearDebug parses. Goes to stderr
-// and, when PEAR_LOG_FILE is set, is appended to that file.
+// and, when PEAR_LOG_FILE is set, is appended to that file. area NULL writes
+// the message as is (it already carries a prefix).
 PEAR_EXPORT void PearHostLog(const char *area, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
 // Missing-call reporting. Every call that reaches an API PearHost does not

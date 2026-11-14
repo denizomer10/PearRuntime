@@ -42,7 +42,9 @@ if [[ "${CRYPT:-0}" != 0 ]]; then
 fi
 
 # Frameworks that exist only in iOSSupport (no macOS framework of the same path).
-REDIRECT=(UIKit iAd)
+# MetalKit exists on macOS, but its MTKView is an NSView; iOS apps need the
+# UIView-based one.
+REDIRECT=(UIKit iAd OpenGLES MetalKit)
 # iOS framework paths whose API macOS ships under another framework.
 SYSTEM_MAP=("/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices=/System/Library/Frameworks/CoreServices.framework/CoreServices")
 
@@ -70,8 +72,9 @@ for item in "$SRC"/Frameworks/*; do
   esac
 done
 for fw in "${REDIRECT[@]}"; do
-  cp -R "$HOST/$fw.framework" "$DST/Frameworks/"
+  [[ -d "$HOST/$fw.framework" ]] && cp -R "$HOST/$fw.framework" "$DST/Frameworks/"
 done
+[[ -d "$HOST/PearANGLE" ]] && cp -R "$HOST/PearANGLE" "$DST/Frameworks/"
 echo 'void pear_catalyst_runtime_placeholder(void) {}' > "$DST/Frameworks/.placeholder.c"
 xcrun --sdk macosx clang -target arm64-apple-macos14.0 -dynamiclib "$DST/Frameworks/.placeholder.c" \
   -install_name @rpath/libPearHostPlaceholder.dylib -o "$DST/Frameworks/libPearHostPlaceholder.dylib"
@@ -114,6 +117,8 @@ retarget "$DST/$EXE"
 while IFS= read -r -d '' bin; do
   if file "$bin" | grep -q 'Mach-O'; then retarget "$bin"; fi
 done < <(find "$DST/Frameworks" -type f ! -name "*.plist" ! -path "*/_CodeSignature/*" -print0)
-for fw in "${REDIRECT[@]}"; do codesign -f -s - "$DST/Frameworks/$fw.framework/$fw" 2>/dev/null; done
+for fw in "${REDIRECT[@]}"; do
+  [[ -f "$DST/Frameworks/$fw.framework/$fw" ]] && codesign -f -s - "$DST/Frameworks/$fw.framework/$fw" 2>/dev/null
+done
 codesign -f -s - "$DST/Frameworks/libPearHostPlaceholder.dylib" 2>/dev/null
 echo ">> $DST"

@@ -13,6 +13,26 @@
 @implementation UIActivityViewController
 @end
 
+@interface UIBarItem : NSObject
+@end
+@implementation UIBarItem
+@end
+
+@interface UIBarButtonItem : UIBarItem
+@end
+@implementation UIBarButtonItem
+@end
+
+@interface UIDocument : NSObject
+@end
+@implementation UIDocument
+@end
+
+@interface UIDocumentPickerViewController : UIViewController
+@end
+@implementation UIDocumentPickerViewController
+@end
+
 @interface UIFeedbackGenerator : NSObject
 @end
 @implementation UIFeedbackGenerator
@@ -28,9 +48,44 @@
 @implementation UIImage
 @end
 
+@interface UINavigationController : UIViewController
+@end
+@implementation UINavigationController
+@end
+
+@interface UIImagePickerController : UINavigationController
+@end
+@implementation UIImagePickerController
+@end
+
 @interface UIImpactFeedbackGenerator : UIFeedbackGenerator
 @end
 @implementation UIImpactFeedbackGenerator
+@end
+
+@interface UILabel : UIView
+@end
+@implementation UILabel
+@end
+
+@interface UIUserNotificationAction : NSObject
+@end
+@implementation UIUserNotificationAction
+@end
+
+@interface UIMutableUserNotificationAction : UIUserNotificationAction
+@end
+@implementation UIMutableUserNotificationAction
+@end
+
+@interface UIUserNotificationCategory : NSObject
+@end
+@implementation UIUserNotificationCategory
+@end
+
+@interface UIMutableUserNotificationCategory : UIUserNotificationCategory
+@end
+@implementation UIMutableUserNotificationCategory
 @end
 
 @interface UINotificationFeedbackGenerator : UIFeedbackGenerator
@@ -43,6 +98,26 @@
 @implementation UIPasteboard
 @end
 
+@interface UIPointerInteraction : NSObject
+@end
+@implementation UIPointerInteraction
+@end
+
+@interface UIPopoverController : NSObject
+@end
+@implementation UIPopoverController
+@end
+
+@interface UIProgressView : UIView
+@end
+@implementation UIProgressView
+@end
+
+@interface UIScrollView : UIView
+@end
+@implementation UIScrollView
+@end
+
 @interface UISelectionFeedbackGenerator : UIFeedbackGenerator
 @end
 @implementation UISelectionFeedbackGenerator
@@ -51,6 +126,11 @@
 @interface UIStoryboard : NSObject
 @end
 @implementation UIStoryboard
+@end
+
+@interface UITabBarController : UIViewController
+@end
+@implementation UITabBarController
 @end
 
 @interface UITextPosition : NSObject
@@ -63,16 +143,26 @@
 @implementation UITextRange
 @end
 
-PEAR_UIKIT_EXPORT NSString *const NSDocumentTypeDocumentAttribute = @"NSDocumentTypeDocumentAttribute";
-PEAR_UIKIT_EXPORT NSString *const NSPlainTextDocumentType = @"NSPlainTextDocumentType";
+@interface UITextView : UIScrollView
+@end
+@implementation UITextView
+@end
+
+@interface UIUserNotificationSettings : NSObject
+@end
+@implementation UIUserNotificationSettings
+@end
+
 PEAR_UIKIT_EXPORT NSString *const UIAccessibilityAnnouncementNotification = @"UIAccessibilityAnnouncementNotification";
 PEAR_UIKIT_EXPORT NSString *const UIAccessibilityLayoutChangedNotification = @"UIAccessibilityLayoutChangedNotification";
+PEAR_UIKIT_EXPORT NSString *const UIAccessibilityScreenChangedNotification = @"UIAccessibilityScreenChangedNotification";
 PEAR_UIKIT_EXPORT const uint64_t UIAccessibilityTraitAdjustable = 2ULL; // trait bit chosen by PearHost
-PEAR_UIKIT_EXPORT const uint64_t UIAccessibilityTraitButton = 4ULL; // trait bit chosen by PearHost
-PEAR_UIKIT_EXPORT const uint64_t UIAccessibilityTraitImage = 8ULL; // trait bit chosen by PearHost
-PEAR_UIKIT_EXPORT const uint64_t UIAccessibilityTraitLink = 16ULL; // trait bit chosen by PearHost
+PEAR_UIKIT_EXPORT const uint64_t UIAccessibilityTraitAllowsDirectInteraction = 4ULL; // trait bit chosen by PearHost
+PEAR_UIKIT_EXPORT const uint64_t UIAccessibilityTraitButton = 8ULL; // trait bit chosen by PearHost
+PEAR_UIKIT_EXPORT const uint64_t UIAccessibilityTraitImage = 16ULL; // trait bit chosen by PearHost
+PEAR_UIKIT_EXPORT const uint64_t UIAccessibilityTraitLink = 32ULL; // trait bit chosen by PearHost
 PEAR_UIKIT_EXPORT const uint64_t UIAccessibilityTraitNone = 0ULL; // trait bit chosen by PearHost
-PEAR_UIKIT_EXPORT const uint64_t UIAccessibilityTraitNotEnabled = 64ULL; // trait bit chosen by PearHost
+PEAR_UIKIT_EXPORT const uint64_t UIAccessibilityTraitNotEnabled = 128ULL; // trait bit chosen by PearHost
 PEAR_UIKIT_EXPORT NSString *const UIAccessibilityVoiceOverStatusDidChangeNotification = @"UIAccessibilityVoiceOverStatusDidChangeNotification";
 PEAR_UIKIT_EXPORT NSString *const UIActivityTypeAssignToContact = @"UIActivityTypeAssignToContact";
 PEAR_UIKIT_EXPORT NSString *const UIActivityTypePostToFlickr = @"UIActivityTypePostToFlickr";
@@ -80,11 +170,23 @@ PEAR_UIKIT_EXPORT NSString *const UIActivityTypePostToVimeo = @"UIActivityTypePo
 PEAR_UIKIT_EXPORT NSString *const UIActivityTypePrint = @"UIActivityTypePrint";
 PEAR_UIKIT_EXPORT NSString *const UIActivityTypeSaveToCameraRoll = @"UIActivityTypeSaveToCameraRoll";
 PEAR_UIKIT_EXPORT NSString *const UIApplicationDidChangeStatusBarOrientationNotification = @"UIApplicationDidChangeStatusBarOrientationNotification";
+PEAR_UIKIT_EXPORT NSString *const UIApplicationLaunchOptionsRemoteNotificationKey = @"UIApplicationLaunchOptionsRemoteNotificationKey";
+PEAR_UIKIT_EXPORT NSString *const UIApplicationOpenSettingsURLString = @"UIApplicationOpenSettingsURLString";
+PEAR_UIKIT_EXPORT NSString *const UIApplicationOpenURLOptionsSourceApplicationKey = @"UIApplicationOpenURLOptionsSourceApplicationKey";
 PEAR_UIKIT_EXPORT NSString *const UIApplicationStatusBarOrientationUserInfoKey = @"UIApplicationStatusBarOrientationUserInfoKey";
+PEAR_UIKIT_EXPORT const unsigned long UIBackgroundTaskInvalid = 0;  // documented invalid identifier
 PEAR_UIKIT_EXPORT NSString *const UIDeviceBatteryLevelDidChangeNotification = @"UIDeviceBatteryLevelDidChangeNotification";
 PEAR_UIKIT_EXPORT NSString *const UIDeviceBatteryStateDidChangeNotification = @"UIDeviceBatteryStateDidChangeNotification";
 PEAR_UIKIT_EXPORT NSString *const UIDeviceOrientationDidChangeNotification = @"UIDeviceOrientationDidChangeNotification";
+PEAR_UIKIT_EXPORT NSString *const UIImagePickerControllerOriginalImage = @"UIImagePickerControllerOriginalImage";
+PEAR_UIKIT_EXPORT NSString *const UIKeyboardDidHideNotification = @"UIKeyboardDidHideNotification";
 PEAR_UIKIT_EXPORT NSString *const UIKeyboardDidShowNotification = @"UIKeyboardDidShowNotification";
+PEAR_UIKIT_EXPORT NSString *const UIKeyboardFrameBeginUserInfoKey = @"UIKeyboardFrameBeginUserInfoKey";
 PEAR_UIKIT_EXPORT NSString *const UIKeyboardFrameEndUserInfoKey = @"UIKeyboardFrameEndUserInfoKey";
 PEAR_UIKIT_EXPORT NSString *const UIKeyboardWillHideNotification = @"UIKeyboardWillHideNotification";
+PEAR_UIKIT_EXPORT NSString *const UIKeyboardWillShowNotification = @"UIKeyboardWillShowNotification";
+PEAR_UIKIT_EXPORT NSString *const UITextViewTextDidBeginEditingNotification = @"UITextViewTextDidBeginEditingNotification";
+PEAR_UIKIT_EXPORT NSString *const UITextViewTextDidChangeNotification = @"UITextViewTextDidChangeNotification";
+PEAR_UIKIT_EXPORT NSString *const UITextViewTextDidEndEditingNotification = @"UITextViewTextDidEndEditingNotification";
+PEAR_UIKIT_EXPORT const double UIWindowLevelNormal = 0.0; // CGFloat
 #pragma GCC visibility pop

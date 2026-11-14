@@ -220,6 +220,8 @@ typedef NS_OPTIONS(NSUInteger, UIRectEdge) {
 - (void)layoutIfNeeded;
 - (void)layoutSubviews;
 - (void)setNeedsDisplay;
+- (void)setNeedsDisplayInRect:(CGRect)rect;
+- (void)drawRect:(CGRect)rect;
 - (void)didMoveToWindow;
 - (void)didMoveToSuperview;
 - (void)willMoveToWindow:(nullable UIWindow *)newWindow;
@@ -288,6 +290,22 @@ typedef NS_OPTIONS(NSUInteger, UIRectEdge) {
 @property (nonatomic, readonly) NSArray<UIAlertAction *> *actions;
 @property (nonatomic, strong, nullable) UIAlertAction *preferredAction;
 - (void)addAction:(UIAlertAction *)action;
+@end
+
+// UIKit's geometry additions to NSCoder (public UIGeometry.h interface).
+@interface NSCoder (UIGeometryKeyedCoding)
+- (void)encodeCGPoint:(CGPoint)point forKey:(NSString *)key;
+- (void)encodeCGSize:(CGSize)size forKey:(NSString *)key;
+- (void)encodeCGRect:(CGRect)rect forKey:(NSString *)key;
+- (CGPoint)decodeCGPointForKey:(NSString *)key;
+- (CGSize)decodeCGSizeForKey:(NSString *)key;
+- (CGRect)decodeCGRectForKey:(NSString *)key;
+@end
+
+@interface UINib : NSObject
++ (nullable UINib *)nibWithNibName:(NSString *)name bundle:(nullable NSBundle *)bundle;
++ (UINib *)nibWithData:(NSData *)data bundle:(nullable NSBundle *)bundle;
+- (NSArray *)instantiateWithOwner:(nullable id)owner options:(nullable NSDictionary *)options;
 @end
 
 @interface UIApplication : UIResponder
