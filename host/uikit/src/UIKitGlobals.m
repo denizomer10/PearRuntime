@@ -106,9 +106,12 @@ void PearBackendInvokeScriptCall(id target, SEL sel, NSArray<NSString *> *args) 
     [inv invoke];
 }
 
+extern void pear_uikit_register_classes(void);
+
 // Install the missing-call reporter on every class in this image as soon as the
 // image loads, before the app sends its first message.
 __attribute__((constructor)) static void PearUIKitLoad(void) {
     PearHostLog("", "PearHost UIKit %s (no iOSSupport) loading", PEAR_RUNTIME_VERSION);
+    pear_uikit_register_classes();
     PearMissingInstallForImage((const void *)&PearUIKitLoad);
 }

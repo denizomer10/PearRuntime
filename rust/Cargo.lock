@@ -7,5 +7,37 @@ name = "pear-core"
 version = "0.1.0"
 
 [[package]]
+name = "pear-gles"
+version = "0.1.0"
+dependencies = [
+ "pear-core",
+ "pear-objc",
+]
+
+[[package]]
 name = "pear-macho"
 version = "0.1.0"
+
+[[package]]
+name = "pear-metalkit"
+version = "0.1.0"
+dependencies = [
+ "pear-objc",
+]
+
+[[package]]
+name = "pear-nib"
+version = "0.1.0"
+
+[[package]]
+name = "pear-objc"
+version = "0.1.0"
+
+[[package]]
+name = "pear-uikit"
+version = "0.1.0"
+dependencies = [
+ "pear-core",
+ "pear-nib",
+ "pear-objc",
+]

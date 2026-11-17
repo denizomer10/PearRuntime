@@ -105,6 +105,9 @@ def implemented():
         t = open(f).read()
         classes |= set(re.findall(r"@objc\((\w+)\)\s*(?:open|public|internal|final)?\s*class\b", t))
         symbols |= set(re.findall(r'@_cdecl\("(\w+)"\)', t))
+    for f in glob.glob(os.path.join(ROOT, "rust/crates/pear-uikit/src/*.rs")):
+        t = open(f).read()
+        symbols |= set(re.findall(r'#\[no_mangle\]\s+pub\s+extern\s+"C"\s+fn\s+(\w+)', t))
     return classes, symbols
 
 

@@ -2,6 +2,11 @@
 members = [
     "crates/pear-core",
     "crates/pear-macho",
+    "crates/pear-objc",
+    "crates/pear-nib",
+    "crates/pear-gles",
+    "crates/pear-metalkit",
+    "crates/pear-uikit",
 ]
 resolver = "2"
 

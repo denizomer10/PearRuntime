@@ -1,0 +1,14 @@
+[package]
+name = "pear-uikit"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "pear_uikit"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+pear-core = { path = "../pear-core" }
+pear-nib = { path = "../pear-nib" }
+pear-objc = { path = "../pear-objc" }
