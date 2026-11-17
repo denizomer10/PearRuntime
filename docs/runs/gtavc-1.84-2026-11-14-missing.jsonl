@@ -1,0 +1,8 @@
+{"event":"first","kind":"objc-class","api":"+[UIStoryboard storyboardWithName:bundle:]","caller":"Gameface+0x1718578","thread_main":true}
+{"event":"first","kind":"c-function","api":"UIAccessibilityIsVoiceOverRunning()","caller":"Gameface+0x171dae0","thread_main":false}
+{"event":"first","kind":"objc-instance","api":"-[UITraitCollection displayGamut]","caller":"Gameface+0x12b0434","thread_main":false}
+{"event":"first","kind":"objc-instance","api":"-[UIImpactFeedbackGenerator initWithStyle:]","caller":"Gameface+0x9f3f8c","thread_main":true}
+{"event":"summary","kind":"objc-instance","api":"-[UIImpactFeedbackGenerator initWithStyle:]","count":1,"first_caller":"Gameface+0x9f3f8c"}
+{"event":"summary","kind":"objc-instance","api":"-[UITraitCollection displayGamut]","count":1,"first_caller":"Gameface+0x12b0434"}
+{"event":"summary","kind":"c-function","api":"UIAccessibilityIsVoiceOverRunning()","count":2,"first_caller":"Gameface+0x171dae0"}
+{"event":"summary","kind":"objc-class","api":"+[UIStoryboard storyboardWithName:bundle:]","count":1,"first_caller":"Gameface+0x1718578"}
