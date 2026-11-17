@@ -101,6 +101,10 @@ def implemented():
         t = open(f).read()
         classes |= set(re.findall(r"@implementation\s+(\w+)\b(?!\s*\()", t))
         symbols |= set(re.findall(r"PEAR_UIKIT_EXPORT[^;{=]*?\b(\w+)\s*(?:\(|=)", t))
+    for f in glob.glob(os.path.join(SRC, "*.swift")):
+        t = open(f).read()
+        classes |= set(re.findall(r"@objc\((\w+)\)\s*(?:open|public|internal|final)?\s*class\b", t))
+        symbols |= set(re.findall(r'@_cdecl\("(\w+)"\)', t))
     return classes, symbols
 
 

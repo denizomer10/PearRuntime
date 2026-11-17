@@ -19,6 +19,7 @@ extern "C" {
 // and, when PEAR_LOG_FILE is set, is appended to that file. area NULL writes
 // the message as is (it already carries a prefix).
 PEAR_EXPORT void PearHostLog(const char *area, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+PEAR_EXPORT void PearHostLogMessage(const char *area, const char *message);
 
 // Missing-call reporting. Every call that reaches an API PearHost does not
 // implement yet is reported once with its caller (image+offset), then counted.
@@ -32,6 +33,7 @@ typedef enum {
 } PearMissingKind;
 
 PEAR_EXPORT void PearMissingReport(PearMissingKind kind, const char *owner, const char *name, const void *caller);
+PEAR_EXPORT void PearMissingWriteSummary(void);
 
 // Install forwarding hooks on every Objective-C class defined in the image that
 // contains `addressInImage`, so unimplemented selectors are reported and

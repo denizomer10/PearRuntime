@@ -15,6 +15,7 @@ typedef struct PearHostScreenInfo {
 } PearHostScreenInfo;
 
 // ---- backend -> implemented per platform ----------------------------------
+#ifndef PEAR_SWIFT_HOST
 void PearBackendInitialize(void);
 PearHostScreenInfo PearBackendScreenInfo(void);
 void *PearBackendCreateWindow(UIWindow *window, CGRect frame);
@@ -29,7 +30,13 @@ void PearBackendSetIdleTimerDisabled(BOOL disabled);
 void PearBackendStartInputScript(void);
 // Shows a native alert; reply receives the chosen button index (-1 if none).
 void PearBackendPresentAlert(NSString *title, NSString *message, NSArray<NSString *> *buttons, void (^reply)(NSInteger index));
+#endif
+void PearUIKitRunCatchingExceptions(void (^block)(void));
+BOOL PearUIKitTrySetValueForKey(id obj, _Nullable id value, NSString *key);
+BOOL PearUIKitTryProbeDisplayLinkSelector(id target, SEL sel, BOOL isSetter);
+void PearBackendInvokeScriptCall(id target, SEL sel, NSArray<NSString *> *args);
 
+#ifndef PEAR_SWIFT_HOST
 // ---- UIKit layer, called by the backend -------------------------------------
 // Pointer input in window points (top-left origin).
 void PearUIKitDeliverPointer(UIWindow *window, UITouchPhase phase, CGPoint point, NSTimeInterval timestamp);
@@ -43,6 +50,7 @@ void PearUIKitApplicationWillTerminate(void);
 // Keyboard: hardware keys become UIPress events for the first responder (or the
 // key window's root view); while a text responder (UIKeyInput) is first
 // responder, text and edit commands go to it instead.
+#endif
 typedef NS_ENUM(NSInteger, PearEditCommand) {
     PearEditDeleteBackward,
     PearEditNewline,
@@ -50,6 +58,7 @@ typedef NS_ENUM(NSInteger, PearEditCommand) {
     PearEditMoveRight,
     PearEditCancel,
 };
+#ifndef PEAR_SWIFT_HOST
 void PearUIKitDeliverKey(NSInteger hidUsage, NSString *chars, NSString *charsNoMods, NSInteger modifiers, BOOL down,
                          NSTimeInterval timestamp);
 BOOL PearUIKitTextInputActive(void);
@@ -95,9 +104,11 @@ void PearUIKitScreenDidChange(CGSize pointSize, CGFloat scale);
 - (void)pear_setViewController:(nullable UIViewController *)vc;
 @end
 
+#ifndef PEAR_SWIFT_HOST
 @interface UIAlertController ()
 - (void)pear_presentWithCompletion:(nullable void (^)(void))completion;
 @end
+#endif
 
 @interface UINib ()
 - (NSArray *)pear_instantiateWithOwner:(nullable id)owner options:(nullable NSDictionary *)options
@@ -107,5 +118,6 @@ void PearUIKitScreenDidChange(CGSize pointSize, CGFloat scale);
 @interface UIViewController ()
 - (void)pear_setPresenting:(nullable UIViewController *)vc;
 @end
+#endif
 
 NS_ASSUME_NONNULL_END

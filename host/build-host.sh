@@ -14,8 +14,14 @@ VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION" 2>/dev/null || echo dev)"
 TARGET="arm64-apple-macos14.0"
 CC=(xcrun --sdk macosx clang -target "$TARGET" -isysroot "$SDK" -O2 -mcpu=apple-m1 -fno-omit-frame-pointer
     -DPEAR_RUNTIME_VERSION="\"$VERSION\"")
+SWIFTC=(xcrun --sdk macosx swiftc -target "$TARGET" -sdk "$SDK" -O -wmo -parse-as-library)
+SWIFT_LINK=(-L"$SDK/usr/lib/swift" -Wl,-rpath,/usr/lib/swift)
 
 mkdir -p "$OUT_DIR/UIKit.framework"
+
+# Build the Rust core crate (pear-core: logging, missing-call tracking, JSONL).
+MACOSX_DEPLOYMENT_TARGET=14.0 cargo build --manifest-path "$ROOT/rust/Cargo.toml" --release --target aarch64-apple-darwin --target-dir "$OUT_DIR/rust-target"
+RUST_CORE_LIB="$OUT_DIR/rust-target/aarch64-apple-darwin/release/libpear_core.a"
 
 # Regenerate stubs from every census report (not the *-selectors.json side files).
 CENSUS=()
@@ -30,7 +36,7 @@ rm -rf "$OBJ"
 mkdir -p "$OBJ"
 
 SOURCES=("$ROOT"/host/core/*.m "$ROOT"/host/core/*.s "$ROOT"/host/uikit/src/*.m
-         "$ROOT"/host/uikit/backend/appkit/*.m "$ROOT"/host/uikit/generated/*.m "$ROOT"/host/uikit/generated/*.s)
+         "$ROOT"/host/uikit/generated/*.m "$ROOT"/host/uikit/generated/*.s)
 # Platform-neutral Catalyst modules shared with PearHost (Foundation/Security only).
 SHARED_MODULES=("$ROOT"/modules/storage/KeychainShim.mm)
 objs=()
@@ -51,7 +57,16 @@ for src in "${SOURCES[@]}"; do
   objs+=("$o")
 done
 
-"${CC[@]}" -dynamiclib "${objs[@]}" -o "$OUT_DIR/UIKit.framework/UIKit" \
+SWIFT_SOURCES=("$ROOT"/host/uikit/src/*.swift "$ROOT"/host/uikit/backend/appkit/*.swift)
+if ((${#SWIFT_SOURCES[@]})) && [[ -e "${SWIFT_SOURCES[0]}" ]]; then
+  "${SWIFTC[@]}" -Xcc -DPEAR_SWIFT_HOST -module-name PearUIKitSwift -import-objc-header "$ROOT/host/uikit/src/PearUIKit-Bridging.h" \
+    -emit-module -emit-module-path "$OBJ/PearUIKitSwift.swiftmodule" \
+    -I"$ROOT/host/uikit/include" -I"$ROOT/host/uikit/src" -I"$ROOT/host/core" \
+    -c "${SWIFT_SOURCES[@]}" -o "$OBJ/uikit-swift.o"
+  objs+=("$OBJ/uikit-swift.o")
+fi
+
+"${CC[@]}" -dynamiclib "${objs[@]}" "$RUST_CORE_LIB" "${SWIFT_LINK[@]}" -o "$OUT_DIR/UIKit.framework/UIKit" \
   -install_name @rpath/UIKit.framework/UIKit -compatibility_version 1.0.0 -current_version 6209.0.0 \
   -framework Foundation -Wl,-reexport_framework,AppKit -framework QuartzCore -framework CoreGraphics -framework IOKit -framework Security -lc++
 echo ">> $OUT_DIR/UIKit.framework/UIKit"
@@ -68,12 +83,15 @@ for fw in iAd; do
 done
 
 # OpenGLES.framework: macOS has none for macOS-platform processes. GL entry
-# points are re-exported from PearANGLE (our fork, Metal only); EAGL symbols
-# are ours (host/opengles). Build PearANGLE with host/build-pearangle.sh.
-# No other ANGLE build is used.
+# points are re-exported from PearANGLE (our fork, Metal only) when present;
+# EAGL symbols are ours (host/opengles).
 ANGLE_DIR="${PEAR_HOST_ANGLE_DIR:-$OUT_DIR/PearANGLE-src}"
+mkdir -p "$OUT_DIR/OpenGLES.framework"
+"${SWIFTC[@]}" -module-name PearOpenGLES -import-objc-header "$ROOT/host/core/PearHost.h" \
+  -I"$ROOT/host/core" -c "$ROOT/host/opengles/EAGL.swift" -o "$OBJ/eagl-swift.o"
+GLES_LINK=()
 if [[ -f "$ANGLE_DIR/libGLESv2.dylib" ]]; then
-  rm -rf "$OUT_DIR/PearANGLE"; mkdir -p "$OUT_DIR/PearANGLE" "$OUT_DIR/OpenGLES.framework"
+  rm -rf "$OUT_DIR/PearANGLE"; mkdir -p "$OUT_DIR/PearANGLE"
   # Copy libEGL/libGLESv2 and every @rpath library they pull in (component builds).
   cp "$ANGLE_DIR/LICENSE.ANGLE" "$OUT_DIR/PearANGLE/" 2>/dev/null || true
   todo=(libGLESv2.dylib libEGL.dylib)
@@ -84,19 +102,22 @@ if [[ -f "$ANGLE_DIR/libGLESv2.dylib" ]]; then
     while IFS= read -r dep; do todo+=("${dep#@rpath/}"); done < <(otool -L "$ANGLE_DIR/$lib" | awk '/@rpath\// {print $1}' | grep -v "@rpath/$lib\$")
   done
   echo "   ANGLE: $(ls "$OUT_DIR/PearANGLE" | wc -l | tr -d ' ') libraries"
-  "${CC[@]}" -fobjc-arc -dynamiclib "$ROOT/host/opengles/EAGL.m" "$OUT_DIR/UIKit.framework/UIKit" \
-    -o "$OUT_DIR/OpenGLES.framework/OpenGLES" -install_name @rpath/OpenGLES.framework/OpenGLES \
-    -compatibility_version 1.0.0 -current_version 1.0.0 -framework Foundation \
-    -L"$OUT_DIR/PearANGLE" -Wl,-reexport-lGLESv2 -Wl,-rpath,@loader_path/../PearANGLE
-  echo ">> $OUT_DIR/OpenGLES.framework/OpenGLES (GL from $ANGLE_DIR)"
+  GLES_LINK=(-L"$OUT_DIR/PearANGLE" -Wl,-reexport-lGLESv2 -Wl,-rpath,@loader_path/../PearANGLE)
 else
-  echo "!! no PearANGLE build at $ANGLE_DIR; run host/build-pearangle.sh --sync. OpenGLES.framework not built" >&2
+  echo "!! no PearANGLE build at $ANGLE_DIR; building OpenGLES.framework without re-exported GL symbols (run host/build-pearangle.sh --sync for GLES)" >&2
 fi
+"${CC[@]}" -fobjc-arc -dynamiclib "$ROOT/host/opengles/EAGLGlobals.m" "$OBJ/eagl-swift.o" \
+  "$OUT_DIR/UIKit.framework/UIKit" "${SWIFT_LINK[@]}" ${GLES_LINK[@]+"${GLES_LINK[@]}"} \
+  -o "$OUT_DIR/OpenGLES.framework/OpenGLES" -install_name @rpath/OpenGLES.framework/OpenGLES \
+  -compatibility_version 1.0.0 -current_version 1.0.0 -framework Foundation -framework QuartzCore
+echo ">> $OUT_DIR/OpenGLES.framework/OpenGLES"
 
 # MetalKit.framework: iOS apps expect MTKView to be a UIView (host/metalkit).
 mkdir -p "$OUT_DIR/MetalKit.framework"
-"${CC[@]}" -fobjc-arc -Wall -dynamiclib "$ROOT/host/metalkit/MTKView.m" "$OUT_DIR/UIKit.framework/UIKit" \
-  -I"$ROOT/host/uikit/include" -I"$ROOT/host/core" \
+"${SWIFTC[@]}" -module-name PearMetalKit -I"$OBJ" \
+  -c "$ROOT/host/metalkit/MTKView.swift" -o "$OBJ/mtkview-swift.o"
+"${CC[@]}" -Wall -dynamiclib "$OBJ/mtkview-swift.o" "$ROOT/host/metalkit/MTKLoad.c" \
+  "$OUT_DIR/UIKit.framework/UIKit" "${SWIFT_LINK[@]}" \
   -o "$OUT_DIR/MetalKit.framework/MetalKit" -install_name @rpath/MetalKit.framework/MetalKit \
   -compatibility_version 1.0.0 -current_version 1.0.0 -framework Foundation -framework Metal -framework QuartzCore
 echo ">> $OUT_DIR/MetalKit.framework/MetalKit"

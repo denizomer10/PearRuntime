@@ -124,6 +124,7 @@ typedef NS_OPTIONS(NSUInteger, UIRectEdge) {
 // Every UIKit class is part of the ABI the app binds to: export them all.
 #pragma GCC visibility push(default)
 
+#ifndef PEAR_SWIFT_HOST
 @class UIView, UIWindow, UIViewController, UIScreen, UIEvent, UITouch, UITraitCollection;
 
 @interface UIColor : NSObject
@@ -392,6 +393,8 @@ typedef NS_OPTIONS(NSUInteger, UIRectEdge) {
 - (void)pressesCancelled:(NSSet<UIPress *> *)presses withEvent:(nullable UIPressesEvent *)event;
 @end
 
+@interface UINavigationController : UIViewController
+@end
 
 #pragma GCC visibility pop
 
@@ -399,5 +402,6 @@ typedef NS_OPTIONS(NSUInteger, UIRectEdge) {
 PEAR_UIKIT_EXPORT int UIApplicationMain(int argc, char *_Nullable argv[_Nonnull], NSString *_Nullable principalClassName,
                                         NSString *_Nullable delegateClassName);
 PEAR_UIKIT_EXPORT NSData *_Nullable UIImagePNGRepresentation(id _Nullable image);
+#endif
 
 NS_ASSUME_NONNULL_END
