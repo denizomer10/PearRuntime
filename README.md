@@ -13,15 +13,28 @@ PearRuntime unifies the 64-bit **PearHost** platform layer (**100% Rust** with m
 | `rust/crates/pear-gles` & `host/opengles/` | **Rust** | `EAGLContext` / `EAGLSharegroup` over Metal-only `PearANGLE` (`EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE`), re-exporting `libGLESv2` |
 | `rust/crates/pear-nib` | **Rust** | Pure-Rust `NIBArchive` binary parser |
 | `rust/crates/pear-objc` | **Rust** | Zero-dependency `libobjc.A.dylib` FFI & runtime registration helpers |
-| `rust/crates/pear-core` | **Rust** | Thread-safe logging (`PearHostLogMessage`), missing-call tracker (`PearMissingReport`), `dladdr` symbolication, JSONL reporting |
-| `rust/crates/pear-macho` | **Rust** | ARM64 Mach-O header/platform inspector, FairPlay `cryptid` check, `LC_BUILD_VERSION` → `macOS 14.0` retargeter |
+| `rust/crates/pear-core` | **Rust** | Thread-safe logging (`PearHostLogMessage`), missing-call tracker (`PearMissingReport`), Objective-C forwarding/KVC hooks (`PearMissingInstallForImage`), zero-result IMP (`pear_missing_zero`), `dladdr` symbolication, JSONL reporting |
+| `rust/crates/pear-macho` | **Rust** | ARM64 Mach-O header/platform inspector, FairPlay `cryptid` check, `LC_BUILD_VERSION` → `macOS 26.0` retargeter |
 | `third_party/angle` | **C++ / Metal** | [PearANGLE](https://github.com/denizomer10/PearANGLE) — Metal-only arm64 Apple build (`libEGL.dylib`, `libGLESv2.dylib`) |
 | `third_party/legacy-engine` & `legacy-jit` | **Rust / C++** | 32-bit `armv6`/`armv7` iOS execution (`PearLegacyEngine` + `PearLegacyJIT`) |
 | `modules/` | **ObjC / C++** | Legacy Mac Catalyst in-process dylib (`libPearRuntime.dylib`, built via `./build.sh`) |
 
+### What stays Objective-C (ABI shims only)
+
+All behavior, every method body and each framework's image initializer is Rust.
+The remaining `.m` files only declare what stable Rust cannot express:
+
+- **Class symbols** (`_OBJC_CLASS_$_UIView`, `MTKView`, `EAGLContext`, …) that iOS
+  binaries bind to and subclass: `host/uikit/src/UIKitClasses.m`,
+  `host/metalkit/MTKLoad.m`, `host/opengles/EAGLGlobals.m`.
+- **Constant `NSString`s** (`UIApplicationDidBecomeActiveNotification`, …):
+  `UIKitGlobals.m`, generated `UIKitStubs.m`.
+- **`@try`/`@catch` boundaries** (launch, KVC probes): `UIKitGlobals.m`.
+- **C variadic `PearHostLog`** for C/ObjC callers: `host/core/PearHostLog.m`.
+
 ## Building
 
-Requirements: Apple silicon Mac, macOS 14+, Xcode / Command Line Tools, and Rust (`cargo`).
+Requirements: Apple silicon Mac, macOS 26+, Xcode / Command Line Tools, and Rust (`cargo`).
 
 ### Unified build (`PearHost` + `PearLegacyEngine`)
 

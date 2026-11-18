@@ -65,6 +65,7 @@ chmod +x "$DST/$EXE"  # zip archives may drop the execute bit
 
 # App frameworks: copy Mach-O frameworks, skip the Catalyst runtime pieces.
 for item in "$SRC"/Frameworks/*; do
+  [[ -e "$item" ]] || continue  # apps without a Frameworks folder
   name="$(basename "$item")"
   case "$name" in
     libPearRuntime.dylib|libPearOpenGLES.dylib|libswiftUIKit.dylib|PearANGLE|MarketplaceKit.framework) ;;
@@ -76,7 +77,7 @@ for fw in "${REDIRECT[@]}"; do
 done
 [[ -d "$HOST/PearANGLE" ]] && cp -R "$HOST/PearANGLE" "$DST/Frameworks/"
 echo 'void pear_catalyst_runtime_placeholder(void) {}' > "$DST/Frameworks/.placeholder.c"
-xcrun --sdk macosx clang -target arm64-apple-macos14.0 -dynamiclib "$DST/Frameworks/.placeholder.c" \
+xcrun --sdk macosx clang -target arm64-apple-macos26.0 -dynamiclib "$DST/Frameworks/.placeholder.c" \
   -install_name @rpath/libPearHostPlaceholder.dylib -o "$DST/Frameworks/libPearHostPlaceholder.dylib"
 rm "$DST/Frameworks/.placeholder.c"
 
@@ -84,7 +85,7 @@ retarget() {
   local bin="$1"
   local sdk
   sdk="$(dyld_info -platform "$bin" | awk '/macCatalyst|iOS/ {print $3; exit}')"
-  vtool -set-build-version macos 14.0 "${sdk:-26.0}" -replace -output "$bin.tmp" "$bin" 2>/dev/null
+  vtool -set-build-version macos 26.0 "${sdk:-26.0}" -replace -output "$bin.tmp" "$bin" 2>/dev/null
   mv "$bin.tmp" "$bin"
   local deps
   deps="$(otool -L "$bin" | tail -n +2 | sed -E 's/^[[:space:]]+//; s/ \(compatibility.*$//')"
@@ -114,6 +115,12 @@ retarget() {
 }
 
 retarget "$DST/$EXE"
+# PearHost frameworks are reached through @rpath; apps built without embedded
+# frameworks (older titles) carry no @executable_path/Frameworks rpath.
+if ! otool -l "$DST/$EXE" | grep -A2 'cmd LC_RPATH' | grep -q '@executable_path/Frameworks'; then
+  install_name_tool -add_rpath @executable_path/Frameworks "$DST/$EXE" 2>/dev/null
+  codesign -f -s - "$DST/$EXE" 2>/dev/null
+fi
 while IFS= read -r -d '' bin; do
   if file "$bin" | grep -q 'Mach-O'; then retarget "$bin"; fi
 done < <(find "$DST/Frameworks" -type f ! -name "*.plist" ! -path "*/_CodeSignature/*" -print0)

@@ -1,7 +1,7 @@
 //! Minimal zero-dependency Objective-C & CoreFoundation/CoreGraphics FFI
 //! helpers for PearRuntime.
 
-use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
 pub type Id = *mut c_void;
 pub type Class = *mut c_void;
@@ -72,6 +72,9 @@ extern "C" {
     pub fn objc_getAssociatedObject(obj: Id, key: *const c_void) -> Id;
     pub fn objc_msgSend();
     pub fn objc_msgSendSuper();
+    pub fn objc_storeWeak(location: *mut Id, obj: Id) -> Id;
+    pub fn objc_loadWeakRetained(location: *mut Id) -> Id;
+    pub fn objc_destroyWeak(location: *mut Id);
 }
 
 #[inline]
@@ -130,6 +133,174 @@ pub unsafe fn msg4<A1, A2, A3, A4, R>(obj: Id, selector: &str, a1: A1, a2: A2, a
     f(obj, sel(selector), a1, a2, a3, a4)
 }
 
+#[repr(C)]
+pub struct ObjcSuper {
+    pub receiver: Id,
+    pub super_class: Class,
+}
+
+/// Superclass of the class *defining* an override. Never use the receiver's
+/// dynamic class here: an app subclass would make the call recurse forever.
+#[inline]
+pub unsafe fn super_of(defining_class: &str) -> Class {
+    class_getSuperclass(cls(defining_class))
+}
+
+#[inline]
+pub unsafe fn msg_super0<R>(obj: Id, defining_class: &str, selector: &str) -> R {
+    let mut sup = ObjcSuper { receiver: obj, super_class: super_of(defining_class) };
+    let f: unsafe extern "C" fn(*mut ObjcSuper, Sel) -> R = std::mem::transmute(objc_msgSendSuper as *const c_void);
+    f(&mut sup, sel(selector))
+}
+
+#[inline]
+pub unsafe fn msg_super1<A1, R>(obj: Id, defining_class: &str, selector: &str, a1: A1) -> R {
+    let mut sup = ObjcSuper { receiver: obj, super_class: super_of(defining_class) };
+    let f: unsafe extern "C" fn(*mut ObjcSuper, Sel, A1) -> R =
+        std::mem::transmute(objc_msgSendSuper as *const c_void);
+    f(&mut sup, sel(selector), a1)
+}
+
+#[inline]
+pub unsafe fn msg_super2<A1, A2, R>(obj: Id, defining_class: &str, selector: &str, a1: A1, a2: A2) -> R {
+    let mut sup = ObjcSuper { receiver: obj, super_class: super_of(defining_class) };
+    let f: unsafe extern "C" fn(*mut ObjcSuper, Sel, A1, A2) -> R =
+        std::mem::transmute(objc_msgSendSuper as *const c_void);
+    f(&mut sup, sel(selector), a1, a2)
+}
+
+/// `[super dealloc]` for a class that overrides `dealloc` in Rust.
+#[inline]
+pub unsafe fn super_dealloc(obj: Id, defining_class: &str) {
+    msg_super0::<()>(obj, defining_class, "dealloc")
+}
+
+/// Hands a +1 object to the caller as autoreleased (factory-method convention).
+#[inline]
+pub unsafe fn autoreleased(obj: Id) -> Id {
+    if obj.is_null() {
+        obj
+    } else {
+        objc_autorelease(obj)
+    }
+}
+
+#[inline]
+pub unsafe fn assoc_get(obj: Id, key: &u8) -> Id {
+    if obj.is_null() {
+        return NIL;
+    }
+    objc_getAssociatedObject(obj, key as *const u8 as *const c_void)
+}
+
+#[inline]
+pub unsafe fn assoc_set(obj: Id, key: &u8, val: Id) {
+    if !obj.is_null() {
+        objc_setAssociatedObject(obj, key as *const u8 as *const c_void, val, OBJC_ASSOCIATION_RETAIN);
+    }
+}
+
+/// Weak-style (assign) association for delegates and back pointers, which
+/// UIKit never retains.
+#[inline]
+pub unsafe fn assoc_set_assign(obj: Id, key: &u8, val: Id) {
+    if !obj.is_null() {
+        objc_setAssociatedObject(obj, key as *const u8 as *const c_void, val, 0);
+    }
+}
+
+/// Zeroing-weak association (Objective-C `weak`): back pointers such as
+/// superview/window/viewController and delegates, which must neither keep
+/// their target alive (retain cycles) nor dangle once it is deallocated.
+pub unsafe fn assoc_set_weak(obj: Id, key: &u8, val: Id) {
+    if obj.is_null() {
+        return;
+    }
+    if val.is_null() {
+        assoc_set(obj, key, NIL);
+        return;
+    }
+    let holder: Id = msg0(cls("NSPointerArray"), "weakObjectsPointerArray");
+    msg1::<Id, ()>(holder, "addPointer:", val);
+    assoc_set(obj, key, holder);
+}
+
+pub unsafe fn assoc_get_weak(obj: Id, key: &u8) -> Id {
+    let holder = assoc_get(obj, key);
+    if holder.is_null() || msg0::<usize>(holder, "count") == 0 {
+        return NIL;
+    }
+    msg1::<usize, Id>(holder, "pointerAtIndex:", 0)
+}
+
+/// Association holding an NSCopying value as a copy (`@property (copy)`).
+#[inline]
+pub unsafe fn assoc_set_copy(obj: Id, key: &u8, val: Id) {
+    if !obj.is_null() {
+        objc_setAssociatedObject(obj, key as *const u8 as *const c_void, val, 3);
+    }
+}
+
+pub unsafe fn assoc_f64(obj: Id, key: &u8, default: f64) -> f64 {
+    let v = assoc_get(obj, key);
+    if v.is_null() {
+        default
+    } else {
+        msg0(v, "doubleValue")
+    }
+}
+
+pub unsafe fn assoc_set_f64(obj: Id, key: &u8, v: f64) {
+    assoc_set(obj, key, nsnumber_f64(v));
+}
+
+pub unsafe fn assoc_i64(obj: Id, key: &u8, default: i64) -> i64 {
+    let v = assoc_get(obj, key);
+    if v.is_null() {
+        default
+    } else {
+        msg0(v, "longLongValue")
+    }
+}
+
+pub unsafe fn assoc_set_i64(obj: Id, key: &u8, v: i64) {
+    assoc_set(obj, key, nsnumber_i64(v));
+}
+
+pub unsafe fn assoc_bool(obj: Id, key: &u8, default: bool) -> bool {
+    let v = assoc_get(obj, key);
+    if v.is_null() {
+        default
+    } else {
+        msg0(v, "boolValue")
+    }
+}
+
+pub unsafe fn assoc_set_bool(obj: Id, key: &u8, v: bool) {
+    assoc_set(obj, key, nsnumber_bool(v));
+}
+
+pub unsafe fn assoc_rect(obj: Id, key: &u8) -> CGRect {
+    let v = assoc_get(obj, key);
+    if v.is_null() {
+        CGRect::default()
+    } else {
+        let mut r = CGRect::default();
+        msg2::<*mut c_void, usize, ()>(v, "getValue:size:", &mut r as *mut CGRect as *mut c_void, std::mem::size_of::<CGRect>());
+        r
+    }
+}
+
+pub unsafe fn assoc_set_rect(obj: Id, key: &u8, r: CGRect) {
+    let v: Id = msg2::<*const c_void, *const c_char, Id>(
+        cls("NSValue"),
+        "valueWithBytes:objCType:",
+        &r as *const CGRect as *const c_void,
+        c"{CGRect={CGPoint=dd}{CGSize=dd}}".as_ptr(),
+    );
+    assoc_set(obj, key, v);
+}
+
 pub unsafe fn nsstring(s: &str) -> Id {
     let c = CString::new(s).unwrap_or_else(|_| CString::new("").unwrap());
     let ns_str_cls = cls("NSString");
@@ -161,8 +332,7 @@ pub unsafe fn responds_to(obj: Id, selector: &str) -> bool {
     if obj.is_null() {
         return false;
     }
-    let ok: c_int = msg1::<Sel, c_int>(obj, "respondsToSelector:", sel(selector));
-    ok != 0
+    msg1::<Sel, bool>(obj, "respondsToSelector:", sel(selector))
 }
 
 pub unsafe fn class_name(obj: Id) -> &'static str {
@@ -245,6 +415,5 @@ pub unsafe fn is_kind_of(obj: Id, class_name_str: &str) -> bool {
     if target.is_null() {
         return false;
     }
-    let r: c_uint = msg1::<Class, c_uint>(obj, "isKindOfClass:", target);
-    r != 0
+    msg1::<Class, bool>(obj, "isKindOfClass:", target)
 }

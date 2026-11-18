@@ -31,10 +31,9 @@ void PearBackendStartInputScript(void);
 // Shows a native alert; reply receives the chosen button index (-1 if none).
 void PearBackendPresentAlert(NSString *title, NSString *message, NSArray<NSString *> *buttons, void (^reply)(NSInteger index));
 #endif
-void PearUIKitRunCatchingExceptions(void (^block)(void));
+void PearUIKitRunCatchingExceptions(void *ctx, void (*fn)(void *));
 BOOL PearUIKitTrySetValueForKey(id obj, _Nullable id value, NSString *key);
 BOOL PearUIKitTryProbeDisplayLinkSelector(id target, SEL sel, BOOL isSetter);
-void PearBackendInvokeScriptCall(id target, SEL sel, NSArray<NSString *> *args);
 
 #ifndef PEAR_SWIFT_HOST
 // ---- UIKit layer, called by the backend -------------------------------------

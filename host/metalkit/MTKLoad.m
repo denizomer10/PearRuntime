@@ -1,17 +1,10 @@
+// MetalKit.framework ABI shim: the exported MTKView class symbol iOS binaries
+// bind to (_OBJC_CLASS_$_MTKView, a UIView subclass). Every method, and the
+// image initializer that registers them, is Rust (rust/crates/pear-metalkit).
 #import "../uikit/include/PearUIKit.h"
-#include "../core/PearHost.h"
 
-#define PEAR_MTK_EXPORT __attribute__((visibility("default")))
-
-PEAR_MTK_EXPORT
+__attribute__((visibility("default")))
 @interface MTKView : UIView
 @end
 @implementation MTKView
 @end
-
-extern void pear_metalkit_register_classes(void);
-
-__attribute__((constructor)) static void PearMetalKitLoad(void) {
-    pear_metalkit_register_classes();
-    PearMissingInstallForImage((const void *)&PearMetalKitLoad);
-}

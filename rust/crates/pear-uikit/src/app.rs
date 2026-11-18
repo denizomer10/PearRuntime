@@ -55,14 +55,12 @@ extern "C" {
     fn class_getSuperclass(cls: Class) -> Class;
     fn class_getName(cls: Class) -> *const c_char;
     fn class_getInstanceMethod(cls: Class, name: Sel) -> *mut c_void;
-    fn method_getImplementation(m: *mut c_void) -> Imp;
     fn sel_getName(sel: Sel) -> *const c_char;
     fn PearMissingReport(kind: c_int, class_name: *const c_char, selector: *const c_char, caller: *const c_void);
     fn PearHostLogMessage(tag: *const c_char, message: *const c_char);
     fn PearUIKitRunCatchingExceptions(ctx: *mut c_void, fn_ptr: extern "C" fn(*mut c_void));
     fn PearUIKitTrySetValueForKey(target: Id, value: Id, key: Id) -> bool;
     fn PearUIKitTryProbeDisplayLinkSelector(link: Id, selector: Sel, is_setter: bool) -> bool;
-    fn PearBackendInvokeScriptCall(target: Id, selector: Sel, args: *const *const c_char, count: usize);
     fn PearUIKitFirstResponder() -> Id;
     fn PearUIKitDeliverPointer(window: Id, phase: isize, point: CGPoint, timestamp: f64);
     fn PearUIKitWindowDidResize(window: Id, point_size: CGSize, scale: f64);
@@ -190,11 +188,11 @@ unsafe extern "C" fn app_init(self_obj: Id, _c: Sel) -> Id {
     }
     o
 }
-unsafe extern "C" fn app_del(s: Id, _c: Sel) -> Id { assoc_get(s, &APP_DEL_KEY) }
-unsafe extern "C" fn app_set_del(s: Id, _c: Sel, d: Id) { assoc_set(s, &APP_DEL_KEY, d); }
+unsafe extern "C" fn app_del(s: Id, _c: Sel) -> Id { pear_objc::assoc_get_weak(s, &APP_DEL_KEY) }
+unsafe extern "C" fn app_set_del(s: Id, _c: Sel, d: Id) { pear_objc::assoc_set_weak(s, &APP_DEL_KEY, d); }
 unsafe extern "C" fn app_retain_del(s: Id, _c: Sel, d: Id) {
     assoc_set(s, &APP_STRONG_DEL_KEY, d);
-    assoc_set(s, &APP_DEL_KEY, d);
+    pear_objc::assoc_set_weak(s, &APP_DEL_KEY, d);
 }
 unsafe extern "C" fn app_key_win(_s: Id, _c: Sel) -> Id { PearUIKitKeyWindow() }
 unsafe extern "C" fn app_windows(_s: Id, _c: Sel) -> Id { PearUIKitWindows() }
@@ -245,7 +243,7 @@ unsafe extern "C" fn app_open_url_opts(s: Id, _c: Sel, url: Id, _opts: Id, compl
     }
 }
 unsafe extern "C" fn app_reg_remote(s: Id, _c: Sel) {
-    let del = assoc_get(s, &APP_DEL_KEY);
+    let del = pear_objc::assoc_get_weak(s, &APP_DEL_KEY);
     if del.is_null() { return; }
     let fail = "application:didFailToRegisterForRemoteNotificationsWithError:";
     if responds_to(del, fail) {
@@ -689,8 +687,8 @@ unsafe extern "C" fn tv_init_coder(s: Id, _c: Sel, coder: Id) -> Id {
     }
     o
 }
-unsafe extern "C" fn tv_del(s: Id, _c: Sel) -> Id { assoc_get(s, &TV_DEL_KEY) }
-unsafe extern "C" fn tv_set_del(s: Id, _c: Sel, d: Id) { assoc_set(s, &TV_DEL_KEY, d); }
+unsafe extern "C" fn tv_del(s: Id, _c: Sel) -> Id { pear_objc::assoc_get_weak(s, &TV_DEL_KEY) }
+unsafe extern "C" fn tv_set_del(s: Id, _c: Sel, d: Id) { pear_objc::assoc_set_weak(s, &TV_DEL_KEY, d); }
 unsafe extern "C" fn tv_text(s: Id, _c: Sel) -> Id {
     let c: Id = msg0(tv_text_buf(s), "copy");
     objc_autorelease(c)
@@ -724,7 +722,6 @@ unsafe extern "C" fn tv_false(_s: Id, _c: Sel) -> bool { false }
 unsafe extern "C" fn tv_true(_s: Id, _c: Sel) -> bool { true }
 unsafe extern "C" fn tv_zero_int(_s: Id, _c: Sel) -> isize { 0 }
 unsafe extern "C" fn tv_nil(_s: Id, _c: Sel) -> Id { NIL }
-unsafe extern "C" fn tv_noop(_s: Id, _c: Sel) {}
 unsafe extern "C" fn tv_noop_id(_s: Id, _c: Sel, _a: Id) {}
 unsafe extern "C" fn tv_noop_int(_s: Id, _c: Sel, _a: isize) {}
 unsafe extern "C" fn tv_noop_bool(_s: Id, _c: Sel, _a: bool) {}
@@ -752,7 +749,7 @@ unsafe extern "C" fn tv_set_secure(s: Id, _c: Sel, b: bool) { let mut f = tv_fla
 unsafe extern "C" fn tv_can_become_first(s: Id, _c: Sel) -> bool { tv_flags(s).editable }
 unsafe extern "C" fn tv_become_first(s: Id, _c: Sel) -> bool {
     if tv_flags(s).editing { return true; }
-    let d = assoc_get(s, &TV_DEL_KEY);
+    let d = pear_objc::assoc_get_weak(s, &TV_DEL_KEY);
     if !d.is_null() && responds_to(d, "textViewShouldBeginEditing:") && !msg1::<Id, bool>(d, "textViewShouldBeginEditing:", s) {
         return false;
     }
@@ -774,7 +771,7 @@ unsafe extern "C" fn tv_resign_first(s: Id, _c: Sel) -> bool {
     if !tv_flags(s).editing {
         return super0(s, "UITextView", "resignFirstResponder");
     }
-    let d = assoc_get(s, &TV_DEL_KEY);
+    let d = pear_objc::assoc_get_weak(s, &TV_DEL_KEY);
     if !d.is_null() && responds_to(d, "textViewShouldEndEditing:") && !msg1::<Id, bool>(d, "textViewShouldEndEditing:", s) {
         return false;
     }
@@ -801,7 +798,7 @@ unsafe fn tv_replace_range(tv: Id, range: NSRange, rep: Id) {
     let buf = tv_text_buf(tv);
     let len: usize = msg0(buf, "length");
     if range.location + range.length > len { return; }
-    let d = assoc_get(tv, &TV_DEL_KEY);
+    let d = pear_objc::assoc_get_weak(tv, &TV_DEL_KEY);
     if !d.is_null() && responds_to(d, "textView:shouldChangeTextInRange:replacementText:") {
         if !msg3::<Id, NSRange, Id, bool>(d, "textView:shouldChangeTextInRange:replacementText:", tv, range, rep) {
             return;
@@ -832,7 +829,7 @@ unsafe extern "C" fn tv_move_cursor(s: Id, _c: Sel, delta: isize) {
     let cur = tv_sel(s).location as isize;
     let loc = (cur + delta).max(0) as usize;
     set_tv_sel(s, NSRange { location: loc, length: 0 });
-    let d = assoc_get(s, &TV_DEL_KEY);
+    let d = pear_objc::assoc_get_weak(s, &TV_DEL_KEY);
     if !d.is_null() && responds_to(d, "textViewDidChangeSelection:") {
         msg1::<Id, ()>(d, "textViewDidChangeSelection:", s);
     }
@@ -1932,9 +1929,7 @@ pub extern "C" fn PearBackendStartInputScript() {
                             other => cls(other) as Id,
                         };
                         if !target.is_null() && responds_to(target, &args[1]) {
-                            let cstrs: Vec<CString> = args.iter().map(|s| CString::new(s.as_str()).unwrap_or_default()).collect();
-                            let ptrs: Vec<*const c_char> = cstrs.iter().map(|c| c.as_ptr()).collect();
-                            PearBackendInvokeScriptCall(target, sel(&args[1]), ptrs.as_ptr(), ptrs.len());
+                            invoke_script_call(target, sel(&args[1]), &args[2..]);
                         }
                     }
                 }
@@ -1945,6 +1940,95 @@ pub extern "C" fn PearBackendStartInputScript() {
         }
         unsafe { log_msg("script", "done"); }
     });
+}
+
+/// Splits script call arguments: `"quoted text"` is one string, anything
+/// else is a space-separated token.
+fn script_tokens(joined: &str) -> Vec<(bool, String)> {
+    let mut out = Vec::new();
+    let mut rest = joined.trim_start();
+    while !rest.is_empty() {
+        if let Some(r) = rest.strip_prefix('"') {
+            let end = r.find('"').unwrap_or(r.len());
+            out.push((true, r[..end].to_string()));
+            rest = r.get(end + 1..).unwrap_or("");
+        } else {
+            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            out.push((false, rest[..end].to_string()));
+            rest = &rest[end..];
+        }
+        rest = rest.trim_start();
+    }
+    out
+}
+
+/// Calls `target`'s `selector` from an input-script line through NSInvocation,
+/// converting each token to the method's argument type.
+unsafe fn invoke_script_call(target: Id, selector: Sel, args: &[String]) {
+    let sig: Id = msg1(target, "methodSignatureForSelector:", selector);
+    if sig.is_null() {
+        return;
+    }
+    let inv: Id = msg1(cls("NSInvocation"), "invocationWithMethodSignature:", sig);
+    msg1::<Id, ()>(inv, "setTarget:", target);
+    msg1::<Sel, ()>(inv, "setSelector:", selector);
+    let nargs: usize = msg0(sig, "numberOfArguments");
+    let tokens = script_tokens(&args.join(" "));
+    let truthy = |v: &str| v == "YES" || v.parse::<i64>().map(|x| x != 0).unwrap_or(false);
+    for (i, (quoted, v)) in tokens.iter().enumerate() {
+        let index = i + 2;
+        if index >= nargs {
+            break;
+        }
+        let ty: *const c_char = msg1(sig, "getArgumentTypeAtIndex:", index);
+        // Skip method type qualifiers (const, in, out, inout, bycopy, byref, oneway).
+        let mut tp = ty;
+        while !tp.is_null() && matches!(*tp as u8, b'r' | b'n' | b'N' | b'o' | b'O' | b'R' | b'V') {
+            tp = tp.add(1);
+        }
+        let t = if tp.is_null() { b'q' } else { *tp as u8 };
+        let set = |p: *const c_void| msg2::<*const c_void, isize, ()>(inv, "setArgument:atIndex:", p, index as isize);
+        match t {
+            b'@' => {
+                let o: Id = if !*quoted && v == "nil" { NIL } else { nsstring(v) };
+                set(&o as *const Id as *const c_void);
+            }
+            b'B' => {
+                let b: bool = truthy(v);
+                set(&b as *const bool as *const c_void);
+            }
+            b'c' | b'C' => {
+                let c: i8 = if v == "YES" { 1 } else { v.parse::<i64>().unwrap_or(0) as i8 };
+                set(&c as *const i8 as *const c_void);
+            }
+            b'i' | b'I' => {
+                let x: i32 = v.parse::<i64>().unwrap_or(0) as i32;
+                set(&x as *const i32 as *const c_void);
+            }
+            b's' | b'S' => {
+                let x: i16 = v.parse::<i64>().unwrap_or(0) as i16;
+                set(&x as *const i16 as *const c_void);
+            }
+            b'f' => {
+                let x: f32 = v.parse().unwrap_or(0.0);
+                set(&x as *const f32 as *const c_void);
+            }
+            b'd' => {
+                let x: f64 = v.parse().unwrap_or(0.0);
+                set(&x as *const f64 as *const c_void);
+            }
+            b':' => {
+                let x: Sel = sel(v);
+                set(&x as *const Sel as *const c_void);
+            }
+            _ => {
+                let x: i64 = v.parse().unwrap_or(0);
+                set(&x as *const i64 as *const c_void);
+            }
+        }
+    }
+    msg0::<()>(inv, "retainArguments");
+    msg0::<()>(inv, "invoke");
 }
 
 pub unsafe fn register_classes() {

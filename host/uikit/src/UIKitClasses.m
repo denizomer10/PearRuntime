@@ -59,7 +59,7 @@ Class pear_uikit_uifont_class(void) { return [UIFont class]; }
 @interface UIStoryboard : NSObject @end
 @implementation UIStoryboard @end
 
-@interface UIAccessibilityElement : NSObject @end
+@interface UIAccessibilityElement : UIResponder @end
 @implementation UIAccessibilityElement @end
 
 @interface UIPointerInteraction : NSObject @end

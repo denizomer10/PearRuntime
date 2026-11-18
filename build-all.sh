@@ -1,7 +1,7 @@
 #!/bin/bash
 # Unified PearRuntime build:
 #   1. PearANGLE (Metal-only arm64, if --angle or --sync-angle is passed)
-#   2. PearHost (Rust pear-core + pear-macho, Swift UIKit / MetalKit / OpenGLES / AppKitBackend)
+#   2. PearHost (Rust pear-core, pear-uikit, pear-metalkit, pear-gles, pear-nib + minimal ObjC ABI shims)
 #   3. PearLegacyEngine + PearLegacyJIT (32-bit ARMv7 -> arm64 Rust + Dynarmic runtime)
 set -euo pipefail
 
@@ -29,7 +29,7 @@ if [[ "$BUILD_ANGLE" == 1 ]]; then
   fi
 fi
 
-echo ">> Building PearHost (Rust + Swift)"
+echo ">> Building PearHost (Rust)"
 bash "$ROOT/host/build-host.sh"
 
 if [[ "$BUILD_LEGACY" == 1 ]] && [[ -f "$ROOT/third_party/legacy-engine/Cargo.toml" ]]; then

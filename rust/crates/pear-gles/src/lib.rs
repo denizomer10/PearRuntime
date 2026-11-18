@@ -1,8 +1,7 @@
 //! PearHost OpenGLES.framework (EAGL on Metal-only PearANGLE) in Rust.
 
-use pear_core::{PearMissingKind, PearMissingReport};
 use pear_objc::{
-    add_method, cls, msg0, msg1, msg2, object_getClass, objc_getAssociatedObject,
+    replace_method as add_method, cls, msg0, msg1, msg2, object_getClass, objc_getAssociatedObject,
     objc_setAssociatedObject, sel, Class, Id, Imp, NIL, OBJC_ASSOCIATION_RETAIN,
 };
 use std::ffi::{c_char, c_int, c_void, CString};
@@ -31,7 +30,12 @@ const EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE: i32 = 0x3489;
 const RTLD_LAZY: c_int = 0x1;
 const RTLD_LOCAL: c_int = 0x4;
 
+// Missing-call reporting lives in UIKit.framework (pear-core); OpenGLES.framework
+// links against it instead of carrying a second reporter with its own state.
+const PEAR_MISSING_BEHAVIOR: c_int = 3;
+
 extern "C" {
+    fn PearMissingReport(kind: c_int, owner: *const c_char, name: *const c_char, caller: *const c_void);
     fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
 }
@@ -229,15 +233,21 @@ unsafe extern "C" fn eagl_init_with_api_sg(
     api: usize,
     sharegroup: Id,
 ) -> Id {
-    let self_obj: Id = msg0(self_obj, "init");
+    let self_obj: Id = pear_objc::msg_super0(self_obj, "EAGLContext", "init");
     if self_obj.is_null() {
+        return NIL;
+    }
+    // Only the ES 1/2/3 rendering APIs exist (kEAGLRenderingAPIOpenGLES1..3).
+    if !(1..=3).contains(&api) {
+        pear_objc::objc_release(self_obj);
         return NIL;
     }
     let bridge = egl_bridge();
     if !bridge.is_available() {
         let owner = CString::new("EAGLContext").unwrap();
         let name = CString::new("initWithAPI: (PearANGLE libEGL.dylib not loaded; returned nil)").unwrap();
-        PearMissingReport(PearMissingKind::Behavior as c_int, owner.as_ptr(), name.as_ptr(), std::ptr::null());
+        PearMissingReport(PEAR_MISSING_BEHAVIOR, owner.as_ptr(), name.as_ptr(), std::ptr::null());
+        pear_objc::objc_release(self_obj);
         return NIL;
     }
 
@@ -251,6 +261,7 @@ unsafe extern "C" fn eagl_init_with_api_sg(
     let egl_ctx = bridge.create_context(version, shared_egl);
     if egl_ctx.is_null() {
         pear_objc::objc_release(sg);
+        pear_objc::objc_release(self_obj);
         return NIL;
     }
     if shared_egl.is_null() {
@@ -285,10 +296,7 @@ unsafe extern "C" fn eagl_dealloc(self_obj: Id, _cmd: pear_objc::Sel) {
         }
         objc_setAssociatedObject(self_obj, &CTX_STATE_KEY as *const u8 as *const c_void, NIL, OBJC_ASSOCIATION_RETAIN);
     }
-    let super_cls = pear_objc::class_getSuperclass(object_getClass(self_obj));
-    if !super_cls.is_null() {
-        // NSObject dealloc is handled by ARC/ObjC runtime when associated objects release
-    }
+    pear_objc::super_dealloc(self_obj, "EAGLContext");
 }
 
 unsafe extern "C" fn eagl_api(self_obj: Id, _cmd: pear_objc::Sel) -> usize {
@@ -354,12 +362,18 @@ unsafe extern "C" fn eagl_renderbuffer_storage(
         return false;
     }
     let Some(state) = ctx_state(self_obj) else { return false };
+    let is_current = eagl_current_context(NIL, sel("currentContext")) == self_obj;
+    if is_current {
+        // Never destroy the surface that is current on this thread.
+        bridge.make_current(state.default_surface, state.egl_context);
+    }
     bridge.destroy_surface(state.bound_surface);
     if !drawable.is_null() && pear_objc::is_kind_of(drawable, "CALayer") {
         state.bound_surface = bridge.create_window_surface(drawable);
         let ok = !state.bound_surface.is_null();
-        if ok && eagl_current_context(NIL, sel("currentContext")) == self_obj {
-            bridge.make_current(state.bound_surface, state.egl_context);
+        if is_current {
+            let surf = if ok { state.bound_surface } else { state.default_surface };
+            bridge.make_current(surf, state.egl_context);
         }
         ok
     } else {
@@ -407,3 +421,17 @@ pub extern "C" fn pear_gles_register_classes() {
         add_method(meta, "setCurrentContext:", eagl_set_current_context as Imp, "B@:@");
     }
 }
+
+extern "C" {
+    fn PearMissingInstallForImage(address_in_image: *const c_void);
+}
+
+/// Image initializer: methods onto the class symbols, then the missing-call reporter.
+extern "C" fn image_load() {
+    pear_gles_register_classes();
+    unsafe { PearMissingInstallForImage(image_load as *const c_void) };
+}
+
+#[used]
+#[link_section = "__DATA,__mod_init_func,mod_init_funcs"]
+static PEAR_GLES_INIT: extern "C" fn() = image_load;

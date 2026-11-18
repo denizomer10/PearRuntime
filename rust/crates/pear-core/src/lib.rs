@@ -8,6 +8,27 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+mod forwarding;
+pub use forwarding::PearMissingInstallForImage;
+
+/// Zero result for any return convention that fits in registers (AAPCS64):
+/// integers/pointers in x0-x1, floating point and HFA structs (CGRect,
+/// CGPoint, CGSize, UIEdgeInsets) in d0-d3. IMP of unimplemented selectors and
+/// tail of generated C function stubs.
+#[unsafe(naked)]
+#[no_mangle]
+pub extern "C" fn pear_missing_zero() {
+    core::arch::naked_asm!(
+        "mov x0, #0",
+        "mov x1, #0",
+        "movi d0, #0",
+        "movi d1, #0",
+        "movi d2, #0",
+        "movi d3, #0",
+        "ret",
+    )
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum PearMissingKind {

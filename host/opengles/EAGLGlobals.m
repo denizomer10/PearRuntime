@@ -1,5 +1,7 @@
+// OpenGLES.framework ABI shim: exported EAGL class symbols and string
+// constants iOS binaries bind to. Every method, and the image initializer
+// that registers them, is Rust (rust/crates/pear-gles).
 #import <Foundation/Foundation.h>
-#include "../core/PearHost.h"
 
 #define PEAR_GLES_EXPORT __attribute__((visibility("default")))
 
@@ -20,10 +22,3 @@ PEAR_GLES_EXPORT
 @end
 @implementation EAGLContext
 @end
-
-extern void pear_gles_register_classes(void);
-
-__attribute__((constructor)) static void PearOpenGLESLoad(void) {
-    pear_gles_register_classes();
-    PearMissingInstallForImage((const void *)&PearOpenGLESLoad);
-}

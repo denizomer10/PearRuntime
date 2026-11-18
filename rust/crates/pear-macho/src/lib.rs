@@ -17,8 +17,8 @@ pub const PLATFORM_MACOS: u32 = 1;
 pub const PLATFORM_IOS: u32 = 2;
 pub const PLATFORM_MACCATALYST: u32 = 6;
 
-/// Packed version `14.0.0` in Mach-O `(major << 16) | (minor << 8) | patch`.
-pub const MACOS_14_0: u32 = 14 << 16;
+/// Packed version `26.0.0` in Mach-O `(major << 16) | (minor << 8) | patch`.
+pub const MACOS_26_0: u32 = 26 << 16;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -100,7 +100,7 @@ pub fn inspect_slice(data: &[u8]) -> Option<PearMachOInfo> {
     Some(info)
 }
 
-/// Retargets an `LC_BUILD_VERSION` in-place to `PLATFORM_MACOS` (`minos = 14.0`).
+/// Retargets an `LC_BUILD_VERSION` in-place to `PLATFORM_MACOS` (`minos = 26.0`).
 /// Returns `Ok(true)` if modified, `Ok(false)` if already macOS, `Err` if invalid or encrypted.
 pub fn retarget_macos_in_place(data: &mut [u8]) -> Result<bool, &'static str> {
     let info = inspect_slice(data).ok_or("not a valid 64-bit Mach-O")?;
@@ -130,7 +130,7 @@ pub fn retarget_macos_in_place(data: &mut [u8]) -> Result<bool, &'static str> {
                 return Ok(false);
             }
             write_u32_le(data, off + 8, PLATFORM_MACOS);
-            write_u32_le(data, off + 12, MACOS_14_0);
+            write_u32_le(data, off + 12, MACOS_26_0);
             return Ok(true);
         }
         off += cmdsize;
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(retarget_macos_in_place(&mut data), Ok(true));
         let updated = inspect_slice(&data).unwrap();
         assert_eq!(updated.platform, PLATFORM_MACOS);
-        assert_eq!(updated.minos, MACOS_14_0);
+        assert_eq!(updated.minos, MACOS_26_0);
         assert_eq!(retarget_macos_in_place(&mut data), Ok(false));
     }
 

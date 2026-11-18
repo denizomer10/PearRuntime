@@ -34,8 +34,6 @@ extern "C" {
     fn object_getClass(obj: Id) -> Class;
     fn class_getSuperclass(cls: Class) -> Class;
     fn class_getName(cls: Class) -> *const c_char;
-    fn class_getInstanceMethod(cls: Class, name: Sel) -> *mut c_void;
-    fn method_getImplementation(m: *mut c_void) -> Imp;
     fn PearMissingReport(kind: c_int, class_name: *const c_char, selector: *const c_char, caller: *const c_void);
     fn PearHostLogMessage(tag: *const c_char, message: *const c_char);
     fn PearBackendCreateWindow(ui_window: Id, frame: CGRect) -> *mut c_void;
@@ -422,7 +420,7 @@ unsafe extern "C" fn view_set_center(self_obj: Id, _cmd: Sel, pt: CGPoint) {
 }
 
 unsafe extern "C" fn view_superview(self_obj: Id, _cmd: Sel) -> Id {
-    assoc_get(self_obj, &VIEW_SUPERVIEW_KEY)
+    pear_objc::assoc_get_weak(self_obj, &VIEW_SUPERVIEW_KEY)
 }
 
 unsafe extern "C" fn view_subviews(self_obj: Id, _cmd: Sel) -> Id {
@@ -431,28 +429,28 @@ unsafe extern "C" fn view_subviews(self_obj: Id, _cmd: Sel) -> Id {
 }
 
 unsafe extern "C" fn view_window(self_obj: Id, _cmd: Sel) -> Id {
-    assoc_get(self_obj, &VIEW_WINDOW_KEY)
+    pear_objc::assoc_get_weak(self_obj, &VIEW_WINDOW_KEY)
 }
 
 unsafe extern "C" fn view_next_responder(self_obj: Id, _cmd: Sel) -> Id {
-    let vc = assoc_get(self_obj, &VIEW_VC_KEY);
+    let vc = pear_objc::assoc_get_weak(self_obj, &VIEW_VC_KEY);
     if !vc.is_null() {
         vc
     } else {
-        assoc_get(self_obj, &VIEW_SUPERVIEW_KEY)
+        pear_objc::assoc_get_weak(self_obj, &VIEW_SUPERVIEW_KEY)
     }
 }
 
 unsafe extern "C" fn view_set_vc(self_obj: Id, _cmd: Sel, vc: Id) {
-    assoc_set(self_obj, &VIEW_VC_KEY, vc);
+    pear_objc::assoc_set_weak(self_obj, &VIEW_VC_KEY, vc);
 }
 
 unsafe extern "C" fn view_set_window(self_obj: Id, _cmd: Sel, window: Id) {
-    if assoc_get(self_obj, &VIEW_WINDOW_KEY) == window {
+    if pear_objc::assoc_get_weak(self_obj, &VIEW_WINDOW_KEY) == window {
         return;
     }
     msg1::<Id, ()>(self_obj, "willMoveToWindow:", window);
-    assoc_set(self_obj, &VIEW_WINDOW_KEY, window);
+    pear_objc::assoc_set_weak(self_obj, &VIEW_WINDOW_KEY, window);
     let subs = mut_array_for_key(self_obj, &VIEW_SUBVIEWS_KEY);
     for i in 0..nsarray_count(subs) {
         let sub = nsarray_object_at(subs, i);
@@ -465,7 +463,7 @@ unsafe extern "C" fn view_insert_subview(self_obj: Id, _cmd: Sel, view: Id, inde
     if view.is_null() || view == self_obj {
         return;
     }
-    if !assoc_get(view, &VIEW_SUPERVIEW_KEY).is_null() {
+    if !pear_objc::assoc_get_weak(view, &VIEW_SUPERVIEW_KEY).is_null() {
         msg0::<()>(view, "removeFromSuperview");
     }
     msg1::<Id, ()>(view, "willMoveToSuperview:", self_obj);
@@ -478,8 +476,8 @@ unsafe extern "C" fn view_insert_subview(self_obj: Id, _cmd: Sel, view: Id, inde
     if !l.is_null() && !sub_l.is_null() {
         msg2::<Id, u32, ()>(l, "insertSublayer:atIndex:", sub_l, clamped as u32);
     }
-    assoc_set(view, &VIEW_SUPERVIEW_KEY, self_obj);
-    let win = assoc_get(self_obj, &VIEW_WINDOW_KEY);
+    pear_objc::assoc_set_weak(view, &VIEW_SUPERVIEW_KEY, self_obj);
+    let win = pear_objc::assoc_get_weak(self_obj, &VIEW_WINDOW_KEY);
     msg1::<Id, ()>(view, "pear_setWindow:", win);
     msg0::<()>(view, "didMoveToSuperview");
     msg1::<Id, ()>(self_obj, "didAddSubview:", view);
@@ -493,7 +491,7 @@ unsafe extern "C" fn view_add_subview(self_obj: Id, _cmd: Sel, view: Id) {
 }
 
 unsafe extern "C" fn view_bring_to_front(self_obj: Id, _cmd: Sel, view: Id) {
-    if view.is_null() || assoc_get(view, &VIEW_SUPERVIEW_KEY) != self_obj {
+    if view.is_null() || pear_objc::assoc_get_weak(view, &VIEW_SUPERVIEW_KEY) != self_obj {
         return;
     }
     let subs = mut_array_for_key(self_obj, &VIEW_SUBVIEWS_KEY);
@@ -508,7 +506,7 @@ unsafe extern "C" fn view_bring_to_front(self_obj: Id, _cmd: Sel, view: Id) {
 }
 
 unsafe extern "C" fn view_send_to_back(self_obj: Id, _cmd: Sel, view: Id) {
-    if view.is_null() || assoc_get(view, &VIEW_SUPERVIEW_KEY) != self_obj {
+    if view.is_null() || pear_objc::assoc_get_weak(view, &VIEW_SUPERVIEW_KEY) != self_obj {
         return;
     }
     let subs = mut_array_for_key(self_obj, &VIEW_SUBVIEWS_KEY);
@@ -523,7 +521,7 @@ unsafe extern "C" fn view_send_to_back(self_obj: Id, _cmd: Sel, view: Id) {
 }
 
 unsafe extern "C" fn view_remove_from_superview(self_obj: Id, _cmd: Sel) {
-    let parent = assoc_get(self_obj, &VIEW_SUPERVIEW_KEY);
+    let parent = pear_objc::assoc_get_weak(self_obj, &VIEW_SUPERVIEW_KEY);
     if parent.is_null() {
         return;
     }
@@ -535,7 +533,7 @@ unsafe extern "C" fn view_remove_from_superview(self_obj: Id, _cmd: Sel) {
     if !l.is_null() {
         msg0::<()>(l, "removeFromSuperlayer");
     }
-    assoc_set(self_obj, &VIEW_SUPERVIEW_KEY, NIL);
+    pear_objc::assoc_set_weak(self_obj, &VIEW_SUPERVIEW_KEY, NIL);
     msg1::<Id, ()>(self_obj, "pear_setWindow:", NIL);
     msg0::<()>(self_obj, "didMoveToSuperview");
 }
@@ -553,7 +551,7 @@ unsafe extern "C" fn view_is_descendant(self_obj: Id, _cmd: Sel, view: Id) -> bo
         if cur == view {
             return true;
         }
-        cur = assoc_get(cur, &VIEW_SUPERVIEW_KEY);
+        cur = pear_objc::assoc_get_weak(cur, &VIEW_SUPERVIEW_KEY);
     }
     false
 }
@@ -584,18 +582,29 @@ unsafe extern "C" fn view_set_tag(self_obj: Id, _cmd: Sel, tag: isize) {
 
 extern "C" fn view_layout_async(ctx: *mut c_void) {
     unsafe {
-        let v = ctx as Id;
-        msg0::<()>(v, "layoutIfNeeded");
-        objc_release(v);
+        // The pending layout holds the view weakly: a view released before
+        // the main queue gets here is simply skipped.
+        let slot = ctx as *mut Id;
+        let v = pear_objc::objc_loadWeakRetained(slot);
+        pear_objc::objc_destroyWeak(slot);
+        drop(Box::from_raw(slot));
+        if !v.is_null() {
+            msg0::<()>(v, "layoutIfNeeded");
+            objc_release(v);
+        }
     }
 }
 
 unsafe extern "C" fn view_set_needs_layout(self_obj: Id, _cmd: Sel) {
     let mut f = get_view_flags(self_obj);
+    if f.needs_layout {
+        return; // a layout pass is already queued
+    }
     f.needs_layout = true;
     set_view_flags(self_obj, f);
-    objc_retain(self_obj);
-    dispatch_async_f(&_dispatch_main_q as *const c_void, self_obj, view_layout_async);
+    let slot = Box::into_raw(Box::new(NIL));
+    pear_objc::objc_storeWeak(slot, self_obj);
+    dispatch_async_f(&_dispatch_main_q as *const c_void, slot as *mut c_void, view_layout_async);
 }
 
 unsafe extern "C" fn view_layout_if_needed(self_obj: Id, _cmd: Sel) {
@@ -605,7 +614,7 @@ unsafe extern "C" fn view_layout_if_needed(self_obj: Id, _cmd: Sel) {
     }
     f.needs_layout = false;
     set_view_flags(self_obj, f);
-    let vc = assoc_get(self_obj, &VIEW_VC_KEY);
+    let vc = pear_objc::assoc_get_weak(self_obj, &VIEW_VC_KEY);
     if !vc.is_null() {
         msg0::<()>(vc, "viewWillLayoutSubviews");
     }
@@ -807,7 +816,7 @@ unsafe extern "C" fn view_conv_pt_to(self_obj: Id, _cmd: Sel, pt: CGPoint, view:
     let target = if !view.is_null() {
         msg0::<Id>(view, "layer")
     } else {
-        let win = assoc_get(self_obj, &VIEW_WINDOW_KEY);
+        let win = pear_objc::assoc_get_weak(self_obj, &VIEW_WINDOW_KEY);
         if win.is_null() {
             NIL
         } else {
@@ -824,7 +833,7 @@ unsafe extern "C" fn view_conv_pt_from(self_obj: Id, _cmd: Sel, pt: CGPoint, vie
     let src = if !view.is_null() {
         msg0::<Id>(view, "layer")
     } else {
-        let win = assoc_get(self_obj, &VIEW_WINDOW_KEY);
+        let win = pear_objc::assoc_get_weak(self_obj, &VIEW_WINDOW_KEY);
         if win.is_null() {
             NIL
         } else {
@@ -841,7 +850,7 @@ unsafe extern "C" fn view_conv_rect_to(self_obj: Id, _cmd: Sel, r: CGRect, view:
     let target = if !view.is_null() {
         msg0::<Id>(view, "layer")
     } else {
-        let win = assoc_get(self_obj, &VIEW_WINDOW_KEY);
+        let win = pear_objc::assoc_get_weak(self_obj, &VIEW_WINDOW_KEY);
         if win.is_null() {
             NIL
         } else {
@@ -858,7 +867,7 @@ unsafe extern "C" fn view_conv_rect_from(self_obj: Id, _cmd: Sel, r: CGRect, vie
     let src = if !view.is_null() {
         msg0::<Id>(view, "layer")
     } else {
-        let win = assoc_get(self_obj, &VIEW_WINDOW_KEY);
+        let win = pear_objc::assoc_get_weak(self_obj, &VIEW_WINDOW_KEY);
         if win.is_null() {
             NIL
         } else {
@@ -943,10 +952,10 @@ unsafe extern "C" fn sv_set_scroll_enabled(self_obj: Id, _cmd: Sel, en: bool) {
     set_sv_state(self_obj, st);
 }
 unsafe extern "C" fn sv_delegate(self_obj: Id, _cmd: Sel) -> Id {
-    assoc_get(self_obj, &SV_DEL_KEY)
+    pear_objc::assoc_get_weak(self_obj, &SV_DEL_KEY)
 }
 unsafe extern "C" fn sv_set_delegate(self_obj: Id, _cmd: Sel, d: Id) {
-    assoc_set(self_obj, &SV_DEL_KEY, d);
+    pear_objc::assoc_set_weak(self_obj, &SV_DEL_KEY, d);
 }
 
 // ============================================================================
@@ -1119,10 +1128,10 @@ unsafe extern "C" fn vc_presented(self_obj: Id, _cmd: Sel) -> Id {
     assoc_get(self_obj, &VC_PRESENTED_KEY)
 }
 unsafe extern "C" fn vc_presenting(self_obj: Id, _cmd: Sel) -> Id {
-    assoc_get(self_obj, &VC_PRESENTING_KEY)
+    pear_objc::assoc_get_weak(self_obj, &VC_PRESENTING_KEY)
 }
 unsafe extern "C" fn vc_set_presenting(self_obj: Id, _cmd: Sel, p: Id) {
-    assoc_set(self_obj, &VC_PRESENTING_KEY, p);
+    pear_objc::assoc_set_weak(self_obj, &VC_PRESENTING_KEY, p);
 }
 
 unsafe extern "C" fn vc_present(self_obj: Id, _cmd: Sel, vc: Id, anim: bool, completion: Id) {
@@ -1159,7 +1168,7 @@ unsafe extern "C" fn vc_dismiss(self_obj: Id, _cmd: Sel, anim: bool, completion:
     let presenter = if !presented.is_null() {
         self_obj
     } else {
-        assoc_get(self_obj, &VC_PRESENTING_KEY)
+        pear_objc::assoc_get_weak(self_obj, &VC_PRESENTING_KEY)
     };
     msg1::<bool, ()>(target, "viewWillDisappear:", anim);
     let tv: Id = msg0(target, "viewIfLoaded");
@@ -1376,7 +1385,7 @@ unsafe extern "C" fn bbi_init_title(s: Id, _c: Sel, title: Id, style: isize, tar
     if !o.is_null() {
         assoc_set(o, &BI_TITLE_KEY, title);
         assoc_set(o, &BBI_STYLE_KEY, nsnumber_i64(style as i64));
-        assoc_set(o, &BBI_TARGET_KEY, target);
+        pear_objc::assoc_set_weak(o, &BBI_TARGET_KEY, target);
         if !action.is_null() {
             assoc_set(o, &BBI_ACTION_KEY, msg1(cls("NSValue"), "valueWithPointer:", action));
         }
@@ -1388,7 +1397,7 @@ unsafe extern "C" fn bbi_init_image(s: Id, _c: Sel, image: Id, style: isize, tar
     if !o.is_null() {
         assoc_set(o, &BI_IMAGE_KEY, image);
         assoc_set(o, &BBI_STYLE_KEY, nsnumber_i64(style as i64));
-        assoc_set(o, &BBI_TARGET_KEY, target);
+        pear_objc::assoc_set_weak(o, &BBI_TARGET_KEY, target);
         if !action.is_null() {
             assoc_set(o, &BBI_ACTION_KEY, msg1(cls("NSValue"), "valueWithPointer:", action));
         }
@@ -1398,7 +1407,7 @@ unsafe extern "C" fn bbi_init_image(s: Id, _c: Sel, image: Id, style: isize, tar
 unsafe extern "C" fn bbi_init_sys(s: Id, _c: Sel, _sys: isize, target: Id, action: Sel) -> Id {
     let o: Id = super0(s, "UIBarButtonItem", "init");
     if !o.is_null() {
-        assoc_set(o, &BBI_TARGET_KEY, target);
+        pear_objc::assoc_set_weak(o, &BBI_TARGET_KEY, target);
         if !action.is_null() {
             assoc_set(o, &BBI_ACTION_KEY, msg1(cls("NSValue"), "valueWithPointer:", action));
         }
@@ -1417,8 +1426,8 @@ unsafe extern "C" fn bbi_style(s: Id, _c: Sel) -> isize {
     if n.is_null() { 0 } else { msg0(n, "integerValue") }
 }
 unsafe extern "C" fn bbi_set_style(s: Id, _c: Sel, v: isize) { assoc_set(s, &BBI_STYLE_KEY, nsnumber_i64(v as i64)); }
-unsafe extern "C" fn bbi_target(s: Id, _c: Sel) -> Id { assoc_get(s, &BBI_TARGET_KEY) }
-unsafe extern "C" fn bbi_set_target(s: Id, _c: Sel, v: Id) { assoc_set(s, &BBI_TARGET_KEY, v); }
+unsafe extern "C" fn bbi_target(s: Id, _c: Sel) -> Id { pear_objc::assoc_get_weak(s, &BBI_TARGET_KEY) }
+unsafe extern "C" fn bbi_set_target(s: Id, _c: Sel, v: Id) { pear_objc::assoc_set_weak(s, &BBI_TARGET_KEY, v); }
 unsafe extern "C" fn bbi_action(s: Id, _c: Sel) -> Sel {
     let v = assoc_get(s, &BBI_ACTION_KEY);
     if v.is_null() { std::ptr::null_mut() } else { msg0(v, "pointerValue") }
@@ -1545,8 +1554,8 @@ unsafe extern "C" fn nav_view_did_load(s: Id, _c: Sel) {
     super0::<()>(s, "UINavigationController", "viewDidLoad");
     nav_show_top(s, false);
 }
-unsafe extern "C" fn nav_delegate(s: Id, _c: Sel) -> Id { assoc_get(s, &NAV_DEL_KEY) }
-unsafe extern "C" fn nav_set_delegate(s: Id, _c: Sel, d: Id) { assoc_set(s, &NAV_DEL_KEY, d); }
+unsafe extern "C" fn nav_delegate(s: Id, _c: Sel) -> Id { pear_objc::assoc_get_weak(s, &NAV_DEL_KEY) }
+unsafe extern "C" fn nav_set_delegate(s: Id, _c: Sel, d: Id) { pear_objc::assoc_set_weak(s, &NAV_DEL_KEY, d); }
 
 static TAB_VCS_KEY: u8 = 0;
 static TAB_IDX_KEY: u8 = 0;
@@ -1618,8 +1627,8 @@ unsafe extern "C" fn tab_view_did_load(s: Id, _c: Sel) {
     super0::<()>(s, "UITabBarController", "viewDidLoad");
     tab_show_selected(s);
 }
-unsafe extern "C" fn tab_delegate(s: Id, _c: Sel) -> Id { assoc_get(s, &TAB_DEL_KEY) }
-unsafe extern "C" fn tab_set_delegate(s: Id, _c: Sel, d: Id) { assoc_set(s, &TAB_DEL_KEY, d); }
+unsafe extern "C" fn tab_delegate(s: Id, _c: Sel) -> Id { pear_objc::assoc_get_weak(s, &TAB_DEL_KEY) }
+unsafe extern "C" fn tab_set_delegate(s: Id, _c: Sel, d: Id) { pear_objc::assoc_set_weak(s, &TAB_DEL_KEY, d); }
 
 // ============================================================================
 // UIAlertAction / UIAlertController
@@ -1800,7 +1809,7 @@ extern "C" fn dp_run_panel_async(ctx: *mut c_void) {
         let s = ctx as Id;
         let is_save = !assoc_get(s, &DP_SAVE_KEY).is_null() && msg0::<bool>(assoc_get(s, &DP_SAVE_KEY), "boolValue");
         let dir = assoc_get(s, &DP_DIR_KEY);
-        let del = assoc_get(s, &DP_DEL_KEY);
+        let del = pear_objc::assoc_get_weak(s, &DP_DEL_KEY);
         if is_save {
             let panel: Id = msg0(cls("NSSavePanel"), "savePanel");
             if !dir.is_null() { msg1::<Id, ()>(panel, "setDirectoryURL:", dir); }
@@ -1843,8 +1852,8 @@ unsafe extern "C" fn dp_did_appear(s: Id, _c: Sel, anim: bool) {
     objc_retain(s);
     dispatch_async_f(&_dispatch_main_q as *const c_void, s, dp_run_panel_async);
 }
-unsafe extern "C" fn dp_del(s: Id, _c: Sel) -> Id { assoc_get(s, &DP_DEL_KEY) }
-unsafe extern "C" fn dp_set_del(s: Id, _c: Sel, d: Id) { assoc_set(s, &DP_DEL_KEY, d); }
+unsafe extern "C" fn dp_del(s: Id, _c: Sel) -> Id { pear_objc::assoc_get_weak(s, &DP_DEL_KEY) }
+unsafe extern "C" fn dp_set_del(s: Id, _c: Sel, d: Id) { pear_objc::assoc_set_weak(s, &DP_DEL_KEY, d); }
 unsafe extern "C" fn dp_multi(s: Id, _c: Sel) -> bool {
     let n = assoc_get(s, &DP_MULTI_KEY);
     !n.is_null() && msg0::<bool>(n, "boolValue")
@@ -1929,8 +1938,8 @@ unsafe extern "C" fn pop_init(s: Id, _c: Sel, vc: Id) -> Id {
 }
 unsafe extern "C" fn pop_vc(s: Id, _c: Sel) -> Id { assoc_get(s, &POP_VC_KEY) }
 unsafe extern "C" fn pop_set_vc(s: Id, _c: Sel, v: Id) { assoc_set(s, &POP_VC_KEY, v); }
-unsafe extern "C" fn pop_del(s: Id, _c: Sel) -> Id { assoc_get(s, &POP_DEL_KEY) }
-unsafe extern "C" fn pop_set_del(s: Id, _c: Sel, v: Id) { assoc_set(s, &POP_DEL_KEY, v); }
+unsafe extern "C" fn pop_del(s: Id, _c: Sel) -> Id { pear_objc::assoc_get_weak(s, &POP_DEL_KEY) }
+unsafe extern "C" fn pop_set_del(s: Id, _c: Sel, v: Id) { pear_objc::assoc_set_weak(s, &POP_DEL_KEY, v); }
 unsafe extern "C" fn pop_size(s: Id, _c: Sel) -> CGSize {
     let d = assoc_get(s, &POP_SIZE_KEY);
     if let Some(b) = nsdata_to_vec(d) {
@@ -1966,6 +1975,88 @@ unsafe extern "C" fn pop_dismiss(s: Id, _c: Sel, anim: bool) {
     }
 }
 
+// ---- UIImagePickerController properties ----
+static IP_SOURCE_KEY: u8 = 0;
+static IP_MEDIA_KEY: u8 = 0;
+static IP_EDITING_KEY: u8 = 0;
+static IP_CAMERA_CONTROLS_KEY: u8 = 0;
+
+unsafe extern "C" fn ip_source(s: Id, _c: Sel) -> isize {
+    pear_objc::assoc_i64(s, &IP_SOURCE_KEY, 0) as isize
+}
+unsafe extern "C" fn ip_set_source(s: Id, _c: Sel, v: isize) {
+    pear_objc::assoc_set_i64(s, &IP_SOURCE_KEY, v as i64);
+}
+unsafe extern "C" fn ip_media(s: Id, _c: Sel) -> Id {
+    let v = assoc_get(s, &IP_MEDIA_KEY);
+    if v.is_null() {
+        nsarray_from_ids(&[nsstring("public.image")])
+    } else {
+        v
+    }
+}
+unsafe extern "C" fn ip_set_media(s: Id, _c: Sel, v: Id) {
+    pear_objc::assoc_set_copy(s, &IP_MEDIA_KEY, v);
+}
+unsafe extern "C" fn ip_editing(s: Id, _c: Sel) -> bool {
+    pear_objc::assoc_bool(s, &IP_EDITING_KEY, false)
+}
+unsafe extern "C" fn ip_set_editing(s: Id, _c: Sel, v: bool) {
+    pear_objc::assoc_set_bool(s, &IP_EDITING_KEY, v);
+}
+unsafe extern "C" fn ip_camera_controls(s: Id, _c: Sel) -> bool {
+    pear_objc::assoc_bool(s, &IP_CAMERA_CONTROLS_KEY, true)
+}
+unsafe extern "C" fn ip_set_camera_controls(s: Id, _c: Sel, v: bool) {
+    pear_objc::assoc_set_bool(s, &IP_CAMERA_CONTROLS_KEY, v);
+}
+
+// ---- UIView interactions (UIInteraction protocol) ----
+static VIEW_INTERACTIONS_KEY: u8 = 0;
+
+unsafe extern "C" fn view_interactions(s: Id, _c: Sel) -> Id {
+    let arr = assoc_get(s, &VIEW_INTERACTIONS_KEY);
+    if arr.is_null() {
+        msg0(cls("NSArray"), "array")
+    } else {
+        autoreleased_copy(arr)
+    }
+}
+unsafe fn autoreleased_copy(o: Id) -> Id {
+    pear_objc::autoreleased(msg0(o, "copy"))
+}
+unsafe extern "C" fn view_add_interaction(s: Id, _c: Sel, i: Id) {
+    if i.is_null() {
+        return;
+    }
+    let arr = mut_array_for_key(s, &VIEW_INTERACTIONS_KEY);
+    if msg1::<Id, bool>(arr, "containsObject:", i) {
+        return;
+    }
+    if responds_to(i, "willMoveToView:") {
+        msg1::<Id, ()>(i, "willMoveToView:", s);
+    }
+    msg1::<Id, ()>(arr, "addObject:", i);
+    if responds_to(i, "didMoveToView:") {
+        msg1::<Id, ()>(i, "didMoveToView:", s);
+    }
+}
+unsafe extern "C" fn view_remove_interaction(s: Id, _c: Sel, i: Id) {
+    let arr = assoc_get(s, &VIEW_INTERACTIONS_KEY);
+    if i.is_null() || arr.is_null() || !msg1::<Id, bool>(arr, "containsObject:", i) {
+        return;
+    }
+    objc_retain(i);
+    if responds_to(i, "willMoveToView:") {
+        msg1::<Id, ()>(i, "willMoveToView:", NIL);
+    }
+    msg1::<Id, ()>(arr, "removeObject:", i);
+    if responds_to(i, "didMoveToView:") {
+        msg1::<Id, ()>(i, "didMoveToView:", NIL);
+    }
+    objc_release(i);
+}
+
 pub unsafe fn register_classes() {
     let v = cls("UIView");
     if !v.is_null() {
@@ -1992,6 +2083,9 @@ pub unsafe fn register_classes() {
         add_method(v, "bringSubviewToFront:", view_bring_to_front as Imp, "v@:@");
         add_method(v, "sendSubviewToBack:", view_send_to_back as Imp, "v@:@");
         add_method(v, "removeFromSuperview", view_remove_from_superview as Imp, "v@:");
+        add_method(v, "interactions", view_interactions as Imp, "@@:");
+        add_method(v, "addInteraction:", view_add_interaction as Imp, "v@:@");
+        add_method(v, "removeInteraction:", view_remove_interaction as Imp, "v@:@");
         for s in ["didAddSubview:", "willRemoveSubview:", "willMoveToSuperview:", "willMoveToWindow:", "removeGestureRecognizer:"] {
             add_method(v, s, view_noop_id as Imp, "v@:@");
         }
@@ -2276,6 +2370,14 @@ pub unsafe fn register_classes() {
     if !ip.is_null() {
         add_class_method(ip, "isSourceTypeAvailable:", ip_source_avail as Imp, "B@:q");
         add_class_method(ip, "availableMediaTypesForSourceType:", ip_media_types as Imp, "@@:q");
+        add_method(ip, "sourceType", ip_source as Imp, "q@:");
+        add_method(ip, "setSourceType:", ip_set_source as Imp, "v@:q");
+        add_method(ip, "mediaTypes", ip_media as Imp, "@@:");
+        add_method(ip, "setMediaTypes:", ip_set_media as Imp, "v@:@");
+        add_method(ip, "allowsEditing", ip_editing as Imp, "B@:");
+        add_method(ip, "setAllowsEditing:", ip_set_editing as Imp, "v@:B");
+        add_method(ip, "showsCameraControls", ip_camera_controls as Imp, "B@:");
+        add_method(ip, "setShowsCameraControls:", ip_set_camera_controls as Imp, "v@:B");
     }
 
     let doc = cls("UIDocument");

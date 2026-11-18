@@ -5,12 +5,14 @@ version = 4
 [[package]]
 name = "pear-core"
 version = "0.1.0"
+dependencies = [
+ "pear-objc",
+]
 
 [[package]]
 name = "pear-gles"
 version = "0.1.0"
 dependencies = [
- "pear-core",
  "pear-objc",
 ]
 
