@@ -37,6 +37,7 @@ pub mod graphics {
 }
 pub mod graphics_metal {
     pub mod diagnostics;
+    pub mod layer;
 }
 pub mod storage {
     pub mod credential;
@@ -62,6 +63,7 @@ extern "C" fn pear_catalyst_load() {
             graphics::window_chrome::init();
             performance::init();
             graphics_metal::diagnostics::init();
+            graphics_metal::layer::init();
         });
     }
 }

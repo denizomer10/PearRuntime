@@ -580,3 +580,38 @@ pub unsafe fn override_class(c: Class, selector: &str, imp: Imp) -> bool {
 pub fn env_flag(name: &str) -> bool {
     matches!(std::env::var(name), Ok(v) if !v.is_empty() && v != "0")
 }
+
+extern "C" {
+    fn dispatch_source_cancel(source: *mut c_void);
+}
+
+struct Ticker {
+    source: *mut c_void,
+    tick: Box<dyn FnMut() -> bool>,
+}
+
+extern "C" fn ticker_fire(ctx: *mut c_void) {
+    unsafe {
+        let t = &mut *(ctx as *mut Ticker);
+        if (t.tick)() {
+            dispatch_source_cancel(t.source);
+            // The context is intentionally leaked: the cancelled source may
+            // still reference it until libdispatch releases the source.
+        }
+    }
+}
+
+/// Main-queue timer calling `tick` until it returns true (then cancelled).
+pub fn main_ticker(start_after: f64, interval: f64, leeway: f64, tick: impl FnMut() -> bool + 'static) {
+    unsafe {
+        let source = dispatch_source_create(&_dispatch_source_type_timer, 0, 0, &_dispatch_main_q);
+        if source.is_null() {
+            return;
+        }
+        let ctx = Box::into_raw(Box::new(Ticker { source, tick: Box::new(tick) }));
+        dispatch_source_set_timer(source, dispatch_time(0, (start_after * 1e9) as i64), (interval * 1e9) as u64, (leeway * 1e9) as u64);
+        dispatch_set_context(source, ctx as *mut c_void);
+        dispatch_source_set_event_handler_f(source, ticker_fire);
+        dispatch_resume(source);
+    }
+}
