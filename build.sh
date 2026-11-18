@@ -96,6 +96,15 @@ for module in "${MODULES[@]}"; do
 done
 for pid in "${pids[@]}"; do wait "$pid"; done
 
+# Rust modules (rust/crates/pear-catalyst). Rust ships no prebuilt standard
+# library for Mac Catalyst, so std is built from the toolchain's rust-src.
+RUST_TARGET_DIR="$OUT_DIR/rust-catalyst"
+echo ">> Building Rust modules (pear-catalyst, aarch64-apple-ios-macabi)"
+PEAR_RUNTIME_VERSION="$VERSION" IPHONEOS_DEPLOYMENT_TARGET=15.0 RUSTC_BOOTSTRAP=1 \
+  cargo build --manifest-path "$ROOT/rust/Cargo.toml" --release -p pear-catalyst \
+  --target aarch64-apple-ios-macabi -Zbuild-std=std,panic_abort --target-dir "$RUST_TARGET_DIR"
+RUST_LIB="$RUST_TARGET_DIR/aarch64-apple-ios-macabi/release/libpear_catalyst.a"
+
 echo ">> Linking $OUT (Mac Catalyst)"
 "$CXX" -target "$TARGET" -isysroot "$SDK" -iframework "$IOS_FRAMEWORKS" \
   -dynamiclib \
@@ -115,7 +124,7 @@ echo ">> Linking $OUT (Mac Catalyst)"
   -install_name @rpath/libPearRuntime.dylib \
   -current_version "${VERSION%%-*}" \
   -o "$OUT" \
-  "${objects[@]}" "$DEVICE_PROFILE"
+  "${objects[@]}" "$DEVICE_PROFILE" -Wl,-force_load,"$RUST_LIB"
 
 echo ">> Done: $OUT"
 file "$OUT"
