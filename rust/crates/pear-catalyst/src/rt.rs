@@ -508,3 +508,75 @@ pub fn ns_string_double(s: &str) -> f64 {
     }
     t[..end].trim_end_matches('.').parse::<f64>().unwrap_or(0.0)
 }
+
+/// Copies a block so it outlives the current call (+1; release with `release_block`).
+pub unsafe fn copy_block(block: Id) -> Id {
+    if block.is_null() { block } else { _Block_copy(block) as Id }
+}
+
+/// `dispatch_async(main, ^{ block(a, b); })` for a block taking two
+/// pointer-sized arguments (`b` is retained until the call).
+pub unsafe fn call_block2_on_main(block: Id, a: usize, b: Id) {
+    if block.is_null() {
+        return;
+    }
+    let block = copy_block(block) as usize;
+    let b = if b.is_null() { 0 } else { pear_objc::objc_retain(b) as usize };
+    async_main(move || unsafe {
+        if let Some(f) = block_invoke::<unsafe extern "C" fn(Id, usize, Id)>(block as Id) {
+            f(block as Id, a, b as Id);
+        }
+        if b != 0 {
+            pear_objc::objc_release(b as Id);
+        }
+        release_block(block as Id);
+    });
+}
+
+/// `[NSError errorWithDomain:domain code:code userInfo:@{NSLocalizedDescriptionKey: message}]`.
+pub unsafe fn error(domain: &str, code: isize, message: &str) -> Id {
+    let info: Id = pear_objc::msg2(cls("NSDictionary"), "dictionaryWithObject:forKey:", nsstring(message), nsstring("NSLocalizedDescription"));
+    pear_objc::msg3(cls("NSError"), "errorWithDomain:code:userInfo:", nsstring(domain), code, info)
+}
+
+extern "C" {
+    fn method_getTypeEncoding(m: Method) -> *const c_char;
+}
+
+/// Overrides on `c` itself (adds when inherited) so unrelated subclasses keep
+/// the inherited implementation; no-op when the method does not exist.
+pub unsafe fn override_instance(c: Class, selector: &str, imp: Imp) -> bool {
+    if c.is_null() {
+        return false;
+    }
+    let s = sel(selector);
+    let m = class_getInstanceMethod(c, s);
+    if m.is_null() {
+        return false;
+    }
+    if !class_addMethod(c, s, imp, method_getTypeEncoding(m)) {
+        method_setImplementation(m, imp);
+    }
+    true
+}
+
+/// Class-method counterpart of [`override_instance`].
+pub unsafe fn override_class(c: Class, selector: &str, imp: Imp) -> bool {
+    if c.is_null() {
+        return false;
+    }
+    let s = sel(selector);
+    let m = class_getClassMethod(c, s);
+    if m.is_null() {
+        return false;
+    }
+    if !class_addMethod(object_getClass(c as Id), s, imp, method_getTypeEncoding(m)) {
+        method_setImplementation(m, imp);
+    }
+    true
+}
+
+/// A non-empty value other than "0" (the `X && X[0] && strcmp(X, "0")` idiom).
+pub fn env_flag(name: &str) -> bool {
+    matches!(std::env::var(name), Ok(v) if !v.is_empty() && v != "0")
+}
