@@ -30,6 +30,7 @@ pub mod services {
     pub mod tracking;
 }
 pub mod device {
+    pub mod identity;
     pub mod platform;
     pub mod profile;
 }
@@ -64,6 +65,7 @@ extern "C" fn pear_catalyst_load() {
             input::legacy_touch::init();
             input::pointer_lock::init();
             input::web_input::init();
+            device::identity::init();
             device::platform::init();
             storage::credential::init();
             storage::path::init();
