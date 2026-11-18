@@ -30,6 +30,7 @@ pub mod device {
 }
 pub mod graphics {
     pub mod fps_hud;
+    pub mod legacy_window;
     pub mod screen;
     pub mod window_chrome;
 }

@@ -481,3 +481,30 @@ pub fn path_join(base: &str, name: &str) -> String {
         format!("{}/{}", base.trim_end_matches('/'), name.trim_start_matches('/'))
     }
 }
+
+/// `NSString.doubleValue` (leading whitespace, longest numeric prefix, 0 otherwise).
+pub fn ns_string_double(s: &str) -> f64 {
+    let t = s.trim_start();
+    let mut end = 0;
+    let bytes = t.as_bytes();
+    let mut seen_dot = false;
+    let mut seen_digit = false;
+    for (i, &c) in bytes.iter().enumerate() {
+        if c.is_ascii_digit() {
+            seen_digit = true;
+            end = i + 1;
+        } else if c == b'.' && !seen_dot {
+            seen_dot = true;
+            if seen_digit {
+                end = i + 1;
+            }
+        } else if (c == b'-' || c == b'+') && i == 0 {
+        } else {
+            break;
+        }
+    }
+    if !seen_digit {
+        return 0.0;
+    }
+    t[..end].trim_end_matches('.').parse::<f64>().unwrap_or(0.0)
+}
