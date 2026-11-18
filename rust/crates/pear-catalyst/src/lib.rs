@@ -9,6 +9,7 @@ pub mod geometry;
 
 pub mod core {
     pub mod foundation;
+    pub mod host;
     pub mod registry;
 }
 pub mod input {
