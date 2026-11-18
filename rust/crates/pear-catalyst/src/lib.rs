@@ -20,6 +20,7 @@ pub mod input {
     pub mod legacy_touch;
     pub mod mouse_touch;
     pub mod pointer_lock;
+    pub mod touch_synth;
     pub mod web_input;
 }
 pub mod performance;
@@ -65,6 +66,7 @@ extern "C" fn pear_catalyst_load() {
     unsafe {
         pear_objc::autorelease_pool(|| {
             core::foundation::init();
+            input::touch_synth::init();
             input::legacy_touch::init();
             input::pointer_lock::init();
             input::web_input::init();

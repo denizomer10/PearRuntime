@@ -356,13 +356,9 @@ pub unsafe fn ivar_state<'a, T>(obj: Id) -> &'a mut T {
     &mut *((obj as *mut u8).offset(ivar_getOffset(ivar)) as *mut T)
 }
 
-/// `PearPrimaryWindow()` from the input module (C++ linkage) until ported.
+/// The app's primary (key, else first visible) window.
 pub unsafe fn primary_window() -> Id {
-    extern "C" {
-        #[link_name = "_Z17PearPrimaryWindowv"]
-        fn PearPrimaryWindow() -> Id;
-    }
-    PearPrimaryWindow()
+    crate::input::touch_synth::primary_window()
 }
 
 extern "C" {
