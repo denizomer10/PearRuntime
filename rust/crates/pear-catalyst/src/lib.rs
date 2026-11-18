@@ -14,6 +14,7 @@ pub mod input {
     pub mod legacy_touch;
     pub mod mouse_touch;
     pub mod pointer_lock;
+    pub mod web_input;
 }
 pub mod performance;
 pub mod services {
@@ -32,6 +33,7 @@ pub mod graphics_metal {
 }
 pub mod storage {
     pub mod credential;
+    pub mod path;
 }
 
 /// Runs the Rust modules' initializers in module order.
@@ -40,7 +42,9 @@ extern "C" fn pear_catalyst_load() {
         pear_objc::autorelease_pool(|| {
             input::legacy_touch::init();
             input::pointer_lock::init();
+            input::web_input::init();
             storage::credential::init();
+            storage::path::init();
             services::beep::init();
             services::tracking::init();
             graphics::window_chrome::init();
