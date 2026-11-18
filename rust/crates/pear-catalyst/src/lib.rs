@@ -44,8 +44,15 @@ pub mod storage {
     pub mod path;
 }
 
+unsafe extern "C" fn keychain_log(message: *const std::ffi::c_char) {
+    rt::log(rt::cstr(message));
+}
+
 /// Runs the Rust modules' initializers in module order.
 extern "C" fn pear_catalyst_load() {
+    // The keychain store (shared with PearHost) is interposed for the whole
+    // process; it only needs the runtime's logger.
+    pear_keychain::set_logger(keychain_log);
     unsafe {
         pear_objc::autorelease_pool(|| {
             core::foundation::init();

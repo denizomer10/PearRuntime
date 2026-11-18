@@ -39,15 +39,7 @@ mkdir -p "$OBJ"
 
 SOURCES=("$ROOT"/host/core/*.m "$ROOT"/host/uikit/src/*.m
          "$ROOT"/host/uikit/generated/*.m "$ROOT"/host/uikit/generated/*.s)
-# Platform-neutral Catalyst modules shared with PearHost (Foundation/Security only).
-SHARED_MODULES=("$ROOT"/modules/storage/KeychainShim.mm)
 objs=()
-for src in "${SHARED_MODULES[@]}"; do
-  o="$OBJ/shared-$(basename "$src").o"
-  "${CC[@]}" -x objective-c++ -std=c++17 -fobjc-arc -Wno-deprecated-declarations -I"$ROOT/host/core" \
-    -include "$ROOT/host/core/PearCatalystCompat.h" -c "$src" -o "$o"
-  objs+=("$o")
-done
 for src in "${SOURCES[@]}"; do
   o="$OBJ/$(basename "$(dirname "$src")")-$(basename "$src").o"
   case "$src" in

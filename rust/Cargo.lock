@@ -6,6 +6,7 @@ version = 4
 name = "pear-catalyst"
 version = "0.1.0"
 dependencies = [
+ "pear-keychain",
  "pear-objc",
 ]
 
@@ -18,6 +19,13 @@ dependencies = [
 
 [[package]]
 name = "pear-gles"
+version = "0.1.0"
+dependencies = [
+ "pear-objc",
+]
+
+[[package]]
+name = "pear-keychain"
 version = "0.1.0"
 dependencies = [
  "pear-objc",
@@ -47,6 +55,7 @@ name = "pear-uikit"
 version = "0.1.0"
 dependencies = [
  "pear-core",
+ "pear-keychain",
  "pear-nib",
  "pear-objc",
 ]

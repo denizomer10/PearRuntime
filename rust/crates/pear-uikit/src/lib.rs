@@ -20,7 +20,13 @@ extern "C" {
 
 /// Image initializer: registers the Rust implementations on the UIKit class
 /// symbols and installs the missing-call reporter before the app's first message.
+unsafe extern "C" fn keychain_log(message: *const std::ffi::c_char) {
+    PearHostLogMessage(std::ptr::null(), message);
+}
+
 extern "C" fn pear_uikit_load() {
+    // Keychain API over a local store (pear-keychain), interposed process-wide.
+    pear_keychain::set_logger(keychain_log);
     let version = option_env!("PEAR_RUNTIME_VERSION").unwrap_or("dev");
     let msg = std::ffi::CString::new(format!("PearHost UIKit {version} (no iOSSupport) loading")).unwrap_or_default();
     unsafe {

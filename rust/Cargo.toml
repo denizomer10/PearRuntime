@@ -8,6 +8,7 @@ members = [
     "crates/pear-metalkit",
     "crates/pear-uikit",
     "crates/pear-catalyst",
+    "crates/pear-keychain",
 ]
 # pear-catalyst targets Mac Catalyst only (build.sh); host builds skip it.
 default-members = [
@@ -18,6 +19,7 @@ default-members = [
     "crates/pear-gles",
     "crates/pear-metalkit",
     "crates/pear-uikit",
+    "crates/pear-keychain",
 ]
 resolver = "2"
 
