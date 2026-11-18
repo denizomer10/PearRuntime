@@ -27,6 +27,7 @@ pub mod services {
     pub mod beep;
     pub mod network;
     pub mod odr;
+    pub mod platform_services;
     pub mod tracking;
 }
 pub mod device {
@@ -73,6 +74,7 @@ extern "C" fn pear_catalyst_load() {
             services::beep::init();
             services::network::init();
             services::odr::init();
+            services::platform_services::init();
             services::tracking::init();
             graphics::screen::init();
             graphics::window_chrome::init();
