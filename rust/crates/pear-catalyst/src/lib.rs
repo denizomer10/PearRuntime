@@ -30,6 +30,7 @@ pub mod device {
 }
 pub mod graphics {
     pub mod fps_hud;
+    pub mod screen;
     pub mod window_chrome;
 }
 pub mod graphics_metal {
@@ -54,6 +55,7 @@ extern "C" fn pear_catalyst_load() {
             services::network::init();
             services::odr::init();
             services::tracking::init();
+            graphics::screen::init();
             graphics::window_chrome::init();
             performance::init();
             graphics_metal::diagnostics::init();
