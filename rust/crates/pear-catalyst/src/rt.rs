@@ -396,3 +396,25 @@ pub unsafe fn without_actions(f: impl FnOnce()) {
     f();
     msg0::<()>(ca, "commit");
 }
+
+unsafe extern "C" fn invoke1_ret<F: Fn(Id) -> Id>(block: *const ClosureBlock<F>, a: Id) -> Id {
+    (*(*block).closure)(a)
+}
+
+/// `^id(id arg){ … }` as a heap block (+1).
+pub unsafe fn block1_ret<F: Fn(Id) -> Id + 'static>(f: F) -> Id {
+    make_block(f, invoke1_ret::<F> as *const c_void)
+}
+
+/// `NSString.boolValue` of an environment variable (unset is NO).
+pub fn env_bool(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(v) => {
+            let t = v.trim_start();
+            let t = t.strip_prefix(['+', '-']).unwrap_or(t);
+            t.starts_with(['Y', 'y', 'T', 't'])
+                || t.trim_start_matches('0').starts_with(|c: char| c.is_ascii_digit() && c != '0')
+        }
+        Err(_) => false,
+    }
+}

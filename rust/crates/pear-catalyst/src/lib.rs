@@ -5,18 +5,23 @@
 //! exactly as the Objective-C++ modules are.
 
 pub mod rt;
+pub mod geometry;
 
 pub mod core {
     pub mod registry;
 }
 pub mod input {
     pub mod legacy_touch;
+    pub mod mouse_touch;
     pub mod pointer_lock;
 }
 pub mod performance;
 pub mod services {
     pub mod beep;
     pub mod tracking;
+}
+pub mod device {
+    pub mod profile;
 }
 pub mod graphics {
     pub mod fps_hud;

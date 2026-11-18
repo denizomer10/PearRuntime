@@ -19,7 +19,6 @@ case "$OUT_DIR" in /*) ;; *) OUT_DIR="$ROOT/$OUT_DIR" ;; esac
 OUT="$OUT_DIR/libPearRuntime.dylib"
 SWIFT_OVERLAY="$OUT_DIR/libswiftUIKit.dylib"
 CXX_COMPAT="$OUT_DIR/libcxxcompat.dylib"
-DEVICE_PROFILE="$OUT_DIR/PearDeviceProfile.o"
 
 SDK="${PEAR_MACOS_SDK:-$(xcrun --sdk macosx --show-sdk-path)}"
 IOS_FRAMEWORKS="$SDK/System/iOSSupport/System/Library/Frameworks"
@@ -58,7 +57,6 @@ MODULES=(core input graphics graphics-gl graphics-metal device storage services)
   first=1
   for module in "${MODULES[@]}"; do
     for source in "$ROOT/modules/$module"/*.mm; do
-      [[ "$(basename "$source")" == DeviceProfile.mm ]] && continue
       [[ $first -eq 1 ]] || echo ","
       first=0
       printf '  {"directory": "%s", "file": "%s", "command": "%s %s -DPEAR_RUNTIME_MODULE=\\"%s\\" -include PearRuntime.h -c %s"}' \
@@ -69,20 +67,12 @@ MODULES=(core input graphics graphics-gl graphics-metal device storage services)
   echo "]"
 } > "$ROOT/compile_commands.json"
 
-# Do not force-include PearRuntime.h into the early device snapshot. Compiling
-# it as plain C++ also keeps ObjC/Foundation initialization out of this object.
-xcrun --sdk macosx clang++ \
-  -x c++ -target "$TARGET" -isysroot "$SDK" "$OPT" -mcpu="$CPU" \
-  -I"$ROOT/include" -std=c++17 -c "$ROOT/modules/device/DeviceProfile.mm" \
-  -o "$DEVICE_PROFILE"
-
 echo ">> Compiling PearRuntime $VERSION modules (${MODULES[*]}) for $CPU"
 JOBS="$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || sysctl -n hw.ncpu)"
 pids=()
 objects=()
 for module in "${MODULES[@]}"; do
   for source in "$ROOT/modules/$module"/*.mm; do
-    [[ "$(basename "$source")" == DeviceProfile.mm ]] && continue
     object="$OBJ_DIR/$module-$(basename "${source%.mm}").o"
     objects+=("$object")
     "$CXX" "${COMMON[@]}" -DPEAR_RUNTIME_MODULE="\"$module\"" -include PearRuntime.h \
@@ -124,7 +114,7 @@ echo ">> Linking $OUT (Mac Catalyst)"
   -install_name @rpath/libPearRuntime.dylib \
   -current_version "${VERSION%%-*}" \
   -o "$OUT" \
-  "${objects[@]}" "$DEVICE_PROFILE" -Wl,-force_load,"$RUST_LIB"
+  "${objects[@]}" -Wl,-force_load,"$RUST_LIB"
 
 echo ">> Done: $OUT"
 file "$OUT"
