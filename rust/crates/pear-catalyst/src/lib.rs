@@ -4,6 +4,10 @@
 //! initializer below, gated by PEAR_RUNTIME_DISABLE / PEAR_RUNTIME_ONLY
 //! exactly as the Objective-C++ modules are.
 
+// Variadic libc replacements (open, openat, syscall) must keep the variadic
+// ABI; build.sh already builds this crate with RUSTC_BOOTSTRAP (std from source).
+#![feature(c_variadic)]
+
 pub mod rt;
 pub mod geometry;
 
@@ -41,6 +45,7 @@ pub mod graphics_metal {
 }
 pub mod storage {
     pub mod credential;
+    pub mod sandbox;
     pub mod path;
 }
 
@@ -62,6 +67,7 @@ extern "C" fn pear_catalyst_load() {
             device::platform::init();
             storage::credential::init();
             storage::path::init();
+            storage::sandbox::init();
             services::beep::init();
             services::network::init();
             services::odr::init();
