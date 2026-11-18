@@ -21,6 +21,8 @@ pub mod input {
     pub mod mouse_touch;
     pub mod pointer_lock;
     pub mod touch_synth;
+    pub mod key_names;
+    pub mod virtual_gamepad;
     pub mod web_input;
 }
 pub mod performance;
