@@ -418,3 +418,66 @@ pub fn env_bool(name: &str) -> bool {
         Err(_) => false,
     }
 }
+
+struct QueueCall {
+    block: *mut c_void,
+    call: unsafe fn(Id, usize),
+    arg: usize,
+}
+
+extern "C" fn queue_call_trampoline(ctx: *mut c_void) {
+    unsafe {
+        let job = Box::from_raw(ctx as *mut QueueCall);
+        (job.call)(job.block as Id, job.arg);
+        _Block_release(job.block);
+    }
+}
+
+/// `dispatch_async(queue, ^{ call(block, arg); })`, keeping the block alive.
+pub unsafe fn async_on_with_block(queue: *const c_void, block: Id, arg: usize, call: unsafe fn(Id, usize)) {
+    if block.is_null() {
+        return;
+    }
+    let job = Box::new(QueueCall { block: _Block_copy(block), call, arg });
+    dispatch_async_f(queue, Box::into_raw(job) as *mut c_void, queue_call_trampoline);
+}
+
+extern "C" {
+    fn dispatch_queue_create(label: *const c_char, attr: *const c_void) -> *mut c_void;
+}
+
+/// A serial dispatch queue (never released).
+pub fn serial_queue(label: &CStr) -> *mut c_void {
+    unsafe { dispatch_queue_create(label.as_ptr(), std::ptr::null()) }
+}
+
+/// `[NSFileManager defaultManager]`.
+pub unsafe fn file_manager() -> Id {
+    msg0(cls("NSFileManager"), "defaultManager")
+}
+
+pub unsafe fn path_exists(path: &str) -> bool {
+    pear_objc::msg1::<Id, bool>(file_manager(), "fileExistsAtPath:", nsstring(path))
+}
+
+pub unsafe fn is_directory(path: &str) -> bool {
+    let mut dir = false;
+    pear_objc::msg2::<Id, *mut bool, bool>(file_manager(), "fileExistsAtPath:isDirectory:", nsstring(path), &mut dir) && dir
+}
+
+/// `contentsOfDirectoryAtPath:error:` as strings (empty on error).
+pub unsafe fn directory_entries(path: &str) -> Vec<String> {
+    let list: Id = pear_objc::msg2(file_manager(), "contentsOfDirectoryAtPath:error:", nsstring(path), std::ptr::null_mut::<Id>());
+    (0..pear_objc::nsarray_count(list)).map(|i| ns_string(pear_objc::nsarray_object_at(list, i))).collect()
+}
+
+/// NSString path join (`stringByAppendingPathComponent:` rules for plain names).
+pub fn path_join(base: &str, name: &str) -> String {
+    if base.is_empty() {
+        name.to_string()
+    } else if name.is_empty() {
+        base.to_string()
+    } else {
+        format!("{}/{}", base.trim_end_matches('/'), name.trim_start_matches('/'))
+    }
+}
