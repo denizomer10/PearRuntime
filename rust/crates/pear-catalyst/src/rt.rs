@@ -350,3 +350,49 @@ pub unsafe fn ivar_state<'a, T>(obj: Id) -> &'a mut T {
     let ivar = class_getInstanceVariable(object_getClass(obj), c"pear_state".as_ptr());
     &mut *((obj as *mut u8).offset(ivar_getOffset(ivar)) as *mut T)
 }
+
+/// `PearPrimaryWindow()` from the input module (C++ linkage) until ported.
+pub unsafe fn primary_window() -> Id {
+    extern "C" {
+        #[link_name = "_Z17PearPrimaryWindowv"]
+        fn PearPrimaryWindow() -> Id;
+    }
+    PearPrimaryWindow()
+}
+
+extern "C" {
+    static _dispatch_source_type_timer: c_void;
+    fn dispatch_source_create(kind: *const c_void, handle: usize, mask: usize, queue: *const c_void) -> *mut c_void;
+    fn dispatch_source_set_timer(source: *mut c_void, start: u64, interval: u64, leeway: u64);
+    fn dispatch_source_set_event_handler_f(source: *mut c_void, handler: extern "C" fn(*mut c_void));
+    fn dispatch_set_context(object: *mut c_void, context: *mut c_void);
+    fn dispatch_resume(object: *mut c_void);
+}
+
+/// Repeating main-queue timer running `handler` (never cancelled).
+pub fn main_timer(start_after: f64, interval: f64, leeway: f64, handler: extern "C" fn(*mut c_void)) {
+    unsafe {
+        let t = dispatch_source_create(&_dispatch_source_type_timer, 0, 0, &_dispatch_main_q);
+        if t.is_null() {
+            return;
+        }
+        dispatch_source_set_timer(t, dispatch_time(0, (start_after * 1e9) as i64), (interval * 1e9) as u64, (leeway * 1e9) as u64);
+        dispatch_set_context(t, std::ptr::null_mut());
+        dispatch_source_set_event_handler_f(t, handler);
+        dispatch_resume(t);
+    }
+}
+
+/// `CGRectEqualToRect`.
+pub fn rect_eq(a: pear_objc::CGRect, b: pear_objc::CGRect) -> bool {
+    a == b
+}
+
+/// `[CATransaction begin]; setDisableActions:YES; f(); [CATransaction commit]`.
+pub unsafe fn without_actions(f: impl FnOnce()) {
+    let ca = cls("CATransaction");
+    msg0::<()>(ca, "begin");
+    pear_objc::msg1::<bool, ()>(ca, "setDisableActions:", true);
+    f();
+    msg0::<()>(ca, "commit");
+}

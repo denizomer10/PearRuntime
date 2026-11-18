@@ -18,6 +18,10 @@ pub mod services {
     pub mod beep;
     pub mod tracking;
 }
+pub mod graphics {
+    pub mod fps_hud;
+    pub mod window_chrome;
+}
 pub mod graphics_metal {
     pub mod diagnostics;
 }
@@ -34,6 +38,7 @@ extern "C" fn pear_catalyst_load() {
             storage::credential::init();
             services::beep::init();
             services::tracking::init();
+            graphics::window_chrome::init();
             performance::init();
             graphics_metal::diagnostics::init();
         });
