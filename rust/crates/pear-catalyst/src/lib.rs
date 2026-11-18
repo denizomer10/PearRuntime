@@ -8,6 +8,7 @@ pub mod rt;
 pub mod geometry;
 
 pub mod core {
+    pub mod foundation;
     pub mod registry;
 }
 pub mod input {
@@ -19,6 +20,7 @@ pub mod input {
 pub mod performance;
 pub mod services {
     pub mod beep;
+    pub mod network;
     pub mod tracking;
 }
 pub mod device {
@@ -40,12 +42,14 @@ pub mod storage {
 extern "C" fn pear_catalyst_load() {
     unsafe {
         pear_objc::autorelease_pool(|| {
+            core::foundation::init();
             input::legacy_touch::init();
             input::pointer_lock::init();
             input::web_input::init();
             storage::credential::init();
             storage::path::init();
             services::beep::init();
+            services::network::init();
             services::tracking::init();
             graphics::window_chrome::init();
             performance::init();
