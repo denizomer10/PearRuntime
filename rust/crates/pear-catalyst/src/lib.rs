@@ -50,6 +50,7 @@ pub mod storage {
     pub mod credential;
     pub mod sandbox;
     pub mod path;
+    pub mod cloud;
 }
 
 unsafe extern "C" fn keychain_log(message: *const std::ffi::c_char) {
@@ -72,6 +73,7 @@ extern "C" fn pear_catalyst_load() {
             storage::credential::init();
             storage::path::init();
             storage::sandbox::init();
+            storage::cloud::init();
             services::beep::init();
             services::consent::init();
             services::network::init();

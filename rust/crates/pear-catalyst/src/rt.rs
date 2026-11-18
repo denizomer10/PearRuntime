@@ -339,6 +339,11 @@ impl ClassBuilder {
         self
     }
 
+    /// The class being built (methods can be added directly before `register`).
+    pub fn class(&self) -> Class {
+        self.cls
+    }
+
     pub unsafe fn register(self) -> Class {
         objc_registerClassPair(self.cls);
         self.cls
