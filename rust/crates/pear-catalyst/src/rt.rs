@@ -176,3 +176,177 @@ pub unsafe fn description(obj: Id) -> String {
     }
     ns_string(msg0(obj, "description"))
 }
+
+// ---------------------------------------------------------------------------
+// Blocks from Rust closures (Block ABI: stack block with copy/dispose helpers,
+// copied to the heap by `_Block_copy`; the closure is shared via Arc).
+
+extern "C" {
+    static _NSConcreteStackBlock: c_void;
+}
+
+const BLOCK_HAS_COPY_DISPOSE: i32 = 1 << 25;
+
+#[repr(C)]
+struct BlockDescriptor {
+    reserved: usize,
+    size: usize,
+    copy: unsafe extern "C" fn(*mut c_void, *const c_void),
+    dispose: unsafe extern "C" fn(*const c_void),
+}
+
+#[repr(C)]
+struct ClosureBlock<F> {
+    isa: *const c_void,
+    flags: i32,
+    reserved: i32,
+    invoke: *const c_void,
+    descriptor: *const BlockDescriptor,
+    closure: *const F,
+}
+
+unsafe extern "C" fn block_copy_helper<F>(dst: *mut c_void, src: *const c_void) {
+    let src = &*(src as *const ClosureBlock<F>);
+    std::sync::Arc::increment_strong_count(src.closure);
+    (*(dst as *mut ClosureBlock<F>)).closure = src.closure;
+}
+
+unsafe extern "C" fn block_dispose_helper<F>(block: *const c_void) {
+    let b = &*(block as *const ClosureBlock<F>);
+    std::sync::Arc::decrement_strong_count(b.closure);
+}
+
+/// Heap block (+1, release with `release_block`) around `f`; `invoke` is the
+/// block's C entry point, which receives the block as its first argument.
+unsafe fn make_block<F>(f: F, invoke: *const c_void) -> Id {
+    let closure = std::sync::Arc::into_raw(std::sync::Arc::new(f));
+    let descriptor = Box::leak(Box::new(BlockDescriptor {
+        reserved: 0,
+        size: std::mem::size_of::<ClosureBlock<F>>(),
+        copy: block_copy_helper::<F>,
+        dispose: block_dispose_helper::<F>,
+    }));
+    let stack = ClosureBlock {
+        isa: &_NSConcreteStackBlock,
+        flags: BLOCK_HAS_COPY_DISPOSE,
+        reserved: 0,
+        invoke,
+        descriptor,
+        closure,
+    };
+    let heap = _Block_copy(&stack as *const _ as *const c_void) as Id;
+    std::sync::Arc::decrement_strong_count(closure); // the heap copy holds its own
+    heap
+}
+
+pub unsafe fn release_block(block: Id) {
+    if !block.is_null() {
+        _Block_release(block);
+    }
+}
+
+unsafe extern "C" fn invoke0<F: Fn()>(block: *const ClosureBlock<F>) {
+    (*(*block).closure)()
+}
+unsafe extern "C" fn invoke1<F: Fn(Id)>(block: *const ClosureBlock<F>, a: Id) {
+    (*(*block).closure)(a)
+}
+
+/// `^{ … }` as a heap block (+1).
+pub unsafe fn block0<F: Fn() + 'static>(f: F) -> Id {
+    make_block(f, invoke0::<F> as *const c_void)
+}
+
+/// `^(id arg){ … }` as a heap block (+1).
+pub unsafe fn block1<F: Fn(Id) + 'static>(f: F) -> Id {
+    make_block(f, invoke1::<F> as *const c_void)
+}
+
+// ---------------------------------------------------------------------------
+// libdispatch with closures
+
+extern "C" {
+    fn dispatch_time(when: u64, delta: i64) -> u64;
+    fn dispatch_after_f(when: u64, queue: *const c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
+}
+
+extern "C" fn run_boxed(ctx: *mut c_void) {
+    unsafe {
+        let f = Box::from_raw(ctx as *mut Box<dyn FnOnce()>);
+        f();
+    }
+}
+
+/// `dispatch_after(now + seconds, main queue, f)`.
+pub fn after_main<F: FnOnce() + 'static>(seconds: f64, f: F) {
+    let boxed: Box<Box<dyn FnOnce()>> = Box::new(Box::new(f));
+    unsafe {
+        let when = dispatch_time(0, (seconds * 1e9) as i64);
+        dispatch_after_f(when, &_dispatch_main_q, Box::into_raw(boxed) as *mut c_void, run_boxed);
+    }
+}
+
+/// `dispatch_async(main queue, f)`.
+pub fn async_main<F: FnOnce() + 'static>(f: F) {
+    let boxed: Box<Box<dyn FnOnce()>> = Box::new(Box::new(f));
+    unsafe { dispatch_async_f(&_dispatch_main_q, Box::into_raw(boxed) as *mut c_void, run_boxed) };
+}
+
+/// `[NSNotificationCenter.defaultCenter addObserverForName:… queue:mainQueue usingBlock:]`.
+pub unsafe fn observe_main(name: &str, handler: impl Fn(Id) + 'static) -> Id {
+    let center: Id = msg0(cls("NSNotificationCenter"), "defaultCenter");
+    let queue: Id = msg0(cls("NSOperationQueue"), "mainQueue");
+    let block = block1(handler);
+    let token: Id = pear_objc::msg4(center, "addObserverForName:object:queue:usingBlock:", nsstring(name), std::ptr::null_mut::<c_void>(), queue, block);
+    release_block(block);
+    pear_objc::objc_retain(token)
+}
+
+// ---------------------------------------------------------------------------
+// Classes defined at run time
+
+extern "C" {
+    fn objc_allocateClassPair(superclass: Class, name: *const c_char, extra: usize) -> Class;
+    fn objc_registerClassPair(cls: Class);
+    fn class_addIvar(cls: Class, name: *const c_char, size: usize, alignment: u8, types: *const c_char) -> bool;
+    fn class_getInstanceVariable(cls: Class, name: *const c_char) -> *mut c_void;
+    fn ivar_getOffset(ivar: *mut c_void) -> isize;
+}
+
+/// A class whose instances carry a `T` (zero-initialized) in an ivar named
+/// `pear_state`. Methods are added by the caller before `register`.
+pub struct ClassBuilder {
+    cls: Class,
+}
+
+impl ClassBuilder {
+    pub unsafe fn new<T>(name: &str, superclass: Class) -> Option<ClassBuilder> {
+        let n = CString::new(name).ok()?;
+        let c = objc_allocateClassPair(superclass, n.as_ptr(), 0);
+        if c.is_null() {
+            return None;
+        }
+        if std::mem::size_of::<T>() > 0 {
+            let align = std::mem::align_of::<T>().trailing_zeros() as u8;
+            class_addIvar(c, c"pear_state".as_ptr(), std::mem::size_of::<T>(), align, c"?".as_ptr());
+        }
+        Some(ClassBuilder { cls: c })
+    }
+
+    pub unsafe fn method(&self, selector: &str, imp: Imp, types: &str) -> &Self {
+        let t = CString::new(types).unwrap_or_default();
+        class_addMethod(self.cls, sel(selector), imp, t.as_ptr());
+        self
+    }
+
+    pub unsafe fn register(self) -> Class {
+        objc_registerClassPair(self.cls);
+        self.cls
+    }
+}
+
+/// The `T` stored in `obj`'s `pear_state` ivar.
+pub unsafe fn ivar_state<'a, T>(obj: Id) -> &'a mut T {
+    let ivar = class_getInstanceVariable(object_getClass(obj), c"pear_state".as_ptr());
+    &mut *((obj as *mut u8).offset(ivar_getOffset(ivar)) as *mut T)
+}
