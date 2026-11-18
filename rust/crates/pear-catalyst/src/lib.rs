@@ -25,6 +25,7 @@ pub mod input {
 pub mod performance;
 pub mod services {
     pub mod beep;
+    pub mod consent;
     pub mod network;
     pub mod odr;
     pub mod platform_services;
@@ -72,6 +73,7 @@ extern "C" fn pear_catalyst_load() {
             storage::path::init();
             storage::sandbox::init();
             services::beep::init();
+            services::consent::init();
             services::network::init();
             services::odr::init();
             services::platform_services::init();
