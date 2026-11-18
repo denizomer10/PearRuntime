@@ -6,13 +6,13 @@
 
 // Variadic libc replacements (open, openat, syscall) must keep the variadic
 // ABI; build.sh already builds this crate with RUSTC_BOOTSTRAP (std from source).
-#![feature(c_variadic)]
 
 pub mod rt;
 pub mod geometry;
 
 pub mod core {
     pub mod foundation;
+    pub mod runtime;
     pub mod host;
     pub mod registry;
 }
@@ -21,6 +21,8 @@ pub mod input {
     pub mod mouse_touch;
     pub mod pointer_lock;
     pub mod touch_synth;
+    pub mod keymapper;
+    pub mod controller;
     pub mod key_names;
     pub mod virtual_gamepad;
     pub mod web_input;
@@ -68,6 +70,7 @@ extern "C" fn pear_catalyst_load() {
     unsafe {
         pear_objc::autorelease_pool(|| {
             core::foundation::init();
+            core::runtime::init();
             input::touch_synth::init();
             input::legacy_touch::init();
             input::pointer_lock::init();

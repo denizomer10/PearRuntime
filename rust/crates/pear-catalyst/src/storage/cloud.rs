@@ -16,7 +16,7 @@
 
 use crate::core::host;
 use crate::rt;
-use pear_objc::{cls, msg0, msg1, msg2, msg3, nsstring, objc_release, objc_retain, sel, Class, Id, Imp, Sel};
+use pear_objc::{cls, msg0, msg1, msg2, nsstring, objc_release, objc_retain, sel, Class, Id, Imp, Sel};
 use std::ffi::{c_char, c_void, CString};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -503,10 +503,14 @@ unsafe fn gamekit(name: &str) -> Class {
 
 extern "C" {
     fn method_getTypeEncoding(m: rt::Method) -> *const c_char;
-    fn class_instancesRespondToSelector(c: Class, s: Sel) -> bool;
 }
 
 /// Adds with the inherited method's encoding when there is one.
+/// `[c instancesRespondToSelector:s]`.
+unsafe fn class_instancesRespondToSelector(c: Class, s: Sel) -> bool {
+    msg1(c, "instancesRespondToSelector:", s)
+}
+
 unsafe fn add(c: Class, selector: &str, imp: Imp, fallback: &str) {
     let s = sel(selector);
     let existing = rt::class_getInstanceMethod(c, s);

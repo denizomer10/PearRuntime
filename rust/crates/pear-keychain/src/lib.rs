@@ -728,7 +728,8 @@ unsafe extern "C" fn pear_sec_key_generate_pair(parameters: Id, public_key: *mut
     })
 }
 
-#[repr(C)]
+/// 16-byte aligned: dyld rejects a tuple table that is not pair-aligned.
+#[repr(C, align(16))]
 struct Interpose {
     replacement: *const c_void,
     replacee: *const c_void,

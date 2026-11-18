@@ -57,6 +57,7 @@ MODULES=(core input graphics graphics-gl graphics-metal device storage services)
   first=1
   for module in "${MODULES[@]}"; do
     for source in "$ROOT/modules/$module"/*.mm; do
+      [[ -e "$source" ]] || continue # module fully ported to Rust
       [[ $first -eq 1 ]] || echo ","
       first=0
       printf '  {"directory": "%s", "file": "%s", "command": "%s %s -DPEAR_RUNTIME_MODULE=\\"%s\\" -include PearRuntime.h -c %s"}' \
@@ -73,6 +74,7 @@ pids=()
 objects=()
 for module in "${MODULES[@]}"; do
   for source in "$ROOT/modules/$module"/*.mm; do
+    [[ -e "$source" ]] || continue # module fully ported to Rust
     object="$OBJ_DIR/$module-$(basename "${source%.mm}").o"
     objects+=("$object")
     "$CXX" "${COMMON[@]}" -DPEAR_RUNTIME_MODULE="\"$module\"" -include PearRuntime.h \
@@ -111,10 +113,21 @@ echo ">> Linking $OUT (Mac Catalyst)"
   -framework Security \
   -framework AppKit \
   -framework AudioToolbox \
+  -framework IOKit \
   -install_name @rpath/libPearRuntime.dylib \
   -current_version "${VERSION%%-*}" \
   -o "$OUT" \
   "${objects[@]}" -Wl,-force_load,"$RUST_LIB"
+
+# -undefined dynamic_lookup turns a misspelled or nonexistent import into a
+# flat-namespace lookup that fails at load and makes dyld drop every interpose
+# tuple. Only the CoreAudio HAL calls (no Catalyst stub) may resolve that way.
+UNRESOLVED="$(dyld_info -imports "$OUT" | awk '/flat-namespace/ {print $1}' | grep -vE '^_AudioObject(Get|Set)PropertyData$' || true)"
+if [[ -n "$UNRESOLVED" ]]; then
+  echo "ERROR: unresolved flat-namespace imports in $OUT:" >&2
+  echo "$UNRESOLVED" >&2
+  exit 1
+fi
 
 echo ">> Done: $OUT"
 file "$OUT"

@@ -784,7 +784,7 @@ pub extern "C" fn install() {
         }
         let configuration = rt::class_named("GCVirtualControllerConfiguration");
         let controller = rt::class_named("GCVirtualController");
-        let responds = |c, s: &str| !c.is_null() && msg1::<Sel, bool>(c, "instancesRespondToSelector:", pear_objc::sel(s));
+        let responds = |c: Id, s: &str| !c.is_null() && msg1::<Sel, bool>(c, "instancesRespondToSelector:", pear_objc::sel(s));
         if !responds(configuration, "setHidden:") || !responds(controller, "setPosition:forDirectionPadElement:") {
             rt::log("[PearRuntime][virtual-pad] hidden virtual-controller API unavailable");
             return;

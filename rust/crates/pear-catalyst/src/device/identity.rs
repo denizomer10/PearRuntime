@@ -258,7 +258,7 @@ unsafe fn build_synthetic_identifiers() {
             ((b >> 32) & 0x3FFF) as u32 | 0x8000,
             b & 0xFFFF_FFFF_FFFF
         );
-        (*std::ptr::addr_of_mut!(UUID))[..36].copy_from_slice(&text.as_bytes()[..36]);
+        (&mut *std::ptr::addr_of_mut!(UUID))[..36].copy_from_slice(&text.as_bytes()[..36]);
     });
 }
 

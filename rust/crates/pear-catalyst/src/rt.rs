@@ -28,9 +28,6 @@ extern "C" {
     static _dispatch_main_q: c_void;
     fn dispatch_async_f(queue: *const c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
 
-    // core: PearRuntime.mm (C++ linkage) until core is ported.
-    #[link_name = "_Z7PearLogP8NSStringz"]
-    fn PearLog(format: Id, ...);
 }
 
 pub const RTLD_LAZY: c_int = 0x1;
@@ -38,8 +35,7 @@ pub const RTLD_GLOBAL: c_int = 0x8;
 
 /// `[PearRuntime]…` line through PearLog (NSLog + PEAR_LOG_FILE).
 pub fn log(message: &str) {
-    let c = CString::new(message.replace('\0', "")).unwrap_or_default();
-    unsafe { PearLog(nsstring("%s"), c.as_ptr()) };
+    crate::core::runtime::log_line(message);
 }
 
 /// The environment variable is set (any value, even empty), as `getenv() != NULL`.
@@ -154,7 +150,8 @@ pub unsafe fn async_main_with_block(block: Id, arg: usize, call: unsafe fn(Id, u
 }
 
 /// Entry of the `__DATA,__interpose` table dyld applies at load.
-#[repr(C)]
+/// 16-byte aligned: dyld rejects a tuple table that is not pair-aligned.
+#[repr(C, align(16))]
 pub struct Interpose {
     pub replacement: *const c_void,
     pub replacee: *const c_void,
@@ -615,4 +612,33 @@ pub fn main_ticker(start_after: f64, interval: f64, leeway: f64, tick: impl FnMu
         dispatch_source_set_event_handler_f(source, ticker_fire);
         dispatch_resume(source);
     }
+}
+
+extern "C" {
+    static _NSConcreteGlobalBlock: c_void;
+}
+
+#[repr(C)]
+struct GlobalBlock {
+    isa: *const c_void,
+    flags: i32,
+    reserved: i32,
+    invoke: *const c_void,
+    descriptor: *const [usize; 2],
+}
+
+static GLOBAL_BLOCK_DESCRIPTOR: [usize; 2] = [0, std::mem::size_of::<GlobalBlock>()];
+
+/// A process-lifetime global block (no captures) around `invoke`, whose first
+/// argument is the block itself. Copies return the same pointer, so it can be
+/// compared by identity like a static ObjC block literal.
+pub unsafe fn global_block(invoke: *const c_void) -> Id {
+    const BLOCK_IS_GLOBAL: i32 = 1 << 28;
+    Box::leak(Box::new(GlobalBlock {
+        isa: &_NSConcreteGlobalBlock,
+        flags: BLOCK_IS_GLOBAL,
+        reserved: 0,
+        invoke,
+        descriptor: &GLOBAL_BLOCK_DESCRIPTOR,
+    })) as *mut GlobalBlock as Id
 }

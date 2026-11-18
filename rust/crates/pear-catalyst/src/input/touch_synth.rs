@@ -15,7 +15,7 @@
 
 use crate::rt;
 use pear_objc::{cls, msg0, msg1, msg2, nsstring, sel, CGPoint, CGRect, CGSize, Id, Imp, Sel};
-use std::ffi::{c_char, c_int, c_void, CStr};
+use std::ffi::{c_char, c_int, c_void};
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 

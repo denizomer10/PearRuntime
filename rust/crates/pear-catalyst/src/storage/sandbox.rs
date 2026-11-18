@@ -181,7 +181,7 @@ unsafe fn trace_interesting(path: *const c_char) -> bool {
             let _ = write!(line, "{}/Library/Application Support/PearSilicon/", cstr_lossy(home));
         }
         let n = line.len.min(PATH_MAX - 1);
-        (*std::ptr::addr_of_mut!(SUPPORT_PREFIX))[..n].copy_from_slice(&line.buf[..n]);
+        (&mut *std::ptr::addr_of_mut!(SUPPORT_PREFIX))[..n].copy_from_slice(&line.buf[..n]);
     });
     let p = CStr::from_ptr(path).to_bytes();
     const BORING: [&[u8]; 11] = [
@@ -422,13 +422,13 @@ unsafe fn repair_file_mode_at(dirfd: c_int, path: *const c_char, writable: bool)
 /// ways and never read a mode that a non-creating open did not pass.
 #[no_mangle]
 pub unsafe extern "C" fn PearTraceOpen(path: *const c_char, flags: c_int, mut args: ...) -> c_int {
-    let mode: c_int = if flags & O_CREAT != 0 { args.arg::<c_int>() } else { 0 };
+    let mode: c_int = if flags & O_CREAT != 0 { args.next_arg::<c_int>() } else { 0 };
     open_common(AT_FDCWD, path, flags, mode, false)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn PearTraceOpenAt(dirfd: c_int, path: *const c_char, flags: c_int, mut args: ...) -> c_int {
-    let mode: c_int = if flags & O_CREAT != 0 { args.arg::<c_int>() } else { 0 };
+    let mode: c_int = if flags & O_CREAT != 0 { args.next_arg::<c_int>() } else { 0 };
     // The path trace writes through openat; do not route it back here.
     if !path.is_null() && CStr::from_ptr(path).to_bytes() == b"/tmp/pear-fs.log" {
         return openat(dirfd, path, flags, mode);
@@ -529,7 +529,7 @@ fn env_interesting(name: &[u8]) -> bool {
 pub unsafe extern "C" fn PearTraceSyscall(number: c_int, mut args: ...) -> c_long {
     let mut a = [0i64; 6];
     for v in a.iter_mut() {
-        *v = args.arg::<i64>();
+        *v = args.next_arg::<i64>();
     }
     if number == SYS_SYSCTL && a[0] != 0 {
         let result = PearSysctlMIB(a[0] as *mut c_int, a[1] as c_uint, a[2] as *mut c_void, a[3] as *mut usize, a[4] as *mut c_void, a[5] as usize) as c_long;
