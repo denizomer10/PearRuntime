@@ -71,7 +71,20 @@ if [[ -f "$ANGLE_DIR/libGLESv2.dylib" ]]; then
     cp "$ANGLE_DIR/$lib" "$OUT_DIR/PearANGLE/"
     while IFS= read -r dep; do todo+=("${dep#@rpath/}"); done < <(otool -L "$ANGLE_DIR/$lib" | awk '/@rpath\// {print $1}' | grep -v "@rpath/$lib\$")
   done
-  echo "   ANGLE: $(ls "$OUT_DIR/PearANGLE" | wc -l | tr -d ' ') libraries"
+  cp "$ROOT/third_party/angle/LICENSE" "$OUT_DIR/PearANGLE/LICENSE.ANGLE"
+  # ANGLE's LICENSE covers ANGLE only; the libraries also contain abseil, zlib,
+  # xxHash and others whose licenses travel with them (as in build.sh).
+  ANGLE_LICENSE_ARGS=(--angle-root "$ROOT/third_party/angle" --out "$OUT_DIR/PearANGLE/THIRD_PARTY_LICENSES.txt")
+  ANGLE_NINJA="$ROOT/third_party/angle/out/PearHostMetal"
+  if [[ -f "$ANGLE_NINJA/build.ninja" ]]; then
+    ANGLE_LICENSE_ARGS+=(--ninja-dir "$ANGLE_NINJA" --target libEGL.dylib --target libGLESv2.dylib)
+  else
+    for component in abseil-cpp astc-encoder perfetto volk xxhash zlib; do
+      ANGLE_LICENSE_ARGS+=(--component "$component")
+    done
+  fi
+  python3 "$ROOT/collect-angle-licenses.py" "${ANGLE_LICENSE_ARGS[@]}"
+  echo "   ANGLE: $(ls "$OUT_DIR/PearANGLE" | grep -c dylib) libraries"
   GLES_LINK=(-L"$OUT_DIR/PearANGLE" -Wl,-reexport-lGLESv2 -Wl,-rpath,@loader_path/../PearANGLE)
 else
   echo "!! no PearANGLE build at $ANGLE_DIR; building OpenGLES.framework without re-exported GL symbols (run host/build-pearangle.sh --sync for GLES)" >&2
