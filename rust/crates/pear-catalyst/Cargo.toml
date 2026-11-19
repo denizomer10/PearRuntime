@@ -13,6 +13,13 @@ crate-type = ["staticlib"]
 test = false
 doctest = false
 
+[features]
+# Test seams for the source-level smoke tests (scripts/*-smoke*): no image
+# initializer and no active interpose tables, replaceable window/GL/class
+# lookups, and C entry points into module internals (src/smoke.rs). Never
+# enabled by build.sh.
+smoke = ["pear-keychain/smoke"]
+
 [dependencies]
 pear-objc = { path = "../pear-objc" }
 pear-keychain = { path = "../pear-keychain" }

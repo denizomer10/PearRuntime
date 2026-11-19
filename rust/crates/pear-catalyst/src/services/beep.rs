@@ -17,7 +17,7 @@ extern "C" {
 extern "C" fn pear_no_beep() {}
 
 #[used]
-#[link_section = "__DATA,__interpose"]
+#[cfg_attr(not(feature = "smoke"), link_section = "__DATA,__interpose")]
 static NSBEEP_INTERPOSE: Interpose = Interpose {
     replacement: pear_no_beep as *const c_void,
     replacee: NSBeep as *const c_void,

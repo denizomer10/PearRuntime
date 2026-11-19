@@ -11,5 +11,10 @@ crate-type = ["rlib"]
 test = false
 doctest = false
 
+[features]
+# Test seams for scripts/keychain-smoke.*: no active interpose table,
+# replaceable Security entry points, and C entry points into the store.
+smoke = []
+
 [dependencies]
 pear-objc = { path = "../pear-objc" }

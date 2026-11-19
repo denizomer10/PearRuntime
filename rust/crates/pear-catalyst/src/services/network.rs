@@ -17,8 +17,8 @@ use std::ffi::{c_void, CStr};
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-static KEEP_UA: AtomicBool = AtomicBool::new(false);
-static INSTALLED: AtomicBool = AtomicBool::new(false);
+pub(crate) static KEEP_UA: AtomicBool = AtomicBool::new(false);
+pub(crate) static INSTALLED: AtomicBool = AtomicBool::new(false);
 
 fn debug() -> bool {
     rt::env_set("PEAR_DEBUG_NETWORK")
@@ -77,7 +77,7 @@ fn looks_like_mac(agent: &str) -> bool {
 
 /// The iOS headers merged into `headers`, keeping everything the caller set
 /// except a macOS User-Agent.
-unsafe fn merged_headers(headers: Id) -> Id {
+pub(crate) unsafe fn merged_headers(headers: Id) -> Id {
     let merged: Id = if !headers.is_null() && pear_objc::is_kind_of(headers, "NSDictionary") {
         rt::autoreleased(msg0(headers, "mutableCopy"))
     } else {
@@ -266,7 +266,15 @@ unsafe fn concrete(obj: Id, fallback: &str) -> Class {
 }
 
 pub fn init() {
-    if !rt::module_enabled("services") || rt::env_set("PEAR_NO_NETWORK_SHIM") || INSTALLED.swap(true, Ordering::AcqRel) {
+    if !rt::module_enabled("services") || rt::env_set("PEAR_NO_NETWORK_SHIM") {
+        return;
+    }
+    install();
+}
+
+/// The one-time installer behind init's opt-outs.
+pub(crate) fn install() {
+    if INSTALLED.swap(true, Ordering::AcqRel) {
         return;
     }
     KEEP_UA.store(rt::env_set("PEAR_NETWORK_KEEP_UA"), Ordering::Relaxed);
@@ -276,19 +284,19 @@ pub fn init() {
             let ready = profile_ready();
             if ready {
                 let url: Id = msg1(cls("NSURL"), "URLWithString:", nsstring("https://example.com"));
-                let sample: Id = msg1(cls("NSMutableURLRequest"), "requestWithURL:", url);
+                let sample: Id = msg1(rt::installer_class("NSMutableURLRequest"), "requestWithURL:", url);
                 let rc = concrete(sample, "NSMutableURLRequest");
                 swap(rc, "setValue:forHTTPHeaderField:", set_value as Imp, &SET_VALUE);
                 swap(rc, "setAllHTTPHeaderFields:", set_all_headers as Imp, &SET_ALL);
             }
-            let config = cls("NSURLSessionConfiguration");
+            let config = rt::installer_class("NSURLSessionConfiguration");
             patch_configuration_class(concrete(msg0(config, "defaultSessionConfiguration"), "NSURLSessionConfiguration"));
             let ephemeral: Id = msg0(config, "ephemeralSessionConfiguration");
             if !ephemeral.is_null() {
                 patch_configuration_class(rt::object_getClass(ephemeral));
             }
             if ready {
-                patch_session_class(concrete(msg0(cls("NSURLSession"), "sharedSession"), "NSURLSession"));
+                patch_session_class(concrete(msg0(rt::installer_class("NSURLSession"), "sharedSession"), "NSURLSession"));
             }
         });
         let ua = user_agent().map(|u| rt::ns_string(u)).unwrap_or_else(|| "(null)".into());

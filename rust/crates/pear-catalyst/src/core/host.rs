@@ -90,7 +90,7 @@ fn errno() -> c_int {
     unsafe { *__error() }
 }
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     let mut ts = Timespec { sec: 0, nsec: 0 };
     unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts) };
     ts.sec as u64 * 1_000_000_000 + ts.nsec as u64
@@ -161,13 +161,18 @@ fn config() -> &'static Config {
     })
 }
 
+/// The connection lock (a dispatch semaphore), owned by the config.
+pub(crate) fn connection_lock() -> Id {
+    config().lock as Id
+}
+
 #[export_name = "_Z20PearHostIsConfiguredv"]
 pub extern "C" fn is_configured() -> bool {
     config().configured
 }
 
 // Connection state, protected by the config lock.
-static FD: AtomicI32 = AtomicI32::new(-1);
+pub(crate) static FD: AtomicI32 = AtomicI32::new(-1);
 static RETRY_AFTER: AtomicU64 = AtomicU64::new(0);
 
 fn reset_locked() {

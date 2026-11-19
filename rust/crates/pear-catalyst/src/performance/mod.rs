@@ -112,7 +112,7 @@ unsafe extern "C" fn pear_pthread_create(
 }
 
 #[used]
-#[link_section = "__DATA,__interpose"]
+#[cfg_attr(not(feature = "smoke"), link_section = "__DATA,__interpose")]
 static PTHREAD_CREATE_INTERPOSE: Interpose = Interpose {
     replacement: pear_pthread_create as *const c_void,
     replacee: pthread_create as *const c_void,

@@ -60,7 +60,7 @@ extern "C" {
     static kCFBooleanFalse: CFTypeRef;
 }
 
-fn shim_disabled() -> bool {
+pub(crate) fn shim_disabled() -> bool {
     unsafe { !getenv(c"PEAR_NO_DEVICE_SHIM".as_ptr()).is_null() }
 }
 
@@ -74,14 +74,14 @@ fn p() -> &'static profile::Profile {
 
 // ---- sysctl / uname values ---------------------------------------------
 
-enum Value {
+pub(crate) enum Value {
     Text(*const c_char),
     U32(u32),
     U64(u64),
 }
 
 /// The iOS-looking value for a hardware or kernel fact.
-unsafe fn value_for_name(name: &[u8]) -> Option<Value> {
+pub(crate) unsafe fn value_for_name(name: &[u8]) -> Option<Value> {
     let profile = p();
     let kernel = || env_set(c"PEAR_DEVICE_KERNEL");
     let text = |t: *const c_char| (!t.is_null()).then_some(Value::Text(t));
@@ -112,7 +112,7 @@ unsafe fn value_for_name(name: &[u8]) -> Option<Value> {
 
 /// sysctl conventions: 0, or -1 with ENOMEM when the buffer is too small;
 /// a size query reports the length required.
-unsafe fn write_value(value: &Value, oldp: *mut c_void, oldlenp: *mut usize) -> c_int {
+pub(crate) unsafe fn write_value(value: &Value, oldp: *mut c_void, oldlenp: *mut usize) -> c_int {
     let need = match value {
         Value::Text(t) => strlen(*t) + 1,
         Value::U32(_) => 4,
@@ -495,7 +495,7 @@ unsafe extern "C" fn pear_getifaddrs(ifap: *mut *mut IfAddrs) -> c_int {
 }
 
 #[used]
-#[link_section = "__DATA,__interpose"]
+#[cfg_attr(not(feature = "smoke"), link_section = "__DATA,__interpose")]
 static INTERPOSE: [Interpose; 9] = [
     Interpose { replacement: pear_sysctlbyname as *const c_void, replacee: sysctlbyname as *const c_void },
     Interpose { replacement: PearSysctlMIB as *const c_void, replacee: __sysctl as *const c_void },
@@ -524,7 +524,7 @@ unsafe extern "C" fn no_op(_s: Id, _c: Sel) {}
 
 /// FNV-1a 128-bit vendor UUID from bundle id and model (an identifier, not a
 /// secret); a managed profile supplies the host-computed one instead.
-unsafe fn synthetic_vendor_id() -> Id {
+pub(crate) unsafe fn synthetic_vendor_id() -> Id {
     static ID: OnceLock<usize> = OnceLock::new();
     *ID.get_or_init(|| {
         let profile = p();
@@ -555,7 +555,7 @@ unsafe fn synthetic_vendor_id() -> Id {
 }
 
 unsafe extern "C" fn vendor_id(_s: Id, _c: Sel) -> Id { synthetic_vendor_id() }
-fn wants_pad() -> bool {
+pub(crate) fn wants_pad() -> bool {
     !p().idiom.is_null() && unsafe { CStr::from_ptr(p().idiom) }.to_bytes() == b"pad"
 }
 unsafe extern "C" fn device_idiom(_s: Id, _c: Sel) -> isize { wants_pad() as isize }
@@ -578,11 +578,21 @@ unsafe fn swizzle(c: Class, selector: &str, imp: Imp) -> Imp {
     if m.is_null() { std::ptr::null() } else { rt::method_setImplementation(m, imp) }
 }
 
-unsafe fn install_device_properties() {
-    if env_set(c"PEAR_NO_DEVICE_UI") {
+/// The opt-out the installer honours (PEAR_NO_DEVICE_SHIM); a smoke fixture
+/// may substitute its own predicate for this installer only.
+fn installer_disabled() -> bool {
+    #[cfg(feature = "smoke")]
+    if let Some(f) = unsafe { crate::smoke::hook::<unsafe extern "C" fn() -> bool>(&crate::smoke::DEVICE_INSTALLER_DISABLED) } {
+        return unsafe { f() };
+    }
+    shim_disabled()
+}
+
+pub(crate) unsafe fn install_device_properties() {
+    if installer_disabled() || env_set(c"PEAR_NO_DEVICE_UI") {
         return;
     }
-    let device = cls("UIDevice");
+    let device = rt::installer_class("UIDevice");
     if device.is_null() {
         return;
     }
@@ -608,7 +618,7 @@ unsafe fn install_device_properties() {
     }
     // Diagnostic only: forcing the trait idiom changes the whole layout mode.
     if ready && env_set(c"PEAR_FORCE_TRAIT_IDIOM") {
-        let old = swizzle(cls("UITraitCollection"), "userInterfaceIdiom", trait_idiom as Imp);
+        let old = swizzle(rt::installer_class("UITraitCollection"), "userInterfaceIdiom", trait_idiom as Imp);
         ORIGINAL_TRAIT_IDIOM.store(old as *mut c_void, Ordering::Release);
     }
 }
@@ -677,8 +687,8 @@ struct Vector3 {
     y: f64,
     z: f64,
 }
-static MOCK_ACCELEROMETER: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
-static MOCK_GYRO: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+pub(crate) static MOCK_ACCELEROMETER: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
+pub(crate) static MOCK_GYRO: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
 unsafe extern "C" fn mock_init(s: Id, _c: Sel) -> Id { s }
 unsafe extern "C" fn mock_acceleration(_s: Id, _c: Sel) -> Vector3 { Vector3 { x: 0.0, y: 0.0, z: -1.0 } }

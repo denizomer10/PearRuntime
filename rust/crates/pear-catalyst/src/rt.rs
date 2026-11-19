@@ -354,6 +354,16 @@ pub unsafe fn ivar_state<'a, T>(obj: Id) -> &'a mut T {
 }
 
 /// The app's primary (key, else first visible) window.
+/// A class the device/network installers patch, looked up by name. Smoke
+/// builds let a fixture substitute its own classes (src/smoke.rs).
+pub unsafe fn installer_class(name: &str) -> Class {
+    #[cfg(feature = "smoke")]
+    if let Some(f) = crate::smoke::hook::<unsafe extern "C" fn(Id) -> Class>(&crate::smoke::INSTALLER_CLASS) {
+        return f(pear_objc::nsstring(name));
+    }
+    pear_objc::cls(name)
+}
+
 pub unsafe fn primary_window() -> Id {
     crate::input::touch_synth::primary_window()
 }

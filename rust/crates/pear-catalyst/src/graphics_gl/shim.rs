@@ -355,6 +355,10 @@ static TOUCH_REMAP_INSTALLED: AtomicBool = AtomicBool::new(false);
 /// window point is not. Only the window-space answer is rewritten.
 #[export_name = "_Z19PearGLMapTouchPointP7UITouchP6UIView7CGPoint"]
 pub unsafe extern "C" fn map_touch_point(touch: Id, view: Id, point: CGPoint) -> CGPoint {
+    #[cfg(feature = "smoke")]
+    if let Some(f) = crate::smoke::hook::<unsafe extern "C" fn(Id, Id, CGPoint) -> CGPoint>(&crate::smoke::GL_MAP_TOUCH_POINT) {
+        return f(touch, view, point);
+    }
     if !geo().fit_applied || !msg0::<bool>(cls("NSThread"), "isMainThread") {
         return point;
     }

@@ -59,6 +59,10 @@ fn env(name: &str) -> Option<String> {
 /// context ID and coordinate dimensions tied to the same actual window.
 #[export_name = "_Z17PearPrimaryWindowv"]
 pub unsafe extern "C" fn primary_window() -> Id {
+    #[cfg(feature = "smoke")]
+    if let Some(f) = crate::smoke::hook::<unsafe extern "C" fn() -> Id>(&crate::smoke::PRIMARY_WINDOW) {
+        return f();
+    }
     let app: Id = msg0(cls("UIApplication"), "sharedApplication");
     let mut first_visible: Id = NIL;
     let usable = |w: Id| !msg0::<bool>(w, "isHidden") && !msg0::<Id>(w, "rootViewController").is_null();

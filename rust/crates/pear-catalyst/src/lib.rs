@@ -62,6 +62,8 @@ pub mod graphics_gl {
     pub mod routing;
     pub mod shim;
 }
+#[cfg(feature = "smoke")]
+pub mod smoke;
 pub mod storage {
     pub mod credential;
     pub mod sandbox;
@@ -74,6 +76,7 @@ unsafe extern "C" fn keychain_log(message: *const std::ffi::c_char) {
 }
 
 /// Runs the Rust modules' initializers in module order.
+#[cfg_attr(feature = "smoke", allow(dead_code))]
 extern "C" fn pear_catalyst_load() {
     // The keychain store (shared with PearHost) is interposed for the whole
     // process; it only needs the runtime's logger.
@@ -111,6 +114,9 @@ extern "C" fn pear_catalyst_load() {
     }
 }
 
+// Smoke builds link the crate into test fixtures, which start each module
+// explicitly (src/smoke.rs) instead of at image load.
+#[cfg(not(feature = "smoke"))]
 #[used]
 #[link_section = "__DATA,__mod_init_func,mod_init_funcs"]
 static PEAR_CATALYST_INIT: extern "C" fn() = pear_catalyst_load;

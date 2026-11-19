@@ -40,7 +40,7 @@ static GEOMETRY: Mutex<Geometry> = Mutex::new(Geometry {
     cached: CGSize { width: 0.0, height: 0.0 },
     cached_at: 0,
 });
-static REFRESH_QUEUED: AtomicBool = AtomicBool::new(false);
+pub(crate) static REFRESH_QUEUED: AtomicBool = AtomicBool::new(false);
 static ORIENTATION_READ: AtomicBool = AtomicBool::new(false);
 /// Display backing scale as f64 bits (0 = unknown), cached for render threads.
 static DISPLAY_SCALE: AtomicU64 = AtomicU64::new(0);
@@ -115,7 +115,7 @@ fn queue_screen_refresh() {
 
 /// Render threads read a main-thread snapshot, never the UIKit window tree;
 /// a stale snapshot queues one coalesced refresh.
-unsafe fn reported_bounds() -> CGRect {
+pub(crate) unsafe fn reported_bounds() -> CGRect {
     let (override_size, mut cached, age) = {
         let g = geometry();
         (g.override_size, g.cached, now().wrapping_sub(g.cached_at))

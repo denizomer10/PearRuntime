@@ -198,14 +198,14 @@ unsafe extern "C" fn pear_home_directory() -> Id {
 }
 
 #[used]
-#[link_section = "__DATA,__interpose"]
+#[cfg_attr(not(feature = "smoke"), link_section = "__DATA,__interpose")]
 static SEARCH_PATH_INTERPOSE: Interpose = Interpose {
     replacement: pear_search_path as *const c_void,
     replacee: NSSearchPathForDirectoriesInDomains as *const c_void,
 };
 
 #[used]
-#[link_section = "__DATA,__interpose"]
+#[cfg_attr(not(feature = "smoke"), link_section = "__DATA,__interpose")]
 static HOME_INTERPOSE: Interpose = Interpose {
     replacement: pear_home_directory as *const c_void,
     replacee: NSHomeDirectory as *const c_void,

@@ -664,7 +664,24 @@ unsafe fn or_question(v: Id) -> String {
 }
 
 // dyld does not apply interposing to the image that defines it, so the
-// functions called below are the system originals.
+// functions called below are the system originals (or, in a smoke build,
+// the fixture's replacements).
+unsafe fn platform_random_key(parameters: Id, error: *mut Id) -> Id {
+    #[cfg(feature = "smoke")]
+    if let Some(f) = smoke::hook::<smoke::RandomKey>(&smoke::RANDOM_KEY) {
+        return f(parameters, error);
+    }
+    SecKeyCreateRandomKey(parameters, error)
+}
+
+unsafe fn platform_generate_pair(parameters: Id, public_key: *mut Id, private_key: *mut Id) -> OSStatus {
+    #[cfg(feature = "smoke")]
+    if let Some(f) = smoke::hook::<smoke::GeneratePair>(&smoke::GENERATE_PAIR) {
+        return f(parameters, public_key, private_key);
+    }
+    SecKeyGeneratePair(parameters, public_key, private_key)
+}
+
 unsafe extern "C" fn pear_sec_key_create_random_key(parameters: Id, error: *mut Id) -> Id {
     pear_objc::autorelease_pool(|| {
         let requested = if parameters.is_null() { msg0(cls("NSDictionary"), "dictionary") } else { parameters };
@@ -677,7 +694,7 @@ unsafe extern "C" fn pear_sec_key_create_random_key(parameters: Id, error: *mut 
             or_question(get(params, kSecAttrKeySizeInBits)),
             persistent as i32
         ));
-        let key = SecKeyCreateRandomKey(params, error);
+        let key = platform_random_key(params, error);
         if key.is_null() {
             let e = if error.is_null() || (*error).is_null() { "unknown".to_string() } else { describe(*error) };
             log(&format!("[PearRuntime][keychain] SecKeyCreateRandomKey failed: {e}"));
@@ -707,7 +724,7 @@ unsafe extern "C" fn pear_sec_key_generate_pair(parameters: Id, public_key: *mut
         let (mut tmp_public, mut tmp_private): (Id, Id) = (NIL, NIL);
         let public_result: *mut Id = if !public_key.is_null() { public_key } else if persist_public { &mut tmp_public } else { std::ptr::null_mut() };
         let private_result: *mut Id = if !private_key.is_null() { private_key } else if persist_private { &mut tmp_private } else { std::ptr::null_mut() };
-        let status = SecKeyGeneratePair(params, public_result, private_result);
+        let status = platform_generate_pair(params, public_result, private_result);
         if status == ERR_SUCCESS {
             if persist_public && !public_result.is_null() {
                 store_sec_key(*public_result, requested, kSecAttrKeyClassPublic);
@@ -737,7 +754,7 @@ struct Interpose {
 unsafe impl Sync for Interpose {}
 
 #[used]
-#[link_section = "__DATA,__interpose"]
+#[cfg_attr(not(feature = "smoke"), link_section = "__DATA,__interpose")]
 static INTERPOSE: [Interpose; 6] = [
     Interpose { replacement: pear_sec_item_add as *const c_void, replacee: SecItemAdd as *const c_void },
     Interpose { replacement: pear_sec_item_copy_matching as *const c_void, replacee: SecItemCopyMatching as *const c_void },
@@ -746,3 +763,79 @@ static INTERPOSE: [Interpose; 6] = [
     Interpose { replacement: pear_sec_key_create_random_key as *const c_void, replacee: SecKeyCreateRandomKey as *const c_void },
     Interpose { replacement: pear_sec_key_generate_pair as *const c_void, replacee: SecKeyGeneratePair as *const c_void },
 ];
+
+/// Test seams for scripts/keychain-smoke.* (`smoke` feature only): the
+/// platform key generators the store wraps are replaceable, the interpose
+/// table above is inert, and the wrappers and store are C entry points. The
+/// store never calls the system SecItem* functions; they appear only as
+/// replacees in the interpose table.
+#[cfg(feature = "smoke")]
+pub mod smoke {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    pub type RandomKey = unsafe extern "C" fn(Id, *mut Id) -> Id;
+    pub type GeneratePair = unsafe extern "C" fn(Id, *mut Id, *mut Id) -> OSStatus;
+    pub static RANDOM_KEY: AtomicUsize = AtomicUsize::new(0);
+    pub static GENERATE_PAIR: AtomicUsize = AtomicUsize::new(0);
+
+    pub unsafe fn hook<F: Copy>(slot: &AtomicUsize) -> Option<F> {
+        let p = slot.load(Ordering::Acquire);
+        (p != 0).then(|| std::mem::transmute_copy::<usize, F>(&p))
+    }
+
+    /// Replaces the platform SecKeyCreateRandomKey / SecKeyGeneratePair the
+    /// store calls; NULL restores the system function.
+    #[no_mangle]
+    pub extern "C" fn PearKeychainSmokeSetPlatform(random_key: Option<RandomKey>, generate_pair: Option<GeneratePair>) {
+        RANDOM_KEY.store(random_key.map_or(0, |f| f as usize), Ordering::Release);
+        GENERATE_PAIR.store(generate_pair.map_or(0, |f| f as usize), Ordering::Release);
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn PearSecItemAdd(attributes: Id, result: *mut CFTypeRef) -> OSStatus {
+        pear_sec_item_add(attributes, result)
+    }
+    #[no_mangle]
+    pub unsafe extern "C" fn PearSecItemCopyMatching(query: Id, result: *mut CFTypeRef) -> OSStatus {
+        pear_sec_item_copy_matching(query, result)
+    }
+    #[no_mangle]
+    pub unsafe extern "C" fn PearSecItemUpdate(query: Id, update: Id) -> OSStatus {
+        pear_sec_item_update(query, update)
+    }
+    #[no_mangle]
+    pub unsafe extern "C" fn PearSecItemDelete(query: Id) -> OSStatus {
+        pear_sec_item_delete(query)
+    }
+    #[no_mangle]
+    pub unsafe extern "C" fn PearSecKeyCreateRandomKey(parameters: Id, error: *mut Id) -> Id {
+        pear_sec_key_create_random_key(parameters, error)
+    }
+    #[no_mangle]
+    pub unsafe extern "C" fn PearSecKeyGeneratePair(parameters: Id, public_key: *mut Id, private_key: *mut Id) -> OSStatus {
+        pear_sec_key_generate_pair(parameters, public_key, private_key)
+    }
+
+    /// Every stored item (autoreleased NSArray of NSDictionary).
+    #[no_mangle]
+    pub unsafe extern "C" fn PearKeychainSmokeLoadAll() -> Id {
+        let array: Id = msg0(cls("NSMutableArray"), "array");
+        for item in load_all() {
+            msg1::<Id, ()>(array, "addObject:", item);
+        }
+        array
+    }
+    #[no_mangle]
+    pub unsafe extern "C" fn PearKeychainSmokeMatches(item: Id, query: Id) -> bool {
+        matches(item, query)
+    }
+    #[no_mangle]
+    pub unsafe extern "C" fn PearKeychainSmokeSaveItem(item: Id) -> bool {
+        save_item(item)
+    }
+    #[no_mangle]
+    pub unsafe extern "C" fn PearKeychainSmokeStoreSecKey(key: Id, params: Id, key_class: Id) {
+        pear_objc::autorelease_pool(|| store_sec_key(key, params, key_class))
+    }
+}

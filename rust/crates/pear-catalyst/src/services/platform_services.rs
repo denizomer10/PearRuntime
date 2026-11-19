@@ -589,7 +589,7 @@ unsafe extern "C" fn pear_instance_dispose(unit: AudioUnit) -> OSStatus {
 }
 
 #[used]
-#[link_section = "__DATA,__interpose"]
+#[cfg_attr(not(feature = "smoke"), link_section = "__DATA,__interpose")]
 static INTERPOSE: [Interpose; 11] = [
     Interpose { replacement: pear_os_proc_available_memory as *const c_void, replacee: os_proc_available_memory as *const c_void },
     Interpose { replacement: pear_component_find_next as *const c_void, replacee: AudioComponentFindNext as *const c_void },

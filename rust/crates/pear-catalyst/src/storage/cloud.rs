@@ -87,18 +87,18 @@ unsafe fn ubiquity_path() -> String {
 // ---------------------------------------------------------------------------
 // Local key-value store
 
-struct KvState {
-    kv: Id, // retained NSMutableDictionary, nil until loaded
+pub(crate) struct KvState {
+    pub(crate) kv: Id, // retained NSMutableDictionary, nil until loaded
     path: Option<String>,
-    unconfirmed: Id, // retained NSMutableSet of keys, nil until needed
+    pub(crate) unconfirmed: Id, // retained NSMutableSet of keys, nil until needed
 }
 unsafe impl Send for KvState {}
 
 /// Legacy (plist) mode lock; host mode uses the semaphore gate instead and
 /// takes this mutex only for the short in-memory bookkeeping it owns.
-static KV: Mutex<KvState> = Mutex::new(KvState { kv: NIL, path: None, unconfirmed: NIL });
+pub(crate) static KV: Mutex<KvState> = Mutex::new(KvState { kv: NIL, path: None, unconfirmed: NIL });
 
-fn host_gate() -> Id {
+pub(crate) fn host_gate() -> Id {
     static GATE: OnceLock<Keep> = OnceLock::new();
     extern "C" {
         fn dispatch_semaphore_create(value: isize) -> Id;
@@ -130,7 +130,7 @@ unsafe fn reject_host_write(key: Id) {
     }
 }
 
-unsafe fn collect_rejected(s: &mut KvState) {
+pub(crate) unsafe fn collect_rejected(s: &mut KvState) {
     let mut w = REJECTED.swap(std::ptr::null_mut(), Ordering::Acquire);
     if !w.is_null() && s.unconfirmed.is_null() {
         s.unconfirmed = objc_retain(msg0(cls("NSMutableSet"), "set"));
@@ -237,7 +237,7 @@ unsafe fn kv_put(s: &KvState, key: Id, value: Id) {
     }
 }
 
-unsafe fn kv_object(key: Id) -> Id {
+pub(crate) unsafe fn kv_object(key: Id) -> Id {
     let deadline = host::deadline();
     if key.is_null() {
         return NIL;
@@ -262,7 +262,7 @@ unsafe fn kv_object(key: Id) -> Id {
     rt::autoreleased(objc_retain(kv_get(&s, key)))
 }
 
-unsafe fn kv_set(key: Id, value: Id) -> bool {
+pub(crate) unsafe fn kv_set(key: Id, value: Id) -> bool {
     extern "C" {
         fn CFPropertyListCreateDeepCopy(allocator: *const c_void, list: Id, options: usize) -> Id;
     }
@@ -411,7 +411,7 @@ unsafe fn set_instance(c: Class, selector: &str, imp: Imp) {
     }
 }
 
-unsafe fn install_key_value_store() {
+pub(crate) unsafe fn install_key_value_store() {
     let c = rt::class_named("NSUbiquitousKeyValueStore");
     if c.is_null() {
         return;
@@ -465,7 +465,7 @@ unsafe extern "C" fn ubiquity_yes(_: Id, _: Sel, _url: Id, error: *mut Id) -> bo
     true
 }
 
-unsafe fn install_ubiquity_container() {
+pub(crate) unsafe fn install_ubiquity_container() {
     let fm = cls("NSFileManager");
     set_instance(fm, "URLForUbiquityContainerIdentifier:", ubiquity_url as Imp);
     set_instance(fm, "ubiquityIdentityToken", ubiquity_token as Imp);

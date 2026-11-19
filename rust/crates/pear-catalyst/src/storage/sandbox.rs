@@ -97,6 +97,52 @@ extern "C" {
     fn PearSysctlMIB(name: *mut c_int, namelen: c_uint, oldp: *mut c_void, oldlenp: *mut usize, newp: *mut c_void, newlen: usize) -> c_int;
 }
 
+// The libc calls the file-mode repair makes. A smoke build lets the fixture
+// (scripts/filesystem-smoke.mm) inject metadata, failures and races here.
+unsafe fn sys_fstat(fd: c_int, info: *mut Stat) -> c_int {
+    #[cfg(feature = "smoke")]
+    if let Some(f) = crate::smoke::hook::<unsafe extern "C" fn(c_int, *mut Stat) -> c_int>(&crate::smoke::FS_FSTAT) {
+        return f(fd, info);
+    }
+    fstat(fd, info)
+}
+
+unsafe fn sys_fchmod(fd: c_int, mode: Mode) -> c_int {
+    #[cfg(feature = "smoke")]
+    if let Some(f) = crate::smoke::hook::<unsafe extern "C" fn(c_int, Mode) -> c_int>(&crate::smoke::FS_FCHMOD) {
+        return f(fd, mode);
+    }
+    fchmod(fd, mode)
+}
+
+unsafe fn sys_fcntl_getpath(fd: c_int, path: *mut c_char) -> c_int {
+    #[cfg(feature = "smoke")]
+    if let Some(f) = crate::smoke::hook::<unsafe extern "C" fn(c_int, c_int, *mut c_char) -> c_int>(&crate::smoke::FS_GETPATH) {
+        return f(fd, F_GETPATH, path);
+    }
+    fcntl(fd, F_GETPATH, path)
+}
+
+unsafe fn sys_openat(dirfd: c_int, path: *const c_char, flags: c_int, mode: c_int) -> c_int {
+    #[cfg(feature = "smoke")]
+    if let Some(f) = crate::smoke::hook::<unsafe extern "C" fn(c_int, *const c_char, c_int, ...) -> c_int>(&crate::smoke::FS_OPENAT) {
+        return f(dirfd, path, flags, mode);
+    }
+    openat(dirfd, path, flags, mode)
+}
+
+unsafe fn sys_open(path: *const c_char, flags: c_int, mode: c_int) -> c_int {
+    #[cfg(feature = "smoke")]
+    if let Some(f) = crate::smoke::hook::<unsafe extern "C" fn(*const c_char, c_int, ...) -> c_int>(&crate::smoke::FS_OPEN) {
+        return f(path, flags, mode);
+    }
+    open(path, flags, mode)
+}
+
+pub(crate) fn trace_enabled() -> bool {
+    TRACE_ENABLED.load(Ordering::Relaxed)
+}
+
 fn errno() -> c_int {
     unsafe { *__error() }
 }
@@ -147,7 +193,7 @@ unsafe fn trace_write(api: &str, path: &str, result: c_long, error: c_int) {
     if TRACE_FD.load(Ordering::Acquire) < 0 {
         // openat keeps this out of the interposed open().
         let file = std::ptr::addr_of!(TRACE_FILE) as *const c_char;
-        TRACE_FD.store(openat(AT_FDCWD, file, O_WRONLY | O_CREAT | O_APPEND, 0o644 as c_int), Ordering::Release);
+        TRACE_FD.store(sys_openat(AT_FDCWD, file, O_WRONLY | O_CREAT | O_APPEND, 0o644 as c_int), Ordering::Release);
     }
     let fd = TRACE_FD.load(Ordering::Acquire);
     if fd >= 0 {
@@ -359,7 +405,7 @@ unsafe fn descriptor_in_managed_home(fd: c_int) -> bool {
     if root_b == b"/" {
         return false;
     }
-    if fcntl(fd, F_GETPATH, path.as_mut_ptr()) != 0 || !path_is_below(CStr::from_ptr(path.as_ptr()).to_bytes(), root_b) {
+    if sys_fcntl_getpath(fd, path.as_mut_ptr()) != 0 || !path_is_below(CStr::from_ptr(path.as_ptr()).to_bytes(), root_b) {
         return false;
     }
     !realpath(path.as_ptr(), resolved.as_mut_ptr()).is_null() && path_is_below(CStr::from_ptr(resolved.as_ptr()).to_bytes(), root_b)
@@ -367,7 +413,7 @@ unsafe fn descriptor_in_managed_home(fd: c_int) -> bool {
 
 unsafe fn repair_file_mode(fd: c_int, writable: bool) -> bool {
     let mut info: Stat = std::mem::zeroed();
-    if fstat(fd, &mut info) != 0 || info.mode & S_IFMT != S_IFREG || info.uid != geteuid() {
+    if sys_fstat(fd, &mut info) != 0 || info.mode & S_IFMT != S_IFREG || info.uid != geteuid() {
         return false;
     }
     let perms = info.mode & ALLPERMS;
@@ -377,7 +423,7 @@ unsafe fn repair_file_mode(fd: c_int, writable: bool) -> bool {
     if writable && perms & S_IWUSR == 0 && info.nlink == 1 && descriptor_in_managed_home(fd) {
         repaired |= S_IWUSR;
     }
-    repaired != perms && fchmod(fd, repaired) == 0
+    repaired != perms && sys_fchmod(fd, repaired) == 0
 }
 
 /// Legacy owner-read recovery for files with neither owner read nor write;
@@ -401,14 +447,14 @@ unsafe fn repair_file_mode_at(dirfd: c_int, path: *const c_char, writable: bool)
         return false;
     }
     let probe = O_EVTONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK;
-    let mut fd = openat(dirfd, path, probe, 0 as c_int);
+    let mut fd = sys_openat(dirfd, path, probe, 0 as c_int);
     if fd < 0 && errno() == EACCES {
-        fd = openat(dirfd, path, probe | O_WRONLY, 0 as c_int);
+        fd = sys_openat(dirfd, path, probe | O_WRONLY, 0 as c_int);
     }
     let mut read_repaired = false;
     if fd < 0 && errno() == EACCES && repair_owner_read_at(dirfd, path) {
         read_repaired = true;
-        fd = openat(dirfd, path, probe, 0 as c_int);
+        fd = sys_openat(dirfd, path, probe, 0 as c_int);
     }
     if fd < 0 {
         return read_repaired;
@@ -431,7 +477,7 @@ pub unsafe extern "C" fn PearTraceOpenAt(dirfd: c_int, path: *const c_char, flag
     let mode: c_int = if flags & O_CREAT != 0 { args.next_arg::<c_int>() } else { 0 };
     // The path trace writes through openat; do not route it back here.
     if !path.is_null() && CStr::from_ptr(path).to_bytes() == b"/tmp/pear-fs.log" {
-        return openat(dirfd, path, flags, mode);
+        return sys_openat(dirfd, path, flags, mode);
     }
     open_common(dirfd, path, flags, mode, true)
 }
@@ -439,7 +485,7 @@ pub unsafe extern "C" fn PearTraceOpenAt(dirfd: c_int, path: *const c_char, flag
 unsafe fn open_common(dirfd: c_int, path: *const c_char, flags: c_int, mode: c_int, at: bool) -> c_int {
     let creating = flags & O_CREAT != 0;
     let writable = open_is_writable(flags);
-    let call = || if at { openat(dirfd, path, flags, mode) } else { open(path, flags, mode) };
+    let call = || if at { sys_openat(dirfd, path, flags, mode) } else { sys_open(path, flags, mode) };
     let mut result = call();
     let mut saved = if result < 0 { errno() } else { 0 };
     if result < 0 && saved == EACCES && repair_file_mode_at(dirfd, path, writable) {
@@ -510,7 +556,7 @@ pub unsafe extern "C" fn PearTraceChmod(path: *const c_char, mode: Mode) -> c_in
 
 #[no_mangle]
 pub unsafe extern "C" fn PearTraceFchmod(fd: c_int, mode: Mode) -> c_int {
-    fchmod(fd, safe_mode(mode))
+    sys_fchmod(fd, safe_mode(mode))
 }
 
 // ---- process and environment probes (traced, results unchanged) ---------
@@ -620,7 +666,7 @@ pub unsafe extern "C" fn PearTracePopen(command: *const c_char, mode: *const c_c
 macro_rules! interpose {
     ($($replacement:ident => $replacee:ident),* $(,)?) => {
         #[used]
-        #[link_section = "__DATA,__interpose"]
+        #[cfg_attr(not(feature = "smoke"), link_section = "__DATA,__interpose")]
         static INTERPOSE: [Interpose; [$(stringify!($replacee)),*].len()] = [
             $(Interpose { replacement: $replacement as *const c_void, replacee: $replacee as *const c_void }),*
         ];
