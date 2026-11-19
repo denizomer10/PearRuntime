@@ -241,6 +241,7 @@ extern "C-unwind" {
     fn pear_objc_try_send(receiver: Id, sel: Sel, a2: usize, a3: usize, exception: *mut Id) -> c_int;
 }
 
+#[cfg(all(target_vendor = "apple", target_arch = "aarch64"))]
 /// Runs `f(ctx)`. An Objective-C exception escaping it is caught and
 /// returned retained (+1). Rust frames inside `f` must be `C-unwind` all the
 /// way down for the exception to reach this frame.
@@ -249,6 +250,7 @@ pub unsafe fn try_call(ctx: *mut c_void, f: unsafe extern "C-unwind" fn(*mut c_v
     if pear_objc_try_call(ctx, f, &mut exception) != 0 { Ok(()) } else { Err(exception) }
 }
 
+#[cfg(all(target_vendor = "apple", target_arch = "aarch64"))]
 /// `objc_msgSend(receiver, sel, a2, a3)` with integer/pointer arguments and
 /// the result ignored; an Objective-C exception it raises is caught and
 /// returned retained (+1). No Rust frame sits between the try and the send.
