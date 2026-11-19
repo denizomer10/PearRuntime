@@ -1,0 +1,12 @@
+[package]
+name = "pear-swift-support"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Data symbols for the UIKit Swift overlay (libswiftUIKit.dylib, build.sh)"
+
+[lib]
+name = "pear_swift_support"
+crate-type = ["staticlib"]
+test = false
+doctest = false

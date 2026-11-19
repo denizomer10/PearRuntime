@@ -8,9 +8,9 @@ PearRuntime unifies the 64-bit **PearHost** platform layer (**100% Rust** with m
 
 | Layer | Language | Responsibility |
 | --- | --- | --- |
-| `rust/crates/pear-uikit` & `host/uikit/` | **Rust** (with minimal ObjC/ASM ABI shims) | Clean-room `UIKit.framework` (35/35 census classes, 0 stubs), AppKit windowing, display link, keyboard/text & pointer routing, `UINib` instantiation |
-| `rust/crates/pear-metalkit` & `host/metalkit/` | **Rust** | `UIView`-backed `MTKView` on Metal (`CAMetalLayer`) |
-| `rust/crates/pear-gles` & `host/opengles/` | **Rust** | `EAGLContext` / `EAGLSharegroup` over Metal-only `PearANGLE` (`EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE`), re-exporting `libGLESv2` |
+| `rust/crates/pear-uikit` | **Rust** | Clean-room `UIKit.framework` (35/35 census classes, 0 stubs), AppKit windowing, display link, keyboard/text & pointer routing, `UINib` instantiation |
+| `rust/crates/pear-metalkit` | **Rust** | `UIView`-backed `MTKView` on Metal (`CAMetalLayer`) |
+| `rust/crates/pear-gles` | **Rust** | `EAGLContext` / `EAGLSharegroup` over Metal-only `PearANGLE` (`EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE`), re-exporting `libGLESv2` |
 | `rust/crates/pear-nib` | **Rust** | Pure-Rust `NIBArchive` binary parser |
 | `rust/crates/pear-objc` | **Rust** | Zero-dependency `libobjc.A.dylib` FFI & runtime registration helpers |
 | `rust/crates/pear-core` | **Rust** | Thread-safe logging (`PearHostLogMessage`), missing-call tracker (`PearMissingReport`), Objective-C forwarding/KVC hooks (`PearMissingInstallForImage`), zero-result IMP (`pear_missing_zero`), `dladdr` symbolication, JSONL reporting |
@@ -35,18 +35,25 @@ routing tail-calls through naked functions so caller-image semantics hold.
 clients and tests. Only the Swift overlays in `compat/swift/` and
 `third_party/` are not Rust.
 
-### PearHost: what stays Objective-C (ABI shims only)
+### PearHost: the Objective-C ABI in Rust
 
-All behavior, every method body and each framework's image initializer is Rust.
-The remaining `.m` files only declare what stable Rust cannot express:
+PearHost has no Objective-C, C or assembly sources; cargo builds every
+framework (clang only links). What iOS binaries bind to is emitted from Rust
+the way clang emits it from Objective-C (`pear_objc::abi`):
 
-- **Class symbols** (`_OBJC_CLASS_$_UIView`, `MTKView`, `EAGLContext`, …) that iOS
-  binaries bind to and subclass: `host/uikit/src/UIKitClasses.m`,
-  `host/metalkit/MTKLoad.m`, `host/opengles/EAGLGlobals.m`.
+- **Class symbols** (`_OBJC_CLASS_$_UIView`, `MTKView`, `EAGLContext`, …) that
+  iOS binaries bind to and subclass, as static class metadata with the layout
+  clang gave them: `pear-uikit/src/objc_classes.rs`, `pear_objc::empty_class!`.
 - **Constant `NSString`s** (`UIApplicationDidBecomeActiveNotification`, …):
-  `UIKitGlobals.m`, generated `UIKitStubs.m`.
-- **`@try`/`@catch` boundaries** (launch, KVC probes): `UIKitGlobals.m`.
-- **C variadic `PearHostLog`** for C/ObjC callers: `host/core/PearHostLog.m`.
+  `pear_objc::nsstring_constant!` (`pear-uikit/src/globals.rs`, generated
+  `generated_stubs.rs`).
+- **`@try`/`@catch` boundaries** (launch, KVC probes): Rust cannot catch an
+  Objective-C exception, so `pear_objc::abi::{try_call, try_send}` are
+  `global_asm!` frames with the Objective-C personality, as clang generates.
+
+`tools/host-abi-census.py` records a host build's exported symbols, constant
+values and Objective-C classes (ivars, properties, methods and where each
+method's implementation lives) and diffs two builds.
 
 ## Building
 

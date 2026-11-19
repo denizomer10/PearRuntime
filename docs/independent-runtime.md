@@ -55,7 +55,7 @@ uygulama yazmak.
 **İzinli kaynaklar**
 - SDK'daki genel başlık dosyaları ve `.tbd` stub'ları: yalnızca arayüz bilgisi
   (isim, imza, enum değeri, struct düzeni). Başlıklar depoya kopyalanmaz;
-  `host/uikit/include/PearUIKit.h` kendi bildirimlerimizdir.
+  UIKit sınıflarımızın düzeni `rust/crates/pear-uikit/src/objc_classes.rs`'tedir.
 - Apple'ın genel belgeleri, WWDC oturumları.
 - Açık kaynak Apple kodu (`apple-oss-distributions/*`: xnu, dyld, objc4, CF,
   Libc, libmalloc, …). Lisansı korunur (§3).

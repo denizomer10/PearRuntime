@@ -11,8 +11,11 @@ members = [
     "crates/pear-opengles",
     "crates/pear-cxxcompat",
     "crates/pear-keychain",
+    "crates/pear-empty-framework",
+    "crates/pear-swift-support",
 ]
-# pear-catalyst, pear-opengles and pear-cxxcompat target Mac Catalyst only
+# pear-catalyst, pear-opengles, pear-cxxcompat and pear-swift-support target
+# Mac Catalyst only
 # (build.sh, build-angle-bridge.sh); host builds skip them.
 default-members = [
     "crates/pear-core",
@@ -23,6 +26,7 @@ default-members = [
     "crates/pear-metalkit",
     "crates/pear-uikit",
     "crates/pear-keychain",
+    "crates/pear-empty-framework",
 ]
 resolver = "2"
 

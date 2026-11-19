@@ -85,7 +85,7 @@ file "$OUT"
 # supplies the missing empty tag object.
 echo ">> Building $CXX_COMPAT (C++ runtime compatibility)"
 IPHONEOS_DEPLOYMENT_TARGET=15.0 RUSTC_BOOTSTRAP=1 \
-  cargo build --manifest-path "$ROOT/rust/Cargo.toml" --release -p pear-cxxcompat \
+  cargo build --manifest-path "$ROOT/rust/Cargo.toml" --release -p pear-cxxcompat -p pear-swift-support \
   --target aarch64-apple-ios-macabi -Zbuild-std=std,panic_abort --target-dir "$RUST_TARGET_DIR"
 "$CXX" -target "$TARGET" -isysroot "$SDK" \
   -dynamiclib -Wl,-dead_strip \
@@ -100,14 +100,9 @@ file "$CXX_COMPAT"
 # installer. It contains only public API bridges from compat/swift/.
 echo ">> Building $SWIFT_OVERLAY (Swift UIKit compatibility)"
 CLANG_TARGET="arm64-apple-ios15.0-macabi"
-CLANG="$(xcrun --find clang)"
 SWIFTC="$(xcrun --find swiftc)"
-"$CLANG" -c -target "$CLANG_TARGET" -isysroot "$SDK" \
-  "$ROOT/compat/swift/PearSwiftUIKitSupport.c" \
-  -o "$OUT_DIR/PearSwiftUIKitSupport.o"
-# The numeric raw-representable ABI must live in the `UIKit` module, not just
-# in this dylib. Compile it as its own module and alias the system headers so
-# the mangled protocol/conformance/witness symbols match the original overlay.
+# The overlay's data symbols (Rust): only the marker's archive member is linked.
+SWIFT_SUPPORT_LIB="$RUST_TARGET_DIR/aarch64-apple-ios-macabi/release/libpear_swift_support.a"
 "$SWIFTC" -target "$CLANG_TARGET" -sdk "$SDK" -F "$IOS_FRAMEWORKS" \
   -parse-as-library -emit-object -module-name PearSwiftUIKit \
   -o "$OUT_DIR/PearSwiftUIKit.o" \
@@ -124,7 +119,7 @@ SWIFTC="$(xcrun --find swiftc)"
   -o "$SWIFT_OVERLAY" \
   "$OUT_DIR/PearSwiftUIKit.o" \
   "$OUT_DIR/PearUIKitNumeric.o" \
-  "$OUT_DIR/PearSwiftUIKitSupport.o"
+  -Xlinker -u -Xlinker '__swift_FORCE_LOAD_$_swiftUIKit' "$SWIFT_SUPPORT_LIB"
 file "$SWIFT_OVERLAY"
 
 # Some store builds link MarketplaceKit, which the host ships as resources

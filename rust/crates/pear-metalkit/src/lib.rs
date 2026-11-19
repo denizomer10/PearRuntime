@@ -711,3 +711,19 @@ extern "C" fn image_load() {
 #[used]
 #[link_section = "__DATA,__mod_init_func,mod_init_funcs"]
 static PEAR_MTK_INIT: extern "C" fn() = image_load;
+
+// ---- MetalKit.framework ABI -------------------------------------------------
+// The MTKView class symbol iOS binaries bind to: a UIView subclass (UIView
+// from PearHost UIKit.framework). Every method is registered on it by
+// `pear_metalkit_register_classes`.
+mod abi {
+    extern "C" {
+        #[link_name = "OBJC_CLASS_$_UIView"]
+        static UIView_CLASS: std::ffi::c_void;
+        #[link_name = "OBJC_METACLASS_$_UIView"]
+        static UIView_META: std::ffi::c_void;
+    }
+
+    pear_objc::image_info!();
+    pear_objc::empty_class!(MTKView : &raw const super::UIView_CLASS, &raw const super::UIView_META);
+}

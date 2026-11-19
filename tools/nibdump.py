@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Dump a compiled iOS nib in the NIBArchive container format.
 
-Reads the app's own resource file; used to understand what host/uikit/src/
-UINib.m must decode. Layout (all integers little endian):
+Reads the app's own resource file; used to understand what pear-uikit's
+UINib must decode. Layout (all integers little endian):
 
   "NIBArchive" u32 1 u32 10
   u32 objectCount, objectsOffset, keyCount, keysOffset,

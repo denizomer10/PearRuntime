@@ -22,6 +22,10 @@ name = "pear-cxxcompat"
 version = "0.1.0"
 
 [[package]]
+name = "pear-empty-framework"
+version = "0.1.0"
+
+[[package]]
 name = "pear-gles"
 version = "0.1.0"
 dependencies = [
@@ -56,6 +60,10 @@ version = "0.1.0"
 
 [[package]]
 name = "pear-opengles"
+version = "0.1.0"
+
+[[package]]
+name = "pear-swift-support"
 version = "0.1.0"
 
 [[package]]

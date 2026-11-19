@@ -1,0 +1,12 @@
+[package]
+name = "pear-empty-framework"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Empty image for iOS-only frameworks an app links but does not call (host/build-host.sh)"
+
+[lib]
+name = "pear_empty_framework"
+crate-type = ["staticlib"]
+test = false
+doctest = false

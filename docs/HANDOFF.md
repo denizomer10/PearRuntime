@@ -69,7 +69,7 @@ Minecraft (Bedrock) 1.26.60, orijinal IPA'dan, iOSSupport ve Catalyst olmadan:
 - Derleme: `host/build-pearangle.sh --sync` (ilk sefer) / `host/build-pearangle.sh`
   → `build/host/PearANGLE-src`; `host/build-host.sh` OpenGLES.framework'ü
   buna bağlar. Başka bir ANGLE derlemesi kullanılmaz.
-- Doğrulama: `tools/tests/pearangle-smoke.c` (EGL pbuffer, GLES 3.0, Metal
+- Doğrulama: `rust/crates/pear-gles/examples/pearangle-smoke.rs` (EGL pbuffer, GLES 3.0, Metal
   renderer, temizle/geri oku) geçiyor.
 - PearANGLE'ın Catalyst derlemesi (şu an dağıtılan Catalyst yolu) bu dalda
   henüz yeniden derlenmedi; iOS/Catalyst kodu korunuyor.

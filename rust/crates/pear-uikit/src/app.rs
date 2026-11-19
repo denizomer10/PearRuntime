@@ -58,9 +58,6 @@ extern "C" {
     fn sel_getName(sel: Sel) -> *const c_char;
     fn PearMissingReport(kind: c_int, class_name: *const c_char, selector: *const c_char, caller: *const c_void);
     fn PearHostLogMessage(tag: *const c_char, message: *const c_char);
-    fn PearUIKitRunCatchingExceptions(ctx: *mut c_void, fn_ptr: extern "C" fn(*mut c_void));
-    fn PearUIKitTrySetValueForKey(target: Id, value: Id, key: Id) -> bool;
-    fn PearUIKitTryProbeDisplayLinkSelector(link: Id, selector: Sel, is_setter: bool) -> bool;
     fn PearUIKitFirstResponder() -> Id;
     fn PearUIKitDeliverPointer(window: Id, phase: isize, point: CGPoint, timestamp: f64);
     fn PearUIKitWindowDidResize(window: Id, point_size: CGSize, scale: f64);
@@ -344,7 +341,7 @@ pub extern "C" fn PearUIKitApplicationWillTerminate() {
     }
 }
 
-extern "C" fn launch_finish_inner(ctx: *mut c_void) {
+extern "C-unwind" fn launch_finish_inner(ctx: *mut c_void) {
     unsafe {
         let app = ctx as Id;
         let bundle: Id = msg0(cls("NSBundle"), "mainBundle");
@@ -406,7 +403,7 @@ extern "C" fn launch_finish_inner(ctx: *mut c_void) {
 
 extern "C" fn launch_on_did_finish(ctx: *mut c_void) {
     unsafe {
-        PearUIKitRunCatchingExceptions(ctx, launch_finish_inner);
+        crate::globals::PearUIKitRunCatchingExceptions(ctx, launch_finish_inner);
     }
 }
 
@@ -1339,7 +1336,7 @@ unsafe extern "C" fn roc_connect(s: Id, _c: Sel) {
     let dst = assoc_get(s, &RC_DST_KEY);
     let lbl = assoc_get(s, &RC_LBL_KEY);
     if src.is_null() || lbl.is_null() { return; }
-    if !PearUIKitTrySetValueForKey(src, dst, lbl) {
+    if !crate::globals::PearUIKitTrySetValueForKey(src, dst, lbl) {
         let cname = class_getName(object_getClass(src));
         let ls = nsstring_to_string(lbl).unwrap_or_default();
         let m = CString::new(format!("nib outlet {ls} could not be set")).unwrap();
@@ -1624,7 +1621,7 @@ pub extern "C" fn PearBackendInstallQuartzCoreCompat() {
         ];
         for (sname, imp, types, is_setter) in table {
             let s = sel(sname);
-            let works = responds_to(probe, sname) && PearUIKitTryProbeDisplayLinkSelector(probe, s, is_setter);
+            let works = responds_to(probe, sname) && crate::globals::PearUIKitTryProbeDisplayLinkSelector(probe, s, is_setter);
             if !works {
                 let ct = CString::new(types).unwrap();
                 class_replaceMethod(concrete, s, imp, ct.as_ptr());

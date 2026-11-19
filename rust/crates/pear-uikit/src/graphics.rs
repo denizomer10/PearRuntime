@@ -718,10 +718,7 @@ pub extern "C" fn UIGraphicsEndPDFContext() {
 static FONT_KEY: u8 = 0;
 
 unsafe fn uifont_cls() -> Class {
-    extern "C" {
-        fn pear_uikit_uifont_class() -> Class;
-    }
-    pear_uikit_uifont_class()
+    crate::globals::pear_uikit_uifont_class()
 }
 
 unsafe fn make_uifont(nsfont: Id) -> Id {

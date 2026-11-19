@@ -1,6 +1,8 @@
 //! Minimal zero-dependency Objective-C & CoreFoundation/CoreGraphics FFI
 //! helpers for PearRuntime.
 
+pub mod abi;
+
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 
 pub type Id = *mut c_void;

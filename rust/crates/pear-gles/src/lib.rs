@@ -435,3 +435,25 @@ extern "C" fn image_load() {
 #[used]
 #[link_section = "__DATA,__mod_init_func,mod_init_funcs"]
 static PEAR_GLES_INIT: extern "C" fn() = image_load;
+
+// ---- OpenGLES.framework ABI -------------------------------------------------
+// The class symbols and string constants iOS binaries bind to. Every method
+// is registered on these classes by `pear_gles_register_classes`.
+mod abi {
+    extern "C" {
+        #[link_name = "OBJC_CLASS_$_NSObject"]
+        static NSObject_CLASS: std::ffi::c_void;
+        #[link_name = "OBJC_METACLASS_$_NSObject"]
+        static NSObject_META: std::ffi::c_void;
+    }
+
+    pear_objc::image_info!();
+    pear_objc::empty_class!(EAGLSharegroup : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+    pear_objc::empty_class!(EAGLContext : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+
+    pear_objc::nsstring_constant!(kEAGLDrawablePropertyRetainedBacking = "EAGLDrawablePropertyRetainedBacking");
+    pear_objc::nsstring_constant!(kEAGLDrawablePropertyColorFormat = "EAGLDrawablePropertyColorFormat");
+    pear_objc::nsstring_constant!(kEAGLColorFormatRGBA8 = "EAGLColorFormatRGBA8");
+    pear_objc::nsstring_constant!(kEAGLColorFormatRGB565 = "EAGLColorFormatRGB565");
+    pear_objc::nsstring_constant!(kEAGLColorFormatSRGBA8 = "EAGLColorFormatSRGBA8");
+}

@@ -1,7 +1,7 @@
 //! PearHost UIKit implementation in Rust.
 //!
 //! Exports all C/ObjC functions and registers Objective-C methods onto the
-//! UIKit class stubs in `UIKitClasses.m` at framework load time.
+//! static UIKit classes (`objc_classes`) at framework load time.
 
 // pear-core (logging, missing-call reporting, forwarding hooks) is reached only
 // through its C exports; link it into this static library explicitly.
@@ -10,7 +10,10 @@ extern crate pear_core;
 mod accessibility;
 mod app;
 mod basics;
+mod generated_stubs;
+mod globals;
 mod graphics;
+pub mod objc_classes;
 mod view;
 
 extern "C" {
