@@ -457,3 +457,140 @@ mod abi {
     pear_objc::nsstring_constant!(kEAGLColorFormatRGB565 = "EAGLColorFormatRGB565");
     pear_objc::nsstring_constant!(kEAGLColorFormatSRGBA8 = "EAGLColorFormatSRGBA8");
 }
+
+// ---- GLES entry points --------------------------------------------------------
+// OpenGLES.framework exports every GLES prototype through the pear-opengles
+// forwarders, so a game binds at launch even for entry points ANGLE names
+// differently or lacks; each resolves here on first call.
+#[allow(non_upper_case_globals, non_snake_case)]
+#[path = "../../pear-opengles/src/forwarders.rs"]
+mod forwarders;
+
+mod gl_symbols {
+    use super::{dlopen, dlsym, RTLD_LAZY, RTLD_LOCAL};
+    use std::ffi::{c_char, c_void, CStr, CString};
+    use std::sync::OnceLock;
+
+    fn libglesv2() -> *mut c_void {
+        static HANDLE: OnceLock<usize> = OnceLock::new();
+        *HANDLE.get_or_init(|| unsafe {
+            let mut h = dlopen(c"@rpath/libGLESv2.dylib".as_ptr(), RTLD_LAZY | RTLD_LOCAL);
+            if h.is_null() {
+                h = dlopen(c"libGLESv2.dylib".as_ptr(), RTLD_LAZY | RTLD_LOCAL);
+            }
+            h as usize
+        }) as *mut c_void
+    }
+
+    /// ANGLE's implementation of `name`, if it exports one.
+    pub unsafe fn angle(name: &CStr) -> *mut c_void {
+        let h = libglesv2();
+        if h.is_null() { std::ptr::null_mut() } else { dlsym(h, name.as_ptr()) }
+    }
+
+    /// The same entry point under another name: iOS ships extensions (OES,
+    /// EXT, APPLE) that ES3 core or ANGLE's extensions provide with the same
+    /// signature and semantics.
+    unsafe fn equivalent(name: &str) -> *mut c_void {
+        for suffix in ["OES", "EXT", "APPLE", "ARB"] {
+            if let Some(core) = name.strip_suffix(suffix) {
+                for candidate in [core.to_string(), format!("{core}ANGLE"), format!("{core}EXT"), format!("{core}OES")] {
+                    if candidate == name {
+                        continue;
+                    }
+                    let c = CString::new(candidate).unwrap();
+                    let f = angle(&c);
+                    if !f.is_null() {
+                        return f;
+                    }
+                }
+            }
+        }
+        std::ptr::null_mut()
+    }
+
+    unsafe fn proc_named(a: &CStr, b: &CStr) -> *mut c_void {
+        let f = angle(a);
+        if f.is_null() { angle(b) } else { f }
+    }
+
+    /// Size of the renderbuffer attached as colour 0 of `framebuffer`.
+    unsafe fn color_renderbuffer_size(framebuffer: u32) -> Option<(i32, i32)> {
+        type Attachment = unsafe extern "C" fn(u32, u32, u32, *mut i32);
+        type Integer = unsafe extern "C" fn(u32, *mut i32);
+        type Bind = unsafe extern "C" fn(u32, u32);
+        type Parameter = unsafe extern "C" fn(u32, u32, *mut i32);
+        let get = |n: &CStr| angle(n);
+        let (a, i, b, p) = (get(c"glGetFramebufferAttachmentParameteriv"), get(c"glGetIntegerv"), get(c"glBindRenderbuffer"), get(c"glGetRenderbufferParameteriv"));
+        if a.is_null() || i.is_null() || b.is_null() || p.is_null() {
+            return None;
+        }
+        let (attachment, integer, bind, parameter): (Attachment, Integer, Bind, Parameter) =
+            (std::mem::transmute(a), std::mem::transmute(i), std::mem::transmute(b), std::mem::transmute(p));
+        let (mut kind, mut name, mut previous, mut w, mut h) = (0, 0, 0, 0, 0);
+        attachment(framebuffer, 0x8CE0, 0x8CD0, &mut kind); // COLOR_ATTACHMENT0, OBJECT_TYPE
+        if kind != 0x8D41 {
+            return None; // not a RENDERBUFFER
+        }
+        attachment(framebuffer, 0x8CE0, 0x8CD1, &mut name); // OBJECT_NAME
+        integer(0x8CA7, &mut previous); // RENDERBUFFER_BINDING
+        bind(0x8D41, name as u32);
+        parameter(0x8D41, 0x8D42, &mut w);
+        parameter(0x8D41, 0x8D43, &mut h);
+        bind(0x8D41, previous as u32);
+        (w > 0 && h > 0).then_some((w, h))
+    }
+
+    /// GL_APPLE_framebuffer_multisample's resolve: blits READ_FRAMEBUFFER into
+    /// DRAW_FRAMEBUFFER, colour only, over the whole surface (the scissor
+    /// test applies as on iOS).
+    unsafe extern "C" fn resolve_multisample_apple() {
+        type Blit = unsafe extern "C" fn(i32, i32, i32, i32, i32, i32, i32, i32, u32, u32);
+        let blit = proc_named(c"glBlitFramebuffer", c"glBlitFramebufferANGLE");
+        if blit.is_null() {
+            return;
+        }
+        let blit: Blit = std::mem::transmute(blit);
+        let Some((mut w, mut h)) = color_renderbuffer_size(0x8CA8) else { return }; // READ_FRAMEBUFFER
+        if let Some((dw, dh)) = color_renderbuffer_size(0x8CA9) {
+            w = w.min(dw);
+            h = h.min(dh);
+        }
+        blit(0, 0, w, h, 0, 0, w, h, 0x4000, 0x2600); // COLOR_BUFFER_BIT, NEAREST
+    }
+
+    /// The GLES (and EAGL) implementation for `name`, or null.
+    #[export_name = "_Z19PearANGLEGameSymbolPKc"]
+    pub unsafe extern "C" fn game_symbol(name: *const c_char) -> *mut c_void {
+        if name.is_null() {
+            return std::ptr::null_mut();
+        }
+        let c = CStr::from_ptr(name);
+        match c.to_bytes() {
+            b"glResolveMultisampleFramebufferAPPLE" => return resolve_multisample_apple as *mut c_void,
+            b"EAGLGetVersion" => return super::EAGLGetVersion as *mut c_void,
+            b"EAGLGetProcAddress" => return super::EAGLGetProcAddress as *mut c_void,
+            _ => {}
+        }
+        let f = angle(c);
+        if !f.is_null() {
+            return f;
+        }
+        equivalent(&c.to_string_lossy())
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn EAGLGetVersion(major: *mut u32, minor: *mut u32) {
+    if !major.is_null() {
+        *major = 1;
+    }
+    if !minor.is_null() {
+        *minor = 0;
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn EAGLGetProcAddress(name: *const c_char) -> *mut c_void {
+    gl_symbols::game_symbol(name)
+}

@@ -3,6 +3,7 @@ name = "pear-gles"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+build = "build.rs"
 
 [lib]
 name = "pear_gles"
@@ -14,3 +15,8 @@ doctest = false
 
 [dependencies]
 pear-objc = { path = "../pear-objc" }
+
+[lints.rust]
+# The shared forwarders (pear-opengles/src/forwarders.rs) check pear-opengles'
+# `catalyst` feature, which this crate never has.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("catalyst"))'] }

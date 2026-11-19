@@ -35,11 +35,28 @@ STRING_TYPES = re.compile(r"\b(NSString|NSNotificationName|UIActivityType|NSAttr
                           r"NSAttributedStringDocumentType|NSAttributedStringDocumentAttributeKey|"
                           r"UIApplicationOpenURLOptionsKey|UIApplicationLaunchOptionsKey|"
                           r"UIAccessibilityNotifications|NSString\s*\*|UI\w*Key|UI\w*Name|UI\w*Type|"
-                          r"UI\w*Identifier|UIPasteboardName|UIFontTextStyle|UIFontDescriptor\w*)\b")
+                          r"UI\w*Identifier|UIPasteboardName|UIFontTextStyle|UIFontDescriptor\w*|"
+                          r"UIContentSizeCategory|UIPasteboardOption|NSRunLoopMode)\b")
 
 
 # Window levels are documented ordering values (normal < status bar < alert).
 WINDOW_LEVELS = {"UIWindowLevelNormal": 0.0, "UIWindowLevelStatusBar": 1000.0, "UIWindowLevelAlert": 2000.0}
+
+# Scalar (CGFloat/double) constants and their values: font weights are the
+# ones macOS exports as the identical NSFontWeight* constants; deceleration
+# rates are the documented normal/fast values. Others default to 0.
+DOUBLE_TYPES = re.compile(r"\b(UIWindowLevel|CGFloat|double|NSTimeInterval|UIFontWeight|UIScrollViewDecelerationRate)\b")
+DOUBLE_VALUES = {**WINDOW_LEVELS,
+                 "UIFontWeightUltraLight": -0.800000011920929, "UIFontWeightThin": -0.6000000238418579,
+                 "UIFontWeightLight": -0.4000000059604645, "UIFontWeightRegular": 0.0,
+                 "UIFontWeightMedium": 0.23000000417232513, "UIFontWeightSemibold": 0.30000001192092896,
+                 "UIFontWeightBold": 0.4000000059604645, "UIFontWeightHeavy": 0.5600000023841858,
+                 "UIFontWeightBlack": 0.6200000047683716,
+                 "UIScrollViewDecelerationRateNormal": 0.998, "UIScrollViewDecelerationRateFast": 0.99}
+# Geometry constants: number of CGFloat fields (zero unless documented).
+STRUCT_FIELDS = {"CGPoint": 2, "CGSize": 2, "UIOffset": 2, "CGRect": 4, "UIEdgeInsets": 4,
+                 "NSDirectionalEdgeInsets": 4, "CGAffineTransform": 6}
+STRUCT_VALUES = {"UILayoutFittingExpandedSize": [1e6, 1e6]}
 
 # Names a macOS framework already exports (AppKit re-exports UIFoundation:
 # NSParagraphStyle, NSFontAttributeName, ...). Our UIKit re-exports AppKit for
@@ -110,6 +127,57 @@ def implemented():
         symbols |= set(re.findall(r'#\[no_mangle\]\s+pub\s+static\s+(\w+)', t))
         symbols |= set(re.findall(r'nsstring_constant!\((\w+)\s*=', t))
     return classes, symbols
+
+
+def data_constant(name, decls, placeholders):
+    """Rust for a data symbol `name` from its header type, or None when it is
+    (or may be) a function. Placeholder values are appended to placeholders."""
+    kind, typ = decls.get(name, ("unknown", ""))
+    export = "#[no_mangle]\npub static"
+    # Undeclared (deprecated or unavailable API missing from the SDK headers):
+    # names in Apple's string-constant style are NSString constants.
+    if kind == "unknown" and re.search(r"(Notification|Key|Name|Identifier|Attribute|Option|Parameter)\w*$", name) \
+            and not re.search(r"(Create|Get|Set|Copy|Is|With|From|To)\w*$", name):
+        return f'pear_objc::nsstring_constant!({name} = "{name}");'
+    if kind in ("function", "unknown"):
+        # Not declared in the public headers we have: Apple documents these
+        # as functions far more often than data; a stub that reports is the
+        # safe guess either way.
+        return None
+    if DOUBLE_TYPES.search(typ):
+        return f"{export} {name}: f64 = {DOUBLE_VALUES.get(name, 0.0)!r}; // CGFloat/double"
+    if any(re.search(rf"\b{s}\b", typ) for s in STRUCT_FIELDS):
+        s = next(s for s in STRUCT_FIELDS if re.search(rf"\b{s}\b", typ))
+        values = STRUCT_VALUES.get(name, [0.0] * STRUCT_FIELDS[s])
+        return f"{export} {name}: [f64; {STRUCT_FIELDS[s]}] = [{', '.join(repr(float(v)) for v in values)}]; // {s}"
+    if re.search(r"\bUIBackgroundTaskIdentifier\b", typ):
+        return f"{export} {name}: u64 = 0; // documented invalid identifier"
+    if "UIAccessibilityTraits" in typ:
+        bit = 0 if name.endswith("None") else 1 << (len(placeholders) + 1)
+        placeholders.append(name)
+        return f"{export} {name}: u64 = {bit}; // trait bit chosen by PearHost"
+    if STRING_TYPES.search(typ) or re.search(r"\bNSString\b|Notification|Key\b", typ):
+        return f'pear_objc::nsstring_constant!({name} = "{name}");'
+    placeholders.append(name)
+    return f"{export} {name}: u64 = 0; // placeholder ({kind}: {typ or '?'})"
+
+
+def function_stubs(funcs, label):
+    """global_asm! source for C function stubs that report themselves, then
+    return zero through pear_missing_zero."""
+    s = ["    .text"]
+    for i, name in enumerate(funcs):
+        s += ["    .p2align 2", f"    .globl _{name}", f"_{name}:",
+              "    stp x29, x30, [sp, #-16]!", "    mov x29, sp",
+              "    mov x0, #2", "    mov x1, #0",
+              f"    adrp x2, L{label}_name{i}@PAGE", f"    add x2, x2, L{label}_name{i}@PAGEOFF",
+              "    mov x3, x30", "    bl _PearMissingReport",
+              "    ldp x29, x30, [sp], #16", "    b _pear_missing_zero"]
+    s += ["    .section __TEXT,__cstring,cstring_literals"]
+    for i, name in enumerate(funcs):
+        s += [f"L{label}_name{i}:", f'    .asciz "{name}"']
+    s += ["    .text"]
+    return ["", "std::arch::global_asm!(", '    r#"'] + s + ['"#', ");"]
 
 
 def main(argv):
@@ -184,42 +252,13 @@ def main(argv):
 
     funcs = []
     for name in sorted(want_syms - have_syms):
-        kind, typ = decls.get(name, ("unknown", ""))
-        export = "#[no_mangle]\npub static"
-        if kind in ("function", "unknown"):
-            # Not declared in the public headers we have: Apple documents these
-            # as functions far more often than data; a stub that reports is the
-            # safe guess either way.
+        line = data_constant(name, decls, placeholders)
+        if line is None:
             funcs.append(name)
-        elif kind == "data" and re.search(r"\b(UIWindowLevel|CGFloat|double)\b", typ):
-            m.append(f"{export} {name}: f64 = {WINDOW_LEVELS.get(name, 0.0)!r}; // CGFloat")
-        elif kind == "data" and re.search(r"\bUIBackgroundTaskIdentifier\b", typ):
-            m.append(f"{export} {name}: u64 = 0; // documented invalid identifier")
-        elif kind == "data" and "UIAccessibilityTraits" in typ:
-            bit = 0 if name.endswith("None") else 1 << (len(placeholders) + 1)
-            m.append(f"{export} {name}: u64 = {bit}; // trait bit chosen by PearHost")
-            placeholders.append(name)
-        elif kind == "data" and STRING_TYPES.search(typ):
-            m.append(f'pear_objc::nsstring_constant!({name} = "{name}");')
         else:
-            m.append(f"{export} {name}: u64 = 0; // placeholder ({kind}: {typ or '?'})")
-            placeholders.append(name)
+            m.append(line)
 
-    # Each function stub reports itself, then returns zero through
-    # pear_missing_zero.
-    s = ["    .text"]
-    for i, name in enumerate(funcs):
-        s += ["    .p2align 2", f"    .globl _{name}", f"_{name}:",
-              "    stp x29, x30, [sp, #-16]!", "    mov x29, sp",
-              "    mov x0, #2", "    mov x1, #0",
-              f"    adrp x2, Lpear_stub_name{i}@PAGE", f"    add x2, x2, Lpear_stub_name{i}@PAGEOFF",
-              "    mov x3, x30", "    bl _PearMissingReport",
-              "    ldp x29, x30, [sp], #16", "    b _pear_missing_zero"]
-    s += ["    .section __TEXT,__cstring,cstring_literals"]
-    for i, name in enumerate(funcs):
-        s += [f"Lpear_stub_name{i}:", f'    .asciz "{name}"']
-    s += ["    .text"]
-    m += ["", "std::arch::global_asm!(", '    r#"'] + s + ['"#', ");"]
+    m += function_stubs(funcs, "pear_stub")
     with open(OUT, "w") as fh:
         fh.write("\n".join(m).replace("\n\n\n", "\n\n") + "\n")
 

@@ -41,12 +41,14 @@ if [[ "${CRYPT:-0}" != 0 ]]; then
   exit 1
 fi
 
-# Frameworks that exist only in iOSSupport (no macOS framework of the same path).
-# MetalKit exists on macOS, but its MTKView is an NSView; iOS apps need the
-# UIView-based one.
-REDIRECT=(UIKit iAd OpenGLES MetalKit)
-# iOS framework paths whose API macOS ships under another framework.
-SYSTEM_MAP=("/System/Library/Frameworks/MobileCoreServices.framework/MobileCoreServices=/System/Library/Frameworks/CoreServices.framework/CoreServices")
+# Every framework PearHost built (host/build-host.sh): its own UIKit, OpenGLES
+# and MetalKit (an iOS MTKView is a UIView), stand-ins for iOS-only
+# frameworks (MessageUI, iAd, ...), overlays that add iOS-only API to a macOS
+# framework (AVKit, GameController, ...), and MobileCoreServices (CoreServices).
+REDIRECT=()
+for fw in "$HOST"/*.framework; do
+  REDIRECT+=("$(basename "$fw" .framework)")
+done
 
 rm -rf "$DST"
 mkdir -p "$DST/Frameworks"
@@ -68,7 +70,7 @@ for item in "$SRC"/Frameworks/*; do
   [[ -e "$item" ]] || continue  # apps without a Frameworks folder
   name="$(basename "$item")"
   case "$name" in
-    libPearRuntime.dylib|libPearOpenGLES.dylib|libswiftUIKit.dylib|PearANGLE|MarketplaceKit.framework) ;;
+    libPearRuntime.dylib|libPearOpenGLES.dylib|libswiftUIKit.dylib|libcxxcompat.dylib|PearANGLE|MarketplaceKit.framework) ;;
     *) cp -R "$item" "$DST/Frameworks/" ;;
   esac
 done
@@ -76,29 +78,48 @@ for fw in "${REDIRECT[@]}"; do
   [[ -d "$HOST/$fw.framework" ]] && cp -R "$HOST/$fw.framework" "$DST/Frameworks/"
 done
 [[ -d "$HOST/PearANGLE" ]] && cp -R "$HOST/PearANGLE" "$DST/Frameworks/"
-echo 'void pear_catalyst_runtime_placeholder(void) {}' > "$DST/Frameworks/.placeholder.c"
-xcrun --sdk macosx clang -target arm64-apple-macos26.0 -dynamiclib "$DST/Frameworks/.placeholder.c" \
-  -install_name @rpath/libPearHostPlaceholder.dylib -o "$DST/Frameworks/libPearHostPlaceholder.dylib"
-rm "$DST/Frameworks/.placeholder.c"
+cp "$HOST/libPearHostPlaceholder.dylib" "$DST/Frameworks/"
+cp "$HOST/libcxxcompat.dylib" "$DST/Frameworks/"
+[[ -f "$HOST/libswiftUIKit.dylib" ]] && cp "$HOST/libswiftUIKit.dylib" "$DST/Frameworks/"
 
 retarget() {
   local bin="$1"
+  # A Catalyst-prepared image may name CoreServices twice; dyld (and
+  # dyld_info) refuse that.
+  python3 -I "$ROOT/tools/host-dedupe-dylibs.py" "$bin"
   local sdk
   sdk="$(dyld_info -platform "$bin" | awk '/macCatalyst|iOS/ {print $3; exit}')"
   vtool -set-build-version macos 26.0 "${sdk:-26.0}" -replace -output "$bin.tmp" "$bin" 2>/dev/null
   mv "$bin.tmp" "$bin"
   local deps
   deps="$(otool -L "$bin" | tail -n +2 | sed -E 's/^[[:space:]]+//; s/ \(compatibility.*$//')"
+  # Never /System/iOSSupport: PearHost's framework of that name, or macOS's.
+  local dep fw_name
+  while IFS= read -r dep; do
+    fw_name="$(sed -E 's#^/System/iOSSupport/System/Library/Frameworks/([^/]+)\.framework/.*#\1#' <<<"$dep")"
+    if [[ -d "$HOST/$fw_name.framework" ]]; then
+      install_name_tool -change "$dep" "@rpath/$fw_name.framework/$fw_name" "$bin" 2>/dev/null
+    else
+      install_name_tool -change "$dep" "/System/Library/Frameworks/$fw_name.framework/$fw_name" "$bin" 2>/dev/null
+    fi
+  done < <(grep '^/System/iOSSupport/System/Library/Frameworks/' <<<"$deps" || true)
+  # The UIKit Swift overlay PearHost ships in the bundle.
+  while IFS= read -r dep; do
+    [[ -n "$dep" ]] && install_name_tool -change "$dep" "@rpath/libswiftUIKit.dylib" "$bin" 2>/dev/null
+  done < <(grep -E 'libswiftUIKit\.dylib$' <<<"$deps" | grep -vx '@rpath/libswiftUIKit.dylib' || true)
   for fw in "${REDIRECT[@]}"; do
     if grep -qx "/System/Library/Frameworks/$fw.framework/$fw" <<<"$deps"; then
       install_name_tool -change "/System/Library/Frameworks/$fw.framework/$fw" "@rpath/$fw.framework/$fw" "$bin" 2>/dev/null
     fi
   done
-  for pair in "${SYSTEM_MAP[@]}"; do
-    if grep -qx "${pair%%=*}" <<<"$deps"; then
-      install_name_tool -change "${pair%%=*}" "${pair#*=}" "$bin" 2>/dev/null
-    fi
-  done
+  # GL linked through the Catalyst ANGLE bridge goes to PearHost's OpenGLES.
+  local gles
+  gles="$(grep 'libPearOpenGLES.dylib' <<<"$deps" || true)"
+  [[ -n "$gles" ]] && install_name_tool -change "$gles" "@rpath/OpenGLES.framework/OpenGLES" "$bin" 2>/dev/null
+  # The C++ compatibility library: PearHost's macOS build of it.
+  local cxx
+  cxx="$(grep 'libcxxcompat.dylib' <<<"$deps" | grep -v '^@rpath/libcxxcompat.dylib$' || true)"
+  [[ -n "$cxx" ]] && install_name_tool -change "$cxx" "@rpath/libcxxcompat.dylib" "$bin" 2>/dev/null
   local pear
   pear="$(grep 'libPearRuntime.dylib' <<<"$deps" || true)"
   [[ -n "$pear" ]] && install_name_tool -change "$pear" "@rpath/libPearHostPlaceholder.dylib" "$bin" 2>/dev/null
@@ -127,5 +148,5 @@ done < <(find "$DST/Frameworks" -type f ! -name "*.plist" ! -path "*/_CodeSignat
 for fw in "${REDIRECT[@]}"; do
   [[ -f "$DST/Frameworks/$fw.framework/$fw" ]] && codesign -f -s - "$DST/Frameworks/$fw.framework/$fw" 2>/dev/null
 done
-codesign -f -s - "$DST/Frameworks/libPearHostPlaceholder.dylib" 2>/dev/null
+codesign -f -s - "$DST/Frameworks/libPearHostPlaceholder.dylib" "$DST/Frameworks/libcxxcompat.dylib" 2>/dev/null
 echo ">> $DST"

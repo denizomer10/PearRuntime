@@ -12,3 +12,11 @@ name = "pear_opengles"
 crate-type = ["staticlib"]
 test = false
 doctest = false
+
+[features]
+# Mac Catalyst (libPearOpenGLES.dylib): the EAGL C ABI below and failures
+# traced through the runtime's PearANGLETrace. PearHost's OpenGLES.framework
+# takes only the forwarders (--no-default-features): pear-gles supplies EAGL
+# and PearANGLEGameSymbol, and failures go to PearHostLogMessage.
+default = ["catalyst"]
+catalyst = []

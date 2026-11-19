@@ -1,0 +1,17 @@
+[package]
+name = "pear-host-frameworks"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "PearHost stub and overlay frameworks generated from census reports (host/build-host.sh)"
+build = "build.rs"
+
+[lib]
+name = "pear_host_framework"
+# Built once per framework (PEAR_HOST_FRAMEWORK=<name>) by host/build-host.sh.
+crate-type = ["staticlib"]
+test = false
+doctest = false
+
+[dependencies]
+pear-objc = { path = "../pear-objc" }

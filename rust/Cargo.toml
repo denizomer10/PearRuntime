@@ -13,6 +13,7 @@ members = [
     "crates/pear-keychain",
     "crates/pear-empty-framework",
     "crates/pear-swift-support",
+    "crates/pear-host-frameworks",
 ]
 # pear-catalyst, pear-opengles, pear-cxxcompat and pear-swift-support target
 # Mac Catalyst only
@@ -27,6 +28,7 @@ default-members = [
     "crates/pear-uikit",
     "crates/pear-keychain",
     "crates/pear-empty-framework",
+    "crates/pear-host-frameworks",
 ]
 resolver = "2"
 

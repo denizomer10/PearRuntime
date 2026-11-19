@@ -246,11 +246,11 @@ unsafe extern "C" fn view_init_with_coder(self_obj: Id, _cmd: Sel, coder: Id) ->
     view_common_init(obj, CGRect::default());
     if !coder.is_null() {
         if msg1::<Id, bool>(coder, "containsValueForKey:", nsstring("UIBounds")) {
-            let b: CGRect = msg1(coder, "decodeRectForKey:", nsstring("UIBounds"));
+            let b: CGRect = msg1(coder, "decodeCGRectForKey:", nsstring("UIBounds"));
             msg1::<CGRect, ()>(obj, "setBounds:", b);
         }
         if msg1::<Id, bool>(coder, "containsValueForKey:", nsstring("UICenter")) {
-            let c: CGPoint = msg1(coder, "decodePointForKey:", nsstring("UICenter"));
+            let c: CGPoint = msg1(coder, "decodeCGPointForKey:", nsstring("UICenter"));
             msg1::<CGPoint, ()>(obj, "setCenter:", c);
         }
         if msg1::<Id, bool>(coder, "containsValueForKey:", nsstring("UIAutoresizingMask")) {

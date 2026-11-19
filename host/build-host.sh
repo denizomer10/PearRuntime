@@ -43,20 +43,68 @@ rm -rf "$OUT_DIR/obj" # objects of earlier builds (Objective-C sources)
   -framework Foundation -Wl,-reexport_framework,AppKit -framework QuartzCore -framework CoreGraphics -framework CoreText -framework ImageIO -framework IOKit -framework Security -lc++
 echo ">> $OUT_DIR/UIKit.framework/UIKit"
 
-# Empty images for iOS-only frameworks an app links but does not call. If an
-# app later imports a symbol from one of them, dyld names it and the census
-# picks it up; then it gets a real implementation.
-for fw in iAd; do
+# Stub and overlay frameworks generated from the census: iOS-only frameworks
+# apps link (MessageUI, iAd, ...) and macOS frameworks missing iOS-only API
+# (AVKit's AVPlayerViewController, ...); an overlay re-exports the macOS
+# framework of the same name. tools/gen-host-frameworks.py lists them.
+python3 -I "$ROOT/tools/gen-host-frameworks.py" "${CENSUS[@]}" > "$OUT_DIR/host-frameworks.log"
+sed 's/^/   /' "$OUT_DIR/host-frameworks.log"
+while read -r fw kind; do
+  [[ -z "$fw" || "$fw" == \#* ]] && continue
+  PEAR_HOST_FRAMEWORK="$fw" MACOSX_DEPLOYMENT_TARGET=26.0 cargo build --quiet --manifest-path "$ROOT/rust/Cargo.toml" \
+    --release --target aarch64-apple-darwin --target-dir "$OUT_DIR/rust-target" -p pear-host-frameworks
+  REEXPORT=()
+  [[ "$kind" == overlay ]] && REEXPORT=(-Wl,-reexport_framework,"$fw")
+  rm -rf "$OUT_DIR/$fw.framework"
   mkdir -p "$OUT_DIR/$fw.framework"
-  "${LD[@]}" -dynamiclib -Wl,-u,_pear_empty_framework "$RUST_LIBS/libpear_empty_framework.a" -Wl,-dead_strip \
-    -Wl,-exported_symbol,_pear_empty_framework -o "$OUT_DIR/$fw.framework/$fw" \
-    -install_name "@rpath/$fw.framework/$fw" -compatibility_version 1.0.0 -current_version 1.0.0
-  echo ">> $OUT_DIR/$fw.framework/$fw (empty)"
-done
+  "${LD[@]}" -dynamiclib -Wl,-force_load,"$RUST_LIBS/libpear_host_framework.a" -Wl,-dead_strip \
+    "$OUT_DIR/UIKit.framework/UIKit" -framework Foundation ${REEXPORT[@]+"${REEXPORT[@]}"} \
+    -o "$OUT_DIR/$fw.framework/$fw" -install_name "@rpath/$fw.framework/$fw" \
+    -compatibility_version 1.0.0 -current_version 1.0.0
+  echo ">> $OUT_DIR/$fw.framework/$fw ($kind)"
+done < "$ROOT/rust/crates/pear-host-frameworks/frameworks.txt"
 
-# OpenGLES.framework: macOS has none for macOS-platform processes. GL entry
-# points are re-exported from PearANGLE (our fork, Metal only) when present;
-# EAGL implementation is in Rust (pear-gles).
+# MobileCoreServices is CoreServices on macOS. A framework of that name that
+# re-exports it keeps an app that links both from naming CoreServices twice.
+rm -rf "$OUT_DIR/MobileCoreServices.framework"
+mkdir -p "$OUT_DIR/MobileCoreServices.framework"
+"${LD[@]}" -dynamiclib -Wl,-u,_pear_empty_framework "$RUST_LIBS/libpear_empty_framework.a" -Wl,-dead_strip \
+  -Wl,-exported_symbol,_pear_empty_framework -Wl,-reexport_framework,CoreServices \
+  -o "$OUT_DIR/MobileCoreServices.framework/MobileCoreServices" \
+  -install_name @rpath/MobileCoreServices.framework/MobileCoreServices -compatibility_version 1.0.0 -current_version 1.0.0
+echo ">> $OUT_DIR/MobileCoreServices.framework/MobileCoreServices (overlay of CoreServices)"
+
+# C++ runtime compatibility (pear-cxxcompat, as for Mac Catalyst): re-exports
+# the system libc++ and supplies the empty tag object some binaries expect.
+MACOSX_DEPLOYMENT_TARGET=26.0 cargo build --quiet --manifest-path "$ROOT/rust/Cargo.toml" --release \
+  --target aarch64-apple-darwin --target-dir "$OUT_DIR/rust-target" -p pear-cxxcompat
+"${LD[@]}" -dynamiclib -Wl,-dead_strip -Wl,-reexport_library,"$SDK/usr/lib/libc++.1.tbd" \
+  -Wl,-force_load,"$RUST_LIBS/libpear_cxxcompat.a" -o "$OUT_DIR/libcxxcompat.dylib" \
+  -install_name @rpath/libcxxcompat.dylib -compatibility_version 1.0.0 -current_version 1.0.0
+echo ">> $OUT_DIR/libcxxcompat.dylib"
+
+# The UIKit Swift overlay (Swift, compat/swift; built by build.sh for Mac
+# Catalyst). The preparers retarget it to macOS like the app's own images.
+CATALYST_OVERLAY="${PEAR_BUILD_DIR:-$ROOT/build}/libswiftUIKit.dylib"
+if [[ -f "$CATALYST_OVERLAY" ]]; then
+  cp "$CATALYST_OVERLAY" "$OUT_DIR/libswiftUIKit.dylib"
+  echo ">> $OUT_DIR/libswiftUIKit.dylib (from the Catalyst build)"
+else
+  echo "!! no $CATALYST_OVERLAY (run build.sh): apps linking the UIKit Swift overlay will not start" >&2
+fi
+
+# Stands in for the Catalyst runtime (libPearRuntime.dylib) that a bundle
+# prepared for Mac Catalyst links; PearHost needs nothing from it.
+"${LD[@]}" -dynamiclib -Wl,-u,_pear_empty_framework "$RUST_LIBS/libpear_empty_framework.a" -Wl,-dead_strip \
+  -Wl,-exported_symbol,_pear_empty_framework -o "$OUT_DIR/libPearHostPlaceholder.dylib" \
+  -install_name @rpath/libPearHostPlaceholder.dylib -compatibility_version 1.0.0 -current_version 1.0.0
+echo ">> $OUT_DIR/libPearHostPlaceholder.dylib"
+
+# OpenGLES.framework: macOS has none for macOS-platform processes. pear-gles
+# is EAGL and every GLES prototype (forwarders resolved on first call): ANGLE's
+# entry point (PearANGLE, our Metal-only fork, loaded from ../PearANGLE), the
+# same function under its core/EXT/OES/ANGLE name, or an adapter for iOS-only
+# extensions; an entry point with none of these logs and aborts when called.
 ANGLE_DIR="${PEAR_HOST_ANGLE_DIR:-$OUT_DIR/PearANGLE-src}"
 mkdir -p "$OUT_DIR/OpenGLES.framework"
 GLES_LINK=()
@@ -85,9 +133,9 @@ if [[ -f "$ANGLE_DIR/libGLESv2.dylib" ]]; then
   fi
   python3 "$ROOT/collect-angle-licenses.py" "${ANGLE_LICENSE_ARGS[@]}"
   echo "   ANGLE: $(ls "$OUT_DIR/PearANGLE" | grep -c dylib) libraries"
-  GLES_LINK=(-L"$OUT_DIR/PearANGLE" -Wl,-reexport-lGLESv2 -Wl,-rpath,@loader_path/../PearANGLE)
+  GLES_LINK=(-Wl,-rpath,@loader_path/../PearANGLE)
 else
-  echo "!! no PearANGLE build at $ANGLE_DIR; building OpenGLES.framework without re-exported GL symbols (run host/build-pearangle.sh --sync for GLES)" >&2
+  echo "!! no PearANGLE build at $ANGLE_DIR; OpenGLES.framework has no GL implementation (run host/build-pearangle.sh --sync for GLES)" >&2
 fi
 "${LD[@]}" -dynamiclib -Wl,-force_load,"$RUST_GLES_LIB" \
   "$OUT_DIR/UIKit.framework/UIKit" ${GLES_LINK[@]+"${GLES_LINK[@]}"} \
