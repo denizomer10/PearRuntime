@@ -39,7 +39,7 @@ extern "C" {
     fn CGEventPost(tap: u32, e: *const c_void);
     fn CGEventPostToPid(pid: i32, e: *const c_void);
     fn CGWarpMouseCursorPosition(p: CGPoint) -> i32;
-    fn CGAssociateMouseAndMouseCursorPosition(connected: bool) -> i32;
+    fn CGAssociateMouseAndMouseCursorPosition(connected: u32) -> i32;
     fn getpid() -> i32;
     fn usleep(us: u32) -> c_int;
     fn os_unfair_lock_lock(lock: *mut u32);
@@ -559,7 +559,7 @@ pub unsafe extern "C" fn unstash_cursor() {
     let mut s = STASHED.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((x, y)) = s.take() {
         CGWarpMouseCursorPosition(CGPoint { x, y });
-        CGAssociateMouseAndMouseCursorPosition(true);
+        CGAssociateMouseAndMouseCursorPosition(1);
     }
 }
 
@@ -600,7 +600,7 @@ pub unsafe extern "C" fn contain_cursor_in_window() {
     let clamped = CGPoint { x: p.x.max(min_x).min(max_x), y: p.y.max(min_y).min(max_y) };
     CGWarpMouseCursorPosition(clamped);
     // A game may have unassociated the pointer: re-associate so the warp sticks.
-    CGAssociateMouseAndMouseCursorPosition(true);
+    CGAssociateMouseAndMouseCursorPosition(1);
     if rt::env_set("PEAR_DEBUG_TOUCH") {
         rt::log(&format!(
             "[PearRuntime][capture] cursor ({:.0},{:.0}) clamped to ({:.0},{:.0}) window={{{{{:.0},{:.0}}},{{{:.0},{:.0}}}}}",
@@ -692,10 +692,10 @@ fn test_tap() {
             synthesize_tap_cgevent(0.5, 0.5);
         } else if rt::env_set("PEAR_TOUCH_IOHID") {
             synthesize_touch(true, 0.5, 0.5);
-            rt::after_main(0.08, || unsafe { synthesize_touch(false, 0.5, 0.5) });
+            rt::after_main(0.08, || { synthesize_touch(false, 0.5, 0.5) });
         } else {
             synthesize_virtual_finger(true, nsstring("pear-test"), 0.5, 0.5);
-            rt::after_main(0.10, || unsafe { synthesize_virtual_finger(false, nsstring("pear-test"), 0.5, 0.5) });
+            rt::after_main(0.10, || { synthesize_virtual_finger(false, nsstring("pear-test"), 0.5, 0.5) });
         }
     }
 }
@@ -762,7 +762,7 @@ pub fn init() {
             rt::log("[PearRuntime][touch] TEST multi-touch: two fingers");
             synthesize_virtual_finger(true, nsstring("mt-a"), 0.30, 0.30);
             synthesize_virtual_finger(true, nsstring("mt-b"), 0.70, 0.70);
-            rt::after_main(1.0, || unsafe {
+            rt::after_main(1.0, || {
                 synthesize_virtual_finger(false, nsstring("mt-a"), 0.30, 0.30);
                 synthesize_virtual_finger(false, nsstring("mt-b"), 0.70, 0.70);
             });

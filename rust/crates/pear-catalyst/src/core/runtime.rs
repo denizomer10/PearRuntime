@@ -110,7 +110,7 @@ pub fn log_line(message: &str) {
 
 /// `PearLog(format, ...)`: NSString formatting for the remaining ObjC++ code.
 #[export_name = "_Z7PearLogP8NSStringz"]
-pub unsafe extern "C" fn pear_log(format: Id, mut args: ...) {
+pub unsafe extern "C" fn pear_log(format: Id, args: ...) {
     pear_objc::autorelease_pool(|| {
         let init: unsafe extern "C" fn(Id, Sel, Id, VaList) -> Id = std::mem::transmute(pear_objc::objc_msgSend as *const ());
         let message = init(msg0(cls("NSString"), "alloc"), pear_objc::sel("initWithFormat:arguments:"), format, args);
@@ -389,7 +389,7 @@ fn test_taps(spec: &str) {
             } else {
                 let key = format!("pear-test-at-{index}");
                 crate::input::touch_synth::synthesize_virtual_finger(true, nsstring(&key), nx, ny);
-                rt::after_main(0.08, move || unsafe {
+                rt::after_main(0.08, move || {
                     crate::input::touch_synth::synthesize_virtual_finger(false, nsstring(&key), nx, ny);
                 });
             }

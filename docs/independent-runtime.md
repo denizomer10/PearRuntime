@@ -30,7 +30,7 @@ kapsam dışıdır; ilgili kod PearANGLE'dan da silindi.
  └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Bugünkü Catalyst yolu (`modules/`, `build.sh`) değişmeden duruyor ve
+Bugünkü Catalyst yolu (`rust/crates/pear-catalyst`, `build.sh`; tamamı Rust) duruyor ve
 PearSilicon'un varsayılanı olarak kalıyor. Yeni yol `host/` altında; uygulama
 başına seçilecek. PearANGLE'ın Catalyst derlemesi bu yüzden korunuyor.
 

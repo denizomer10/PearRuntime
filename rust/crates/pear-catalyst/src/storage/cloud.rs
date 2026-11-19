@@ -507,7 +507,7 @@ extern "C" {
 
 /// Adds with the inherited method's encoding when there is one.
 /// `[c instancesRespondToSelector:s]`.
-unsafe fn class_instancesRespondToSelector(c: Class, s: Sel) -> bool {
+unsafe fn instances_respond(c: Class, s: Sel) -> bool {
     msg1(c, "instancesRespondToSelector:", s)
 }
 
@@ -600,7 +600,7 @@ unsafe fn store_subscription(subscription: Id) {
 /// A local record-zone object for an identifier (create, save, fetch back).
 unsafe fn zone_with_id(zone_id: Id) -> Id {
     let c = cloudkit("CKRecordZone");
-    if c.is_null() || zone_id.is_null() || !class_instancesRespondToSelector(c, sel("initWithZoneID:")) {
+    if c.is_null() || zone_id.is_null() || !instances_respond(c, sel("initWithZoneID:")) {
         return NIL;
     }
     rt::autoreleased(msg1(msg0::<Id>(c, "alloc"), "initWithZoneID:", zone_id))
@@ -608,7 +608,7 @@ unsafe fn zone_with_id(zone_id: Id) -> Id {
 
 unsafe fn local_record(record_id: Id) -> Id {
     let c = cloudkit("CKRecord");
-    if c.is_null() || record_id.is_null() || !class_instancesRespondToSelector(c, sel("initWithRecordType:recordID:")) {
+    if c.is_null() || record_id.is_null() || !instances_respond(c, sel("initWithRecordType:recordID:")) {
         return NIL;
     }
     rt::autoreleased(msg2(msg0::<Id>(c, "alloc"), "initWithRecordType:recordID:", nsstring("LocalRecord"), record_id))
@@ -916,7 +916,7 @@ unsafe extern "C" fn offline_done_with_arg(_: Id, _: Sel, _arg: Id, done: Id) {
 unsafe extern "C" fn fetch_user_record_id(_: Id, _: Sel, done: Id) {
     let c = cloudkit("CKRecordID");
     let mut record_id: Id = NIL;
-    if !c.is_null() && class_instancesRespondToSelector(c, sel("initWithRecordName:")) {
+    if !c.is_null() && instances_respond(c, sel("initWithRecordName:")) {
         record_id = msg1(msg0::<Id>(c, "alloc"), "initWithRecordName:", nsstring("pearsilicon-local")); // +1
     }
     if done.is_null() {

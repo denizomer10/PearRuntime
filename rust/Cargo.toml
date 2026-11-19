@@ -8,9 +8,12 @@ members = [
     "crates/pear-metalkit",
     "crates/pear-uikit",
     "crates/pear-catalyst",
+    "crates/pear-opengles",
+    "crates/pear-cxxcompat",
     "crates/pear-keychain",
 ]
-# pear-catalyst targets Mac Catalyst only (build.sh); host builds skip it.
+# pear-catalyst, pear-opengles and pear-cxxcompat target Mac Catalyst only
+# (build.sh, build-angle-bridge.sh); host builds skip them.
 default-members = [
     "crates/pear-core",
     "crates/pear-macho",

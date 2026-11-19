@@ -18,6 +18,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pear-cxxcompat"
+version = "0.1.0"
+
+[[package]]
 name = "pear-gles"
 version = "0.1.0"
 dependencies = [
@@ -48,6 +52,10 @@ version = "0.1.0"
 
 [[package]]
 name = "pear-objc"
+version = "0.1.0"
+
+[[package]]
+name = "pear-opengles"
 version = "0.1.0"
 
 [[package]]

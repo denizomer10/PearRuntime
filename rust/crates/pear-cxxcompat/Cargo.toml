@@ -1,0 +1,13 @@
+[package]
+name = "pear-cxxcompat"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "pear_cxxcompat"
+# libcxxcompat.dylib (Mac Catalyst), linked by runtime/build.sh re-exporting
+# the system C++ runtime.
+crate-type = ["staticlib"]
+test = false
+doctest = false

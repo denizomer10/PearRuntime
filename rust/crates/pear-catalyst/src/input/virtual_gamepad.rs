@@ -624,7 +624,7 @@ unsafe fn connect(elements: Vec<Id>, allow_fallback: bool) {
     let handler = rt::block1(move |error| unsafe {
         let error = if error.is_null() { 0 } else { pear_objc::objc_retain(error) as usize };
         let elements_keep = elements_keep.clone();
-        rt::async_main(move || unsafe {
+        rt::async_main(move || {
             let p = st();
             if error != 0 {
                 let error = error as Id;
@@ -803,7 +803,7 @@ pub extern "C" fn install() {
         if !event_class.is_null() && pear_objc::responds_to(event_class, "addLocalMonitorForEventsMatchingMask:handler:") {
             // left/right/other mouse down+up, moved/dragged, key down/up, flags changed.
             let mask: usize = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 27) | (1 << 10) | (1 << 11) | (1 << 12) | (1 << 25) | (1 << 26);
-            let handler = rt::block1_ret(|event| unsafe { handle_event(event) });
+            let handler = rt::block1_ret(|event| { handle_event(event) });
             let monitor: Id = msg2(event_class, "addLocalMonitorForEventsMatchingMask:handler:", mask, handler);
             rt::release_block(handler);
             if !monitor.is_null() {
@@ -812,13 +812,13 @@ pub extern "C" fn install() {
             }
         }
         for name in ["UIApplicationWillResignActiveNotification", "NSApplicationWillResignActiveNotification"] {
-            rt::observe_main(name, |_| unsafe { set_active(st(), false) });
+            rt::observe_main(name, |_| { set_active(st(), false) });
         }
         for name in ["UIApplicationDidBecomeActiveNotification", "NSApplicationDidBecomeActiveNotification"] {
-            rt::observe_main(name, |_| unsafe { set_active(st(), true) });
+            rt::observe_main(name, |_| { set_active(st(), true) });
         }
         for name in ["UIApplicationWillTerminateNotification", "NSApplicationWillTerminateNotification"] {
-            rt::observe_main(name, |_| unsafe {
+            rt::observe_main(name, |_| {
                 let p = st();
                 set_active(p, false);
                 restore(p);

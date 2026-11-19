@@ -34,8 +34,8 @@ Minecraft (Bedrock) 1.26.60, orijinal IPA'dan, iOSSupport ve Catalyst olmadan:
 - MTKView (bizim UIView tabanlı MetalKit'imiz) ile Metal çizimi: ana ekran
   ve "Loading.. / Survive" dünya yükleme ekranı görüldü, log'da dünya açılıyor
   ("Opening level ..."). Oynanış ve girdi denenmedi.
-- Keychain, Catalyst'teki `modules/storage/KeychainShim.mm` ile (aynı dosya,
-  host'a da derleniyor).
+- Keychain, Catalyst ile ortak Rust deposu `rust/crates/pear-keychain` ile
+  (aynı crate host'a da bağlanıyor).
 
 ## Dosya düzeni
 
@@ -173,8 +173,8 @@ NSView display link'ine bağlandı), Backtrace'in MobileCoreServices sembolleri
 5. Ses yolu (AVAudioSession macOS'ta) doğrulanmadı.
 6. Host OpenGLES yalnızca PearANGLE kullanır (`host/build-pearangle.sh`,
    macOS arm64, yalnızca Metal; çıktı `build/host/PearANGLE-src`). PearANGLE
-   eksikleri PearANGLE'da uygulanır. EAGLContext henüz yok (nil döner); GLES oyunları için `modules/graphics-gl`
-   EAGL-on-EGL kodu host'a taşınmalı.
+   eksikleri PearANGLE'da uygulanır. EAGLContext henüz yok (nil döner); GLES oyunları için Catalyst'in Rust
+   EAGL-on-EGL kodu (`rust/crates/pear-catalyst/src/graphics_gl`) host'a taşınmalı.
 7. macOS display link'i `setFrameInterval:` vb. için istisna fırlatıyor; host,
    kurulumda bu selector'ları deneyip fırlatanları değiştiriyor (log: "provided by
    the host").
@@ -185,7 +185,8 @@ NSView display link'ine bağlandı), Backtrace'in MobileCoreServices sembolleri
 
 1. **Girdi:** GTA VC'de klavye/fare ve gamepad ile menü + oynanış testi.
    macOS GameController (GCKeyboard/GCMouse/GCController) doğal olarak
-   çalışmalı; çalışmazsa `modules/input` mantığı `host/` altına taşınır.
+   çalışmalı; çalışmazsa Catalyst'in Rust `input` modülü
+   (`rust/crates/pear-catalyst/src/input`) `host/` altına taşınır.
 2. Yukarıdaki dört eksik çağrıyı elle uygula.
 3. Ses ve kayıt/yüklemeyi doğrula; `missing.jsonl` sıfıra inene kadar devam.
 4. PearSilicon'a "PearHost modu" seçeneği (IPA'dan doğrudan; Catalyst dönüşümü atlanır): `host-prepare.sh` adımlarını
@@ -194,7 +195,7 @@ NSView display link'ine bağlandı), Backtrace'in MobileCoreServices sembolleri
    Diğer oyunlarla sayım (`docs/census/`): Asphalt 6 (32-bit, PearLegacyEngine),
    Miku Flick. Her yeni oyun yeni sınıflar getirir;
    üretici stub'ları otomatik ekler.
-6. EAGL (OpenGL ES) host'a: `modules/graphics-gl` EAGL-on-EGL kodu
-   PearANGLE üzerine taşınacak; GLES oyunlarıyla sınanacak.
+6. EAGL (OpenGL ES) host'a: Catalyst'in Rust EAGL-on-EGL kodu
+   (`pear-catalyst/src/graphics_gl`) PearANGLE üzerine taşınacak; GLES oyunlarıyla sınanacak.
 7. Kapsam: yalnızca macOS, Apple silicon, Metal. Linux/Vulkan/x86 kapsam dışı
    (2026-11-14). PearLegacyJIT 32-bit yolunda (ARMv7 → arm64) kalır.

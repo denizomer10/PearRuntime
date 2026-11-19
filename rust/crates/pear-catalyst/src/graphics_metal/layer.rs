@@ -396,7 +396,7 @@ pub fn init() {
         if !install_next_drawable_fix() {
             // One bounded retry source, stopped as soon as the class is ready.
             let mut attempts = 0;
-            rt::main_ticker(0.05, 0.05, 0.005, move || unsafe {
+            rt::main_ticker(0.05, 0.05, 0.005, move || {
                 attempts += 1;
                 install_next_drawable_fix() || attempts >= 400
             });

@@ -613,7 +613,7 @@ unsafe extern "C" fn add_observer_block(this: Id, cmd: Sel, name: Id, object: Id
         if weak_token.load().is_null() {
             return; // the app already removed its observer
         }
-        let call = move |note: Id| unsafe {
+        let call = move |note: Id| {
             if let Some(f) = rt::block_invoke::<unsafe extern "C" fn(Id, Id)>(copied as Id) {
                 f(copied as Id, note);
             }
@@ -623,7 +623,7 @@ unsafe extern "C" fn add_observer_block(this: Id, cmd: Sel, name: Id, object: Id
             let note = pear_objc::objc_retain(note) as usize;
             let op = rt::block0(move || {
                 call(note as Id);
-                unsafe { pear_objc::objc_release(note as Id) };
+                { pear_objc::objc_release(note as Id) };
             });
             msg1::<Id, ()>(queue as Id, "addOperationWithBlock:", op);
             rt::release_block(op);
@@ -679,11 +679,11 @@ pub fn install_bridge() {
         }
         *BOOTSTRAP_TIME.lock().unwrap_or_else(|e| e.into_inner()) = now();
         install_observer_tracking();
-        let token = rt::observe_main("UIApplicationDidFinishLaunchingNotification", |_| unsafe { take_token_and_install() });
+        let token = rt::observe_main("UIApplicationDidFinishLaunchingNotification", |_| { take_token_and_install() });
         BRIDGE_TOKEN.store(pear_objc::objc_retain(token) as usize, Ordering::Release);
         // A runtime loaded into an app that already launched must not wait for
         // a notification that already happened.
-        rt::async_main(|| unsafe {
+        rt::async_main(|| {
             let app = crate::core::runtime::ui_app();
             let scenes: Id = msg0(app, "connectedScenes");
             if !msg0::<Id>(app, "delegate").is_null()
@@ -779,7 +779,7 @@ unsafe fn install_bridge_now() {
         // The first-query discovery window starts now, not at load time.
         *BOOTSTRAP_TIME.lock().unwrap_or_else(|e| e.into_inner()) = now();
         RUNTIME_REGISTERING.store(true, Ordering::Release);
-        rt::observe_main(&rt::ns_string(GCControllerDidConnectNotification), |note| unsafe {
+        rt::observe_main(&rt::ns_string(GCControllerDidConnectNotification), |note| {
             let controller: Id = msg0(note, "object");
             if controller.is_null() || !pear_objc::is_kind_of(controller, "GCController") {
                 return;
@@ -797,7 +797,7 @@ unsafe fn install_bridge_now() {
             ));
             pad_attach(controller);
         });
-        rt::observe_main(&rt::ns_string(GCControllerDidDisconnectNotification), |note| unsafe {
+        rt::observe_main(&rt::ns_string(GCControllerDidDisconnectNotification), |note| {
             let controller: Id = msg0(note, "object");
             if controller.is_null() || !pear_objc::is_kind_of(controller, "GCController") {
                 return;
@@ -862,7 +862,7 @@ unsafe fn install_bridge_now() {
         // Legacy broadcast replay (opt-in): duplicates the connect for engines
         // that enumerate pads at launch.
         if std::env::var("PEAR_CONTROLLER_REPLAY").is_ok_and(|v| v.to_lowercase() == "broadcast") {
-            rt::after_main(3.0, || unsafe {
+            rt::after_main(3.0, || {
                 pear_objc::autorelease_pool(|| {
                     let all = runtime_controllers();
                     let center: Id = msg0(cls("NSNotificationCenter"), "defaultCenter");

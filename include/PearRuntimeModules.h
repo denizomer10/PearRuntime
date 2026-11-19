@@ -33,11 +33,3 @@ const char *PearRuntimeVersion(void);
 // `graphics-gl` and `graphics-metal`: selecting graphics includes both;
 // disabling graphics disables both. Selecting a child includes the shared
 // geometry but not the other backend. Explicit child disables take priority.
-//
-// Each source file is compiled with -DPEAR_RUNTIME_MODULE="<module>". An
-// initializer opts into module gating with this guard as its first statement.
-#ifndef PEAR_RUNTIME_MODULE
-#define PEAR_RUNTIME_MODULE "core"
-#endif
-#define PEAR_MODULE_GUARD() \
-    do { if (!PearRuntimeModuleEnabled(PEAR_RUNTIME_MODULE)) return; } while (0)

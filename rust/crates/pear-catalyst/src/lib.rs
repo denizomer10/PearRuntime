@@ -51,6 +51,17 @@ pub mod graphics_metal {
     pub mod diagnostics;
     pub mod layer;
 }
+pub mod graphics_gl {
+    #[macro_use]
+    pub mod objc_class;
+    pub mod backend;
+    pub mod context;
+    pub mod drawable;
+    pub mod eagl;
+    pub mod glkit;
+    pub mod routing;
+    pub mod shim;
+}
 pub mod storage {
     pub mod credential;
     pub mod sandbox;
@@ -70,6 +81,9 @@ extern "C" fn pear_catalyst_load() {
     unsafe {
         pear_objc::autorelease_pool(|| {
             core::foundation::init();
+            // GL routing arms at load (no module guard: an app linking GL
+            // must never start on the system OpenGL ES).
+            graphics_gl::routing::enable();
             core::runtime::init();
             input::touch_synth::init();
             input::legacy_touch::init();
@@ -92,6 +106,7 @@ extern "C" fn pear_catalyst_load() {
             performance::init();
             graphics_metal::diagnostics::init();
             graphics_metal::layer::init();
+            graphics_gl::shim::init();
         });
     }
 }

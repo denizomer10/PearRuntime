@@ -31,67 +31,16 @@ fi
 
 CXX="$(xcrun --find clang++)"
 mkdir -p "$OUT_DIR"
-OBJ_DIR="$OUT_DIR/PearRuntimeObjects"
-rm -rf "$OBJ_DIR"
-mkdir -p "$OBJ_DIR"
+rm -rf "$OUT_DIR/PearRuntimeObjects" # Objective-C++ objects of earlier builds
 VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION" 2>/dev/null || echo dev)"
-
-# Apple silicon tuning. `apple-m1` is the baseline every Apple silicon Mac
-# implements (M1 through current M-series and A-series Macs), so the code is
-# scheduled for Apple's cores without emitting instructions a newer chip
-# alone has. PEAR_RUNTIME_CPU overrides it for experiments.
-CPU="${PEAR_RUNTIME_CPU:-apple-m1}"
-OPT="${PEAR_RUNTIME_OPT:--O2}"
 TARGET="arm64-apple-ios15.0-macabi"
-COMMON=(-target "$TARGET" -isysroot "$SDK" -iframework "$IOS_FRAMEWORKS"
-        -I"$ROOT/include" -I"$ROOT/third_party/angle/include" -std=c++17 -fobjc-arc "$OPT" -mcpu="$CPU"
-        -fno-omit-frame-pointer -DPEAR_RUNTIME_VERSION="\"$VERSION\"")
 
-# Module layout: modules/<module>/*.mm. Every file is compiled with its module
-# name so its initializer can be switched off at launch (PEAR_RUNTIME_DISABLE).
-MODULES=(core input graphics graphics-gl graphics-metal device storage services)
-
-# Emit a compilation database so editors/clangd resolve UIKit for these files.
-{
-  echo "["
-  first=1
-  for module in "${MODULES[@]}"; do
-    for source in "$ROOT/modules/$module"/*.mm; do
-      [[ -e "$source" ]] || continue # module fully ported to Rust
-      [[ $first -eq 1 ]] || echo ","
-      first=0
-      printf '  {"directory": "%s", "file": "%s", "command": "%s %s -DPEAR_RUNTIME_MODULE=\\"%s\\" -include PearRuntime.h -c %s"}' \
-        "$ROOT" "$source" "$CXX" "${COMMON[*]//\"/\\\"}" "$module" "$source"
-    done
-  done
-  echo
-  echo "]"
-} > "$ROOT/compile_commands.json"
-
-echo ">> Compiling PearRuntime $VERSION modules (${MODULES[*]}) for $CPU"
-JOBS="$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || sysctl -n hw.ncpu)"
-pids=()
-objects=()
-for module in "${MODULES[@]}"; do
-  for source in "$ROOT/modules/$module"/*.mm; do
-    [[ -e "$source" ]] || continue # module fully ported to Rust
-    object="$OBJ_DIR/$module-$(basename "${source%.mm}").o"
-    objects+=("$object")
-    "$CXX" "${COMMON[@]}" -DPEAR_RUNTIME_MODULE="\"$module\"" -include PearRuntime.h \
-      -c "$source" -o "$object" &
-    pids+=($!)
-    if (( ${#pids[@]} >= JOBS )); then
-      wait "${pids[0]}"
-      pids=("${pids[@]:1}")
-    fi
-  done
-done
-for pid in "${pids[@]}"; do wait "$pid"; done
-
-# Rust modules (rust/crates/pear-catalyst). Rust ships no prebuilt standard
-# library for Mac Catalyst, so std is built from the toolchain's rust-src.
+# Every runtime module (core input graphics graphics-gl graphics-metal device
+# storage services performance) is Rust: rust/crates/pear-catalyst/src/<module>.
+# Rust ships no prebuilt standard library for Mac Catalyst, so std is built
+# from the toolchain's rust-src.
 RUST_TARGET_DIR="$OUT_DIR/rust-catalyst"
-echo ">> Building Rust modules (pear-catalyst, aarch64-apple-ios-macabi)"
+echo ">> Building PearRuntime $VERSION (pear-catalyst, aarch64-apple-ios-macabi)"
 PEAR_RUNTIME_VERSION="$VERSION" IPHONEOS_DEPLOYMENT_TARGET=15.0 RUSTC_BOOTSTRAP=1 \
   cargo build --manifest-path "$ROOT/rust/Cargo.toml" --release -p pear-catalyst \
   --target aarch64-apple-ios-macabi -Zbuild-std=std,panic_abort --target-dir "$RUST_TARGET_DIR"
@@ -103,7 +52,6 @@ echo ">> Linking $OUT (Mac Catalyst)"
   -Wl,-undefined,dynamic_lookup \
   -Wl,-dead_strip \
   "${PEAR_EAGL_ALIAS_FLAGS[@]}" \
-  -fobjc-arc \
   -framework Foundation \
   -framework UIKit \
   -framework GameController \
@@ -117,7 +65,7 @@ echo ">> Linking $OUT (Mac Catalyst)"
   -install_name @rpath/libPearRuntime.dylib \
   -current_version "${VERSION%%-*}" \
   -o "$OUT" \
-  "${objects[@]}" -Wl,-force_load,"$RUST_LIB"
+  -Wl,-force_load,"$RUST_LIB"
 
 # -undefined dynamic_lookup turns a misspelled or nonexistent import into a
 # flat-namespace lookup that fails at load and makes dyld drop every interpose
@@ -136,14 +84,15 @@ file "$OUT"
 # does not export. This small library re-exports the system C++ runtime and
 # supplies the missing empty tag object.
 echo ">> Building $CXX_COMPAT (C++ runtime compatibility)"
-xcrun --sdk macosx clang++ \
-  -target arm64-apple-ios15.0-macabi \
-  -isysroot "$SDK" \
-  -dynamiclib \
+IPHONEOS_DEPLOYMENT_TARGET=15.0 RUSTC_BOOTSTRAP=1 \
+  cargo build --manifest-path "$ROOT/rust/Cargo.toml" --release -p pear-cxxcompat \
+  --target aarch64-apple-ios-macabi -Zbuild-std=std,panic_abort --target-dir "$RUST_TARGET_DIR"
+"$CXX" -target "$TARGET" -isysroot "$SDK" \
+  -dynamiclib -Wl,-dead_strip \
   -Wl,-reexport_library,"$SDK/usr/lib/libc++.1.tbd" \
+  -Wl,-force_load,"$RUST_TARGET_DIR/aarch64-apple-ios-macabi/release/libpear_cxxcompat.a" \
   -install_name @rpath/libcxxcompat.dylib \
-  -o "$CXX_COMPAT" \
-  "$ROOT/compat/cxxcompat.cpp"
+  -o "$CXX_COMPAT"
 file "$CXX_COMPAT"
 
 # Some Swift SDKs link against the UIKit Swift overlay, which the Mac Catalyst

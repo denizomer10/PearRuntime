@@ -17,9 +17,25 @@ PearRuntime unifies the 64-bit **PearHost** platform layer (**100% Rust** with m
 | `rust/crates/pear-macho` | **Rust** | ARM64 Mach-O header/platform inspector, FairPlay `cryptid` check, `LC_BUILD_VERSION` → `macOS 26.0` retargeter |
 | `third_party/angle` | **C++ / Metal** | [PearANGLE](https://github.com/denizomer10/PearANGLE) — Metal-only arm64 Apple build (`libEGL.dylib`, `libGLESv2.dylib`) |
 | `third_party/legacy-engine` & `legacy-jit` | **Rust / C++** | 32-bit `armv6`/`armv7` iOS execution (`PearLegacyEngine` + `PearLegacyJIT`) |
-| `modules/` | **ObjC / C++** | Legacy Mac Catalyst in-process dylib (`libPearRuntime.dylib`, built via `./build.sh`) |
+| `rust/crates/pear-catalyst` | **Rust** | Mac Catalyst in-process runtime (`libPearRuntime.dylib`, built via `./build.sh`): core, input, graphics, graphics-gl (ANGLE/EAGL/GLKit), graphics-metal, device, storage, services, performance |
+| `rust/crates/pear-opengles` | **Rust** | Catalyst GLES/EAGL ABI bridge (`libPearOpenGLES.dylib`): register-preserving trampolines for every GLES prototype in ANGLE's headers |
+| `rust/crates/pear-keychain` | **Rust** | Keychain store shared by PearHost and the Catalyst runtime |
+| `rust/crates/pear-cxxcompat` | **Rust** | `libcxxcompat.dylib` (re-exports the system C++ runtime, supplies `std::piecewise_construct`) |
+| `compat/swift/` | **Swift** | Swift ABI overlays (`libswiftUIKit.dylib`, `MarketplaceKit.framework` stub); Swift ABI symbols are emitted by `swiftc` |
 
-### What stays Objective-C (ABI shims only)
+### Mac Catalyst runtime: no Objective-C
+
+`libPearRuntime.dylib` and `libPearOpenGLES.dylib` contain no Objective-C or
+C++ code. Classes iOS binaries bind to at load time (`EAGLContext`,
+`EAGLSharegroup`, `GLKView`, `GLKViewController`) are emitted from Rust as
+static class data (`__objc_classlist`), C variadics (`PearLog`,
+`PearANGLETrace`) are Rust `extern "C" fn(…, ...)`, and `dlsym`/`dlopen`
+routing tail-calls through naked functions so caller-image semantics hold.
+`include/` keeps the C/Objective-C declarations of the exported API for
+clients and tests. Only the Swift overlays in `compat/swift/` and
+`third_party/` are not Rust.
+
+### PearHost: what stays Objective-C (ABI shims only)
 
 All behavior, every method body and each framework's image initializer is Rust.
 The remaining `.m` files only declare what stable Rust cannot express:
