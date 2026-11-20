@@ -16,4 +16,5 @@ doctest = false
 pear-core = { path = "../pear-core" }
 pear-nib = { path = "../pear-nib" }
 pear-objc = { path = "../pear-objc" }
+pear-host = { path = "../pear-host" }
 pear-keychain = { path = "../pear-keychain" }

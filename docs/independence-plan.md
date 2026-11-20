@@ -171,51 +171,44 @@ independent; integrate rather than rewrite), Swift runtime for Swift apps.
 
 ## 4. Rust boundary for platform-neutral services
 
-A new crate `pear-host` defines the services the portable runtime may ask of
-the host; each OS provides one implementation (`pear-host-macos` first, from
-today's `PearBackend*` functions in pear-uikit `app.rs`). The portable crates
-depend only on `pear-host`, never on AppKit/QuartzCore types.
+**Implemented (M3, step 1): crate `pear-host`** (no Apple dependency; builds
+and passes its tests on Linux aarch64). It holds platform-neutral types
+(`Size`, `Rect`, `ScreenInfo`, opaque `WindowHandle`, `LayerRef`,
+`GuestObject`, `GuestSelector`), the `HostPlatform` trait, the process
+registry (`install`, `host()`) and `NullHost` for tests and headless runs:
 
 ```rust
-/// Opaque handles: the portable runtime never sees NSWindow/HWND/wl_surface.
-pub struct WindowId(pub u64);
-pub struct SurfaceId(pub u64);
-
-pub struct ScreenInfo { pub points: (f64, f64), pub scale: f64, pub max_fps: u32 }
-
-pub enum HostEvent {
-    Pointer { window: WindowId, phase: TouchPhase, x: f64, y: f64, time: f64 },
-    Key { window: WindowId, code: u16, down: bool, modifiers: u32 },
-    Text { window: WindowId, text: String },
-    Resized { window: WindowId, points: (f64, f64), scale: f64 },
-    Gamepad(GamepadEvent),
-    Lifecycle(Lifecycle), // active / inactive / background / terminate
-}
-
 pub trait HostPlatform: Send + Sync {
-    // Windows and presentation
+    fn initialize(&self);
     fn screen(&self) -> ScreenInfo;
-    fn create_window(&self, title: &str, points: (f64, f64)) -> WindowId;
-    fn show_window(&self, window: WindowId, key: bool);
-    /// A surface the graphics backend renders into (CAMetalLayer on macOS,
-    /// VkSurfaceKHR source on Linux/Windows), sized to the window.
-    fn create_surface(&self, window: WindowId) -> SurfaceId;
-    fn native_surface(&self, surface: SurfaceId) -> NativeSurface;
-
-    // Time and the main loop
-    fn run(&self, on_event: &mut dyn FnMut(HostEvent), on_frame: &mut dyn FnMut(f64)) -> !;
-    fn post_to_main(&self, job: Box<dyn FnOnce() + Send>);
-    fn set_frame_rate(&self, window: WindowId, fps: u32);
-
-    // Services
-    fn present_alert(&self, title: &str, message: &str, buttons: &[&str], reply: Box<dyn FnOnce(i32) + Send>);
+    fn create_window(&self, owner: GuestObject, frame: Rect) -> WindowHandle;
+    fn set_root_layer(&self, window: WindowHandle, layer: LayerRef);
+    fn show_window(&self, window: WindowHandle, key: bool);
+    fn display_link(&self, target: GuestObject, selector: GuestSelector) -> GuestObject;
     fn open_url(&self, url: &str) -> bool;
-    fn pasteboard_text(&self) -> Option<String>;
-    fn set_pasteboard_text(&self, text: &str);
     fn set_idle_timer_disabled(&self, disabled: bool);
+    fn present_alert(&self, title: &str, message: &str, buttons: &[String],
+                     reply: Box<dyn FnOnce(isize) + Send>);
+    fn run(&self, did_finish_launching: Box<dyn FnOnce()>);
 }
+```
 
-/// What a graphics backend needs to create its swapchain.
+pear-uikit installs `host_macos::MacHost` (AppKit) in its image initializer;
+UIApplication, UIWindow, UIScreen, UIAlertController and the display link
+now reach the OS only through `pear_host::host()`. The AppKit code itself is
+still in pear-uikit `app.rs` (`PearBackend*`, also kept as C exports). Input
+flows the other way through `PearUIKitDeliver*`.
+
+Next steps for the boundary, in order:
+
+1. Move the AppKit implementation (app.rs backend, PearHostView/window
+   delegate, input translation) into its own crate `pear-host-macos`.
+2. An event sink trait for input/lifecycle (`HostEvent`) replacing the
+   `PearUIKitDeliver*` C calls.
+3. Surfaces for graphics backends, so pear-gles/MetalKit stop taking a
+   CALayer:
+
+```rust
 pub enum NativeSurface {
     MetalLayer(*mut core::ffi::c_void),   // macOS
     Wayland { display: *mut core::ffi::c_void, surface: *mut core::ffi::c_void },
@@ -247,10 +240,11 @@ Each milestone is small, testable alone, and keeps working paths working.
    straight into PearHost form (from the IPA's iOS binaries); remove the
    Catalyst preparation once every regression game is at least as good under
    PearHost as under Catalyst.
-3. **M3 — `pear-host` trait + `pear-host-macos`.** Move today's
-   `PearBackend*` (app.rs) behind `HostPlatform`; pear-uikit calls the trait.
-   No behaviour change; regression set identical. First portability proof:
-   pear-uikit compiles for Linux with a stub host.
+3. **M3 — `pear-host` trait + `pear-host-macos`.** *Step 1 done
+   (2026-11-21):* `pear-host` crate, pear-uikit calls the trait, MacHost
+   over the AppKit backend; ABI census and behaviour probe identical, Burger
+   Shop 2 and GTA VC render as before, pear-host tests pass on Linux. Next:
+   the AppKit code into `pear-host-macos`, the event sink, surfaces (§4).
 4. **M4 — Text and images off CoreGraphics/CoreText/ImageIO.** Pure-Rust
    decoding and a glyph rasteriser behind `HostImage`/`HostText`;
    compare rendered UILabel/UIImage output against today's pixels.
@@ -279,7 +273,8 @@ Each milestone is small, testable alone, and keeps working paths working.
 |---|---|---|
 | Workspace build | `cargo build` (host), `host/build-host.sh`, `build.sh` (Catalyst while it exists) | passes on macOS |
 | Linux portability | `container run … rust` builds of each crate | pear-macho, pear-nib, pear-objc, pear-core, pear-gles build; tests of pear-macho/pear-nib pass; pear-uikit/pear-keychain/pear-metalkit link Apple frameworks |
-| ObjC ABI parity | `tools/host-abi-census.py --compare` | identical to the last ObjC build |
+| ObjC ABI parity | `tools/host-abi-census.py --compare` | identical to the last ObjC build and across M3 |
+| Host behaviour | `tools/host-behavior-probe.py --compare` (UIKit accessors, exception boundaries, constants, EAGL GLES 1/2/3) | identical across M3 (29 facts) |
 | GL | `pear-gles --example pearangle-smoke`; EAGL GLES1/2/3 context test | pass on macOS |
 | Game regression | §7 | see below |
 | 32-bit | Miku Flick via PearLegacyEngine | runs (log 2026-11-19) |

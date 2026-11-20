@@ -36,17 +36,6 @@ extern "C" {
     fn class_getName(cls: Class) -> *const c_char;
     fn PearMissingReport(kind: c_int, class_name: *const c_char, selector: *const c_char, caller: *const c_void);
     fn PearHostLogMessage(tag: *const c_char, message: *const c_char);
-    fn PearBackendCreateWindow(ui_window: Id, frame: CGRect) -> *mut c_void;
-    fn PearBackendSetRootLayer(native: *mut c_void, layer: Id);
-    fn PearBackendShowWindow(native: *mut c_void, key: bool);
-    fn PearBackendPresentAlert(
-        title: *const c_char,
-        message: *const c_char,
-        buttons: *const *const c_char,
-        button_count: usize,
-        ctx: *mut c_void,
-        on_button: extern "C" fn(*mut c_void, isize),
-    );
     fn PearUIKitRegisterWindow(window: Id);
     fn PearUIKitSetKeyWindow(window: Id);
     fn PearUIKitKeyWindow() -> Id;
@@ -1293,14 +1282,16 @@ unsafe fn win_ensure_native(w: Id) -> *mut c_void {
         return existing;
     }
     let b: CGRect = msg0(w, "bounds");
-    let native = PearBackendCreateWindow(w, b);
+    let native = pear_host::host()
+        .create_window(pear_host::GuestObject(w), pear_host::Rect { x: b.origin.x, y: b.origin.y, width: b.size.width, height: b.size.height })
+        .0;
     let val: Id = msg1(cls("NSValue"), "valueWithPointer:", native);
     assoc_set(w, &WIN_NATIVE_KEY, val);
     let l: Id = msg0(w, "layer");
     msg1::<CGPoint, ()>(l, "setAnchorPoint:", CGPoint::default());
     msg1::<CGPoint, ()>(l, "setPosition:", CGPoint::default());
     if !native.is_null() {
-        PearBackendSetRootLayer(native, l);
+        pear_host::host().set_root_layer(pear_host::WindowHandle(native), pear_host::LayerRef(l));
     }
     native
 }
@@ -1313,7 +1304,7 @@ unsafe extern "C" fn win_make_key_visible(self_obj: Id, _cmd: Sel) {
     let native = win_ensure_native(self_obj);
     msg1::<bool, ()>(self_obj, "setHidden:", false);
     if !native.is_null() {
-        PearBackendShowWindow(native, true);
+        pear_host::host().show_window(pear_host::WindowHandle(native), true);
     }
     PearUIKitSetKeyWindow(self_obj);
     msg0::<()>(self_obj, "setNeedsLayout");
@@ -1323,7 +1314,7 @@ unsafe extern "C" fn win_set_hidden(self_obj: Id, _cmd: Sel, hidden: bool) {
     if !hidden {
         let native = win_native_ptr(self_obj);
         if !native.is_null() {
-            PearBackendShowWindow(native, false);
+            pear_host::host().show_window(pear_host::WindowHandle(native), false);
         }
     }
 }
@@ -1727,10 +1718,9 @@ unsafe extern "C" fn ac_present(s: Id, _c: Sel, completion: Id) {
     let log_msg = CString::new(format!("title=\"{title_s}\" message=\"{msg_s}\" actions=[{}]", titles_str.join(", "))).unwrap_or_default();
     PearHostLogMessage(tag.as_ptr(), log_msg.as_ptr());
 
-    let tc = CString::new(title_s).unwrap_or_default();
-    let mc = CString::new(msg_s).unwrap_or_default();
-    let ptrs: Vec<*const c_char> = titles_c.iter().map(|c| c.as_ptr()).collect();
-    PearBackendPresentAlert(tc.as_ptr(), mc.as_ptr(), ptrs.as_ptr(), ptrs.len(), snapshot, ac_on_button);
+    drop(titles_c);
+    let actions_ptr = snapshot as usize;
+    pear_host::host().present_alert(&title_s, &msg_s, &titles_str, Box::new(move |index| ac_on_button(actions_ptr as *mut c_void, index)));
     dispatch_main_block(completion);
 }
 

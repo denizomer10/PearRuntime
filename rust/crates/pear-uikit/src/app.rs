@@ -203,7 +203,7 @@ unsafe extern "C" fn app_idle(s: Id, _c: Sel) -> bool {
 }
 unsafe extern "C" fn app_set_idle(s: Id, _c: Sel, d: bool) {
     assoc_set(s, &APP_IDLE_KEY, nsnumber_bool(d));
-    PearBackendSetIdleTimerDisabled(d);
+    pear_host::host().set_idle_timer_disabled(d);
 }
 unsafe extern "C" fn app_orient(_s: Id, _c: Sel) -> isize { 4 }
 unsafe extern "C" fn app_noop(_s: Id, _c: Sel) {}
@@ -227,7 +227,8 @@ unsafe extern "C" fn app_can_open(_s: Id, _c: Sel, url: Id) -> bool {
     scheme == "http" || scheme == "https" || scheme == "mailto"
 }
 unsafe extern "C" fn app_open_url(s: Id, _c: Sel, url: Id) -> bool {
-    app_can_open(s, sel("canOpenURL:"), url) && PearBackendOpenURL(url)
+    app_can_open(s, sel("canOpenURL:"), url)
+        && pear_host::host().open_url(&nsstring_to_string(msg0(url, "absoluteString")).unwrap_or_default())
 }
 unsafe extern "C" fn app_open_url_opts(s: Id, _c: Sel, url: Id, _opts: Id, completion: Id) {
     let ok = app_open_url(s, sel("openURL:"), url);
@@ -426,7 +427,7 @@ pub extern "C" fn UIApplicationMain(
                     d_name.as_deref().unwrap_or("(none)")
                 ),
             );
-            PearBackendInitialize();
+            pear_host::host().initialize();
 
             let mut app_cls = cls("UIApplication");
             if let Some(ref pn) = p_name {
@@ -473,7 +474,8 @@ pub extern "C" fn UIApplicationMain(
                 PearMissingReport(1, c1.as_ptr(), c2.as_ptr(), std::ptr::null());
             }
 
-            PearBackendRun(app as *mut c_void, launch_on_did_finish);
+            let app_ptr = app as usize;
+            pear_host::host().run(Box::new(move || launch_on_did_finish(app_ptr as *mut c_void)));
         });
     }
     0

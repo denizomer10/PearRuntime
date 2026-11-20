@@ -33,6 +33,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pear-host"
+version = "0.1.0"
+
+[[package]]
 name = "pear-host-frameworks"
 version = "0.1.0"
 dependencies = [
@@ -78,6 +82,7 @@ name = "pear-uikit"
 version = "0.1.0"
 dependencies = [
  "pear-core",
+ "pear-host",
  "pear-keychain",
  "pear-nib",
  "pear-objc",

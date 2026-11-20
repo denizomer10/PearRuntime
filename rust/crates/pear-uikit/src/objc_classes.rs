@@ -8,7 +8,7 @@
 //!
 //! Keep the layout of an existing class unchanged: apps compiled against
 //! UIKit subclass these classes and the runtime slides their ivars past it.
-#![allow(non_upper_case_globals, non_snake_case, dead_code)]
+#![allow(non_upper_case_globals, non_snake_case, non_camel_case_types, dead_code)]
 
 use pear_objc::abi::*;
 use pear_objc::{CGPoint, CGRect, CGSize, Id, NSRange, Sel, UIEdgeInsets};

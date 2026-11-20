@@ -21,8 +21,6 @@ pub struct PearHostScreenInfo {
 }
 
 extern "C" {
-    fn PearBackendScreenInfo() -> PearHostScreenInfo;
-    fn PearBackendDisplayLink(target: Id, selector: Sel) -> Id;
     fn PearMissingReport(kind: c_int, class_name: *const c_char, selector: *const c_char, caller: *const c_void);
     fn sysctlbyname(
         name: *const c_char,
@@ -97,6 +95,16 @@ struct ScreenState {
     brightness: f64,
 }
 
+/// The host's screen, in the shape UIScreen keeps.
+fn screen_info() -> PearHostScreenInfo {
+    let s = pear_host::host().screen();
+    PearHostScreenInfo {
+        point_size: CGSize { width: s.points.width, height: s.points.height },
+        scale: s.scale,
+        max_fps: s.max_fps as isize,
+    }
+}
+
 unsafe fn get_screen_state(scr: Id) -> ScreenState {
     let data = assoc_get(scr, &SCREEN_STATE_KEY);
     if let Some(v) = nsdata_to_vec(data) {
@@ -104,7 +112,7 @@ unsafe fn get_screen_state(scr: Id) -> ScreenState {
             return std::ptr::read_unaligned(v.as_ptr() as *const ScreenState);
         }
     }
-    let info = PearBackendScreenInfo();
+    let info = screen_info();
     ScreenState {
         size: info.point_size,
         scale: if info.scale > 0.0 { info.scale } else { 1.0 },
@@ -123,7 +131,7 @@ unsafe extern "C" fn screen_main(self_cls: Id, _cmd: Sel) -> Id {
         return cached as Id;
     }
     let scr: Id = msg0(self_cls, "new");
-    let info = PearBackendScreenInfo();
+    let info = screen_info();
     set_screen_state(
         scr,
         ScreenState {
@@ -168,7 +176,7 @@ unsafe extern "C" fn screen_scale(self_obj: Id, _cmd: Sel) -> f64 {
 }
 
 unsafe extern "C" fn screen_max_fps(_self: Id, _cmd: Sel) -> isize {
-    PearBackendScreenInfo().max_fps
+    screen_info().max_fps
 }
 
 unsafe extern "C" fn screen_brightness(self_obj: Id, _cmd: Sel) -> f64 {
@@ -202,7 +210,7 @@ unsafe extern "C" fn screen_overscan(_self: Id, _cmd: Sel) -> UIEdgeInsets {
 }
 
 unsafe extern "C" fn screen_display_link(_self: Id, _cmd: Sel, target: Id, selector: Sel) -> Id {
-    PearBackendDisplayLink(target, selector)
+    pear_host::host().display_link(pear_host::GuestObject(target), pear_host::GuestSelector(selector)).0
 }
 
 unsafe extern "C" fn screen_pear_update(self_obj: Id, _cmd: Sel, size: CGSize, scale: f64) {

@@ -1,0 +1,10 @@
+[package]
+name = "pear-host"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "The host services PearRuntime's portable compatibility layer may use, as a trait each OS implements"
+
+[lib]
+name = "pear_host"
+crate-type = ["rlib"]
