@@ -8,8 +8,9 @@
 //! pear-uikit's `host_macos`; Linux and Windows later), and the portable code
 //! reaches it only through [`host()`]. Nothing here names an Apple type.
 //!
-//! Input flows the other way: a backend delivers pointer, key, text and
-//! lifecycle events to the portable layer's `PearUIKitDeliver*` entry points.
+//! Input flows the other way: a host delivers pointer, key, text, window and
+//! lifecycle events to the [`GuestEvents`] sink the iOS layer installed
+//! ([`events()`]).
 //!
 //! See docs/independence-plan.md (§4).
 
@@ -175,6 +176,92 @@ pub trait HostPlatform: Send + Sync {
     fn run(&self, did_finish_launching: Box<dyn FnOnce()>);
 }
 
+/// Phase of a touch, with UITouchPhase's values.
+#[repr(isize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TouchPhase {
+    Began = 0,
+    Moved = 1,
+    Ended = 3,
+    Cancelled = 4,
+}
+
+/// Modifier bits of a key event, with UIKeyModifierFlags' values.
+pub mod modifiers {
+    pub const ALPHA_SHIFT: u64 = 1 << 16;
+    pub const SHIFT: u64 = 1 << 17;
+    pub const CONTROL: u64 = 1 << 18;
+    pub const ALTERNATE: u64 = 1 << 19;
+    pub const COMMAND: u64 = 1 << 20;
+    pub const NUMERIC_PAD: u64 = 1 << 21;
+}
+
+/// A hardware key press or release.
+#[derive(Clone, Debug, PartialEq)]
+pub struct KeyEvent {
+    /// USB HID usage (keyboard page), as UIKey.keyCode.
+    pub hid_usage: u16,
+    /// The characters the key produces, with and without modifiers.
+    pub characters: String,
+    pub characters_ignoring_modifiers: String,
+    /// [`modifiers`] bits.
+    pub modifiers: u64,
+    pub down: bool,
+    /// Seconds since boot.
+    pub timestamp: f64,
+}
+
+/// Text-editing commands a host's text system produces.
+#[repr(i32)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum EditCommand {
+    DeleteBackward = 0,
+    Newline = 1,
+    MoveLeft = 2,
+    MoveRight = 3,
+    Cancel = 4,
+}
+
+/// Application lifecycle transitions (UIApplicationDelegate's).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Lifecycle {
+    DidBecomeActive,
+    WillResignActive,
+    DidEnterBackground,
+    WillEnterForeground,
+    WillTerminate,
+}
+
+/// Where a host delivers input and window/application events: the portable
+/// iOS layer (UIKit implements it). Hosts call [`events()`], never UIKit.
+pub trait GuestEvents: Send + Sync {
+    /// A pointer/touch in `window` at (`x`, `y`) points, origin top-left.
+    fn pointer(&self, window: GuestObject, phase: TouchPhase, x: f64, y: f64, timestamp: f64);
+    fn key(&self, event: KeyEvent);
+    /// Committed text while a text-input responder is active.
+    fn text(&self, text: &str);
+    fn edit_command(&self, command: EditCommand);
+    /// A text-input responder is first responder: the host should route keys
+    /// through its text system (`text`/`edit_command`) instead of `key`.
+    fn text_input_active(&self) -> bool;
+    fn window_resized(&self, window: GuestObject, points: Size, scale: f64);
+    fn window_became_key(&self, window: GuestObject);
+    fn lifecycle(&self, event: Lifecycle);
+}
+
+static EVENTS: OnceLock<Box<dyn GuestEvents>> = OnceLock::new();
+
+/// Installs the process's event sink. The first installation wins.
+pub fn install_events(sink: Box<dyn GuestEvents>) -> bool {
+    EVENTS.set(sink).is_ok()
+}
+
+/// The installed event sink. Panics when none is installed: hosts deliver
+/// events only after the iOS layer started.
+pub fn events() -> &'static dyn GuestEvents {
+    EVENTS.get().map(|e| e.as_ref()).expect("pear-host: no GuestEvents sink installed")
+}
+
 static HOST: OnceLock<Box<dyn HostPlatform>> = OnceLock::new();
 
 /// Installs the process's host. The first installation wins; returns false
@@ -334,6 +421,71 @@ mod tests {
         );
         assert!(cancelled.load(Ordering::SeqCst));
         assert!(!host.screen_reader_running());
+    }
+
+    /// A sink recording what a host delivers (into LOG: the sink is global).
+    static LOG: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    #[derive(Default)]
+    struct Recorder;
+    impl GuestEvents for Recorder {
+        fn pointer(&self, _w: GuestObject, phase: TouchPhase, x: f64, y: f64, _t: f64) {
+            LOG.lock().unwrap().push(format!("pointer {phase:?} {x} {y}"));
+        }
+        fn key(&self, event: KeyEvent) {
+            LOG.lock().unwrap().push(format!("key {} {}", event.hid_usage, event.down));
+        }
+        fn text(&self, text: &str) {
+            LOG.lock().unwrap().push(format!("text {text}"));
+        }
+        fn edit_command(&self, command: EditCommand) {
+            LOG.lock().unwrap().push(format!("edit {command:?}"));
+        }
+        fn text_input_active(&self) -> bool {
+            false
+        }
+        fn window_resized(&self, _w: GuestObject, points: Size, scale: f64) {
+            LOG.lock().unwrap().push(format!("resize {}x{}@{scale}", points.width, points.height));
+        }
+        fn window_became_key(&self, _w: GuestObject) {
+            LOG.lock().unwrap().push("key window".into());
+        }
+        fn lifecycle(&self, event: Lifecycle) {
+            LOG.lock().unwrap().push(format!("{event:?}"));
+        }
+    }
+
+    #[test]
+    fn events_reach_the_installed_sink() {
+        assert_eq!(TouchPhase::Ended as isize, 3, "UITouchPhaseEnded");
+        assert_eq!(EditCommand::Cancel as i32, 4);
+        assert!(install_events(Box::new(Recorder::default())));
+        assert!(!install_events(Box::new(Recorder::default())));
+        let w = GuestObject(std::ptr::null_mut());
+        events().pointer(w, TouchPhase::Began, 10.0, 20.0, 1.0);
+        events().key(KeyEvent {
+            hid_usage: 0x04,
+            characters: "a".into(),
+            characters_ignoring_modifiers: "a".into(),
+            modifiers: modifiers::SHIFT,
+            down: true,
+            timestamp: 1.0,
+        });
+        events().text("pear");
+        events().edit_command(EditCommand::DeleteBackward);
+        events().window_resized(w, Size { width: 800.0, height: 600.0 }, 2.0);
+        events().lifecycle(Lifecycle::WillTerminate);
+        assert!(!events().text_input_active());
+        assert_eq!(
+            *LOG.lock().unwrap(),
+            vec![
+                "pointer Began 10 20",
+                "key 4 true",
+                "text pear",
+                "edit DeleteBackward",
+                "resize 800x600@2",
+                "WillTerminate"
+            ]
+        );
     }
 
     #[test]

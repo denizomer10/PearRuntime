@@ -1,8 +1,9 @@
 //! PearRuntime's macOS host: pear-host's [`HostPlatform`] on AppKit (windows,
-//! the main loop, alerts, NSWorkspace), QuartzCore (layer hosting, display
-//! links) and IOKit (power assertions), and the AppKit side of input: an
-//! NSView and window/application delegates that deliver pointer, key, text
-//! and lifecycle events to the UIKit layer's `PearUIKit*` entry points.
+//! the main loop, alerts, pasteboards, panels, sharing, NSWorkspace),
+//! QuartzCore (layer hosting, display links) and IOKit (power assertions),
+//! and the AppKit side of input: an NSView and window/application delegates
+//! that deliver pointer, key, text, window and lifecycle events to the iOS
+//! layer through pear-host's event sink (`pear_host::events()`).
 //!
 //! This is the only crate of the PearHost frameworks that names AppKit. A
 //! Linux or Windows host implements the same trait (see pear-host and
@@ -12,8 +13,8 @@
 #![allow(non_snake_case, clippy::missing_safety_doc)]
 
 use pear_host::{
-    DocumentRequest, GuestObject, GuestSelector, HostPlatform, LayerRef, PasteboardItem, Rect, ScreenInfo, Size,
-    WindowHandle, UTI_FILE_URL, UTI_TEXT, UTI_URL,
+    events, DocumentRequest, EditCommand, GuestObject, GuestSelector, HostPlatform, KeyEvent, LayerRef, Lifecycle,
+    PasteboardItem, Rect, ScreenInfo, Size, TouchPhase, WindowHandle, UTI_FILE_URL, UTI_TEXT, UTI_URL,
 };
 use pear_objc::{
     cls, is_kind_of, msg0, msg1, msg2, msg3, msg4, nsarray_count, nsarray_from_ids, nsarray_object_at,
@@ -54,23 +55,30 @@ extern "C" {
     fn IOPMAssertionCreateWithName(assertion_type: *const c_void, level: u32, name: *const c_void, assertion_id: *mut u32) -> i32;
     fn IOPMAssertionRelease(assertion_id: u32) -> i32;
 
-    // PearHost UIKit (pear-core, pear-uikit): logging, missing-call reports,
-    // and the event sink of the portable layer.
+    // PearHost's logging and missing-call reporter (pear-core).
     fn PearHostLogMessage(tag: *const c_char, message: *const c_char);
     fn PearMissingReport(kind: c_int, owner: *const c_char, name: *const c_char, caller: *const c_void);
-    fn PearUIKitTryProbeDisplayLinkSelector(target: Id, selector: Sel, is_setter: bool) -> bool;
-    fn PearUIKitDeliverPointer(window: Id, phase: isize, point: CGPoint, timestamp: f64);
-    fn PearUIKitDeliverKey(hid_usage: isize, chars: Id, chars_no_mods: Id, modifiers: isize, down: bool, timestamp: f64);
-    fn PearUIKitDeliverText(text: Id);
-    fn PearUIKitDeliverEditCommand(cmd: c_int);
-    fn PearUIKitTextInputActive() -> bool;
-    fn PearUIKitWindowDidResize(window: Id, point_size: CGSize, scale: f64);
-    fn PearUIKitSetKeyWindow(window: Id);
-    fn PearUIKitApplicationDidBecomeActive();
-    fn PearUIKitApplicationWillResignActive();
-    fn PearUIKitApplicationDidEnterBackground();
-    fn PearUIKitApplicationWillEnterForeground();
-    fn PearUIKitApplicationWillTerminate();
+}
+
+/// Sends a display-link selector (a setter with 1, or a getter); false if it
+/// raised an Objective-C exception.
+unsafe fn probe_selector(target: Id, selector: Sel, is_setter: bool) -> bool {
+    match pear_objc::abi::try_send(target, selector, is_setter as usize, 0) {
+        Ok(()) => true,
+        Err(exception) => {
+            objc_release(exception);
+            false
+        }
+    }
+}
+
+fn phase(value: isize) -> TouchPhase {
+    match value {
+        0 => TouchPhase::Began,
+        1 => TouchPhase::Moved,
+        3 => TouchPhase::Ended,
+        _ => TouchPhase::Cancelled,
+    }
 }
 
 unsafe fn add_class_method(c: Class, selector: &str, imp: Imp, types: &str) {
@@ -327,7 +335,7 @@ pub extern "C" fn PearBackendInstallQuartzCoreCompat() {
         ];
         for (sname, imp, types, is_setter) in table {
             let s = sel(sname);
-            let works = responds_to(probe, sname) && PearUIKitTryProbeDisplayLinkSelector(probe, s, is_setter);
+            let works = responds_to(probe, sname) && probe_selector(probe, s, is_setter);
             if !works {
                 let ct = CString::new(types).unwrap();
                 class_replaceMethod(concrete, s, imp, ct.as_ptr());
@@ -474,11 +482,11 @@ unsafe extern "C" fn app_del_did_finish(_s: Id, _c: Sel, _n: Id) {
     }
 }
 unsafe extern "C" fn app_del_should_term(_s: Id, _c: Sel, _app: Id) -> bool { true }
-unsafe extern "C" fn obs_active(_s: Id, _c: Sel, _n: Id) { PearUIKitApplicationDidBecomeActive(); }
-unsafe extern "C" fn obs_resign(_s: Id, _c: Sel, _n: Id) { PearUIKitApplicationWillResignActive(); }
-unsafe extern "C" fn obs_hide(_s: Id, _c: Sel, _n: Id) { PearUIKitApplicationDidEnterBackground(); }
-unsafe extern "C" fn obs_unhide(_s: Id, _c: Sel, _n: Id) { PearUIKitApplicationWillEnterForeground(); }
-unsafe extern "C" fn obs_term(_s: Id, _c: Sel, _n: Id) { PearUIKitApplicationWillTerminate(); }
+unsafe extern "C" fn obs_active(_s: Id, _c: Sel, _n: Id) { events().lifecycle(Lifecycle::DidBecomeActive); }
+unsafe extern "C" fn obs_resign(_s: Id, _c: Sel, _n: Id) { events().lifecycle(Lifecycle::WillResignActive); }
+unsafe extern "C" fn obs_hide(_s: Id, _c: Sel, _n: Id) { events().lifecycle(Lifecycle::DidEnterBackground); }
+unsafe extern "C" fn obs_unhide(_s: Id, _c: Sel, _n: Id) { events().lifecycle(Lifecycle::WillEnterForeground); }
+unsafe extern "C" fn obs_term(_s: Id, _c: Sel, _n: Id) { events().lifecycle(Lifecycle::WillTerminate); }
 
 unsafe extern "C" fn wd_did_resize(s: Id, _c: Sel, notif: Id) {
     let w: Id = msg0(notif, "object");
@@ -488,10 +496,10 @@ unsafe extern "C" fn wd_did_resize(s: Id, _c: Sel, notif: Id) {
     if cv.is_null() { return; }
     let b: CGRect = msg0(cv, "bounds");
     let scale: f64 = msg0(w, "backingScaleFactor");
-    PearUIKitWindowDidResize(ui, b.size, scale);
+    events().window_resized(GuestObject(ui), Size { width: b.size.width, height: b.size.height }, scale);
 }
 unsafe extern "C" fn wd_became_key(s: Id, _c: Sel, _notif: Id) {
-    PearUIKitSetKeyWindow(assoc_get(s, &WD_UIWIN_KEY));
+    events().window_became_key(GuestObject(assoc_get(s, &WD_UIWIN_KEY)));
 }
 
 unsafe extern "C" fn hv_true(_s: Id, _c: Sel) -> bool { true }
@@ -508,7 +516,7 @@ unsafe fn hv_pointer(view: Id, event: Id, phase: isize) {
         y: p.y * wb.size.height / vb.size.height.max(1.0),
     };
     let ts: f64 = msg0(event, "timestamp");
-    PearUIKitDeliverPointer(w, phase, ui, ts);
+    events().pointer(GuestObject(w), self::phase(phase), ui.x, ui.y, ts);
 }
 unsafe extern "C" fn hv_mouse_down(s: Id, _c: Sel, e: Id) { hv_pointer(s, e, 0); }
 unsafe extern "C" fn hv_mouse_drag(s: Id, _c: Sel, e: Id) { hv_pointer(s, e, 1); }
@@ -522,10 +530,17 @@ unsafe fn hv_send_key(event: Id, down: bool) {
     let chars: Id = msg0(event, "characters");
     let nomod: Id = msg0(event, "charactersIgnoringModifiers");
     let ts: f64 = msg0(event, "timestamp");
-    PearUIKitDeliverKey(usage, chars, nomod, mods, down, ts);
+    events().key(KeyEvent {
+        hid_usage: usage as u16,
+        characters: nsstring_to_string(chars).unwrap_or_default(),
+        characters_ignoring_modifiers: nsstring_to_string(nomod).unwrap_or_default(),
+        modifiers: mods as u64,
+        down,
+        timestamp: ts,
+    });
 }
 unsafe extern "C" fn hv_key_down(s: Id, _c: Sel, e: Id) {
-    if PearUIKitTextInputActive() {
+    if events().text_input_active() {
         msg1::<Id, ()>(s, "interpretKeyEvents:", nsarray_from_ids(&[e]));
         return;
     }
@@ -533,7 +548,7 @@ unsafe extern "C" fn hv_key_down(s: Id, _c: Sel, e: Id) {
     hv_send_key(e, true);
 }
 unsafe extern "C" fn hv_key_up(_s: Id, _c: Sel, e: Id) {
-    if PearUIKitTextInputActive() { return; }
+    if events().text_input_active() { return; }
     hv_send_key(e, false);
 }
 unsafe extern "C" fn hv_flags_changed(_s: Id, _c: Sel, e: Id) {
@@ -551,23 +566,30 @@ unsafe extern "C" fn hv_flags_changed(_s: Id, _c: Sel, e: Id) {
     let down = (flags & bit) != 0;
     let mods = (flags & 0xFFFF_0000) as isize;
     let ts: f64 = msg0(e, "timestamp");
-    PearUIKitDeliverKey(usage, nsstring(""), nsstring(""), mods, down, ts);
+    events().key(KeyEvent {
+        hid_usage: usage as u16,
+        characters: String::new(),
+        characters_ignoring_modifiers: String::new(),
+        modifiers: mods as u64,
+        down,
+        timestamp: ts,
+    });
 }
 unsafe extern "C" fn hv_insert_text(_s: Id, _c: Sel, obj: Id) {
     let str_id = if is_kind_of(obj, "NSAttributedString") { msg0(obj, "string") } else { obj };
     if is_kind_of(str_id, "NSString") && msg0::<usize>(str_id, "length") > 0 {
-        PearUIKitDeliverText(str_id);
+        events().text(&nsstring_to_string(str_id).unwrap_or_default());
     }
 }
 unsafe extern "C" fn hv_do_cmd(_s: Id, _c: Sel, selector: Sel) {
     let name = CStr::from_ptr(sel_getName(selector)).to_string_lossy();
     match name.as_ref() {
-        "deleteBackward:" => PearUIKitDeliverEditCommand(0),
-        "insertNewline:" | "insertLineBreak:" => PearUIKitDeliverEditCommand(1),
-        "moveLeft:" => PearUIKitDeliverEditCommand(2),
-        "moveRight:" => PearUIKitDeliverEditCommand(3),
-        "cancelOperation:" => PearUIKitDeliverEditCommand(4),
-        "insertTab:" => PearUIKitDeliverText(nsstring("\t")),
+        "deleteBackward:" => events().edit_command(EditCommand::DeleteBackward),
+        "insertNewline:" | "insertLineBreak:" => events().edit_command(EditCommand::Newline),
+        "moveLeft:" => events().edit_command(EditCommand::MoveLeft),
+        "moveRight:" => events().edit_command(EditCommand::MoveRight),
+        "cancelOperation:" => events().edit_command(EditCommand::Cancel),
+        "insertTab:" => events().text("\t"),
         _ => {}
     }
 }

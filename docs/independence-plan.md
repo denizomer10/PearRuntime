@@ -210,10 +210,21 @@ in-memory pasteboards, so pasteboard behaviour exists on any OS. The only
 AppKit left in pear-uikit is text: `NSFont`/`NSFontManager` in graphics.rs
 (UIFont, text drawing), which M4 replaces with `HostText` or pure Rust.
 
+*M3 step 4 (2026-11-21):* the event sink. `pear_host::GuestEvents`
+(pointer with `TouchPhase`, `KeyEvent` with HID usage and UIKeyModifierFlags
+bits, text, `EditCommand`, `text_input_active`, window resized / became key,
+`Lifecycle`) is what a host backend calls; `install_events`/`events()` hold
+the sink. pear-uikit installs `UIKitEvents` (forwarding to its
+`PearUIKitDeliver*`/lifecycle functions) before the macOS host, and
+pear-host-macos no longer declares any `PearUIKit*` symbol: it depends on
+pear-host and pear-objc only. `tools/host-event-probe.py` sends synthetic
+NSEvents to the host view of an off-screen window and checks that a guest
+UIView gets touchesBegan/Moved/Ended at the right points and
+pressesBegan/Ended with HID usage 0x04.
+
 Next steps for the boundary, in order:
 
-1. An event sink trait for input/lifecycle (`HostEvent`) replacing the
-   `PearUIKitDeliver*` C calls.
+1. ~~An event sink trait for input/lifecycle~~ (done, step 4).
 2. Surfaces for graphics backends, so pear-gles/MetalKit stop taking a
    CALayer:
 
@@ -257,8 +268,11 @@ Each milestone is small, testable alone, and keeps working paths working.
    `pear-host-macos`; UIKit no longer links IOKit or creates NSWindows;
    census and probe identical, a scripted tap takes Burger Shop 2 from its
    menu into gameplay. *Step 3 done:* pasteboard, document picker, share
-   sheet, screen reader behind the trait (only text/fonts remain, M4). Next:
-   the event sink, surfaces.
+   sheet, screen reader behind the trait (only text/fonts remain, M4).
+   *Step 4 done:* the `GuestEvents` sink; the AppKit backend talks to the
+   guest only through it (event probe passes, census/probe identical,
+   Burger Shop 2 and GTA VC render, pear-host tests pass on Linux). Next:
+   surfaces.
 4. **M4 — Text and images off CoreGraphics/CoreText/ImageIO.** Pure-Rust
    decoding and a glyph rasteriser behind `HostImage`/`HostText`;
    compare rendered UILabel/UIImage output against today's pixels.
@@ -288,7 +302,8 @@ Each milestone is small, testable alone, and keeps working paths working.
 | Workspace build | `cargo build` (host), `host/build-host.sh`, `build.sh` (Catalyst while it exists) | passes on macOS |
 | Linux portability | `container run … rust` builds of each crate | pear-macho, pear-nib, pear-objc, pear-core, pear-gles build; tests of pear-macho/pear-nib pass; pear-uikit/pear-keychain/pear-metalkit link Apple frameworks |
 | ObjC ABI parity | `tools/host-abi-census.py --compare` | identical to the last ObjC build and across M3 |
-| Host behaviour | `tools/host-behavior-probe.py --compare` (UIKit accessors, exception boundaries, constants, EAGL GLES 1/2/3) | identical across M3 (29 facts) |
+| Host behaviour | `tools/host-behavior-probe.py --compare` (UIKit accessors, exception boundaries, constants, EAGL GLES 1/2/3) | identical across M3 (35 facts) |
+| Host input path | `tools/host-event-probe.py` (synthetic NSEvents → host view → `events()` → guest UIView) | touches and presses delivered (M3 step 4) |
 | GL | `pear-gles --example pearangle-smoke`; EAGL GLES1/2/3 context test | pass on macOS |
 | Game regression | §7 | see below |
 | 32-bit | Miku Flick via PearLegacyEngine | runs (log 2026-11-19) |

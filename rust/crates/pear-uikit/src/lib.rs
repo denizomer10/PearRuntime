@@ -11,6 +11,7 @@ mod accessibility;
 mod app;
 mod basics;
 mod generated_stubs;
+mod events;
 mod globals;
 mod graphics;
 pub mod objc_classes;
@@ -34,6 +35,8 @@ extern "C" fn pear_uikit_load() {
     let msg = std::ffi::CString::new(format!("PearHost UIKit {version} (no iOSSupport) loading")).unwrap_or_default();
     unsafe {
         PearHostLogMessage(c"".as_ptr(), msg.as_ptr());
+        // Hosts deliver input and lifecycle events through pear-host's sink.
+        pear_host::install_events(Box::new(events::UIKitEvents));
         // The portable layer reaches the OS only through pear-host; this
         // build's host is macOS (AppKit, pear-host-macos).
         #[cfg(target_os = "macos")]
