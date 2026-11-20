@@ -305,7 +305,7 @@ Each milestone is small, testable alone, and keeps working paths working.
 | Check | How | Today |
 |---|---|---|
 | Workspace build | `cargo build` (host), `host/build-host.sh`, `build.sh` (Catalyst while it exists) | passes on macOS |
-| Linux portability | `container run … rust` builds of each crate | pear-macho, pear-nib, pear-objc, pear-core build; pear-host tests pass; pear-gles fails since the all-Rust port (pear-objc's ObjC metadata macros emit Mach-O `@PAGEOFF` asm, to gate to Apple targets); tests of pear-macho/pear-nib pass; pear-uikit/pear-keychain/pear-metalkit link Apple frameworks |
+| Linux portability | `container run … rust` builds of each crate | pear-macho, pear-nib, pear-objc, pear-core, pear-host, pear-opengles, pear-gles build on arm64 Linux (the GLES forwarders use ELF `:lo12:` relocations there, Mach-O `@PAGE` on Apple; x86-64 needs its own trampolines); tests of pear-host/pear-macho/pear-nib pass; tests of pear-macho/pear-nib pass; pear-uikit/pear-keychain/pear-metalkit link Apple frameworks |
 | ObjC ABI parity | `tools/host-abi-census.py --compare` | identical to the last ObjC build and across M3 |
 | Host behaviour | `tools/host-behavior-probe.py --compare` (UIKit accessors, exception boundaries, constants, EAGL GLES 1/2/3) | identical across M3 (35 facts) |
 | Host input path | `tools/host-event-probe.py` (synthetic NSEvents → host view → `events()` → guest UIView) | touches and presses delivered (M3 step 4) |

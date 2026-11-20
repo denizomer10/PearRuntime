@@ -5,6 +5,11 @@
 //! OpenGLES.framework (pear-gles includes this file); the including crate's
 //! build script writes the list (gles_prototypes.rs).
 
+// The trampolines are AArch64 (Apple silicon, and arm64 Linux/Windows);
+// an x86-64 host needs its own pair (System V and Win64 argument registers).
+#[cfg(not(target_arch = "aarch64"))]
+compile_error!("the GLES forwarders are AArch64 only so far");
+
 use std::ffi::{c_char, c_void};
 
 extern "C" {
@@ -82,6 +87,48 @@ unsafe extern "C" fn resolve_and_jump() {
 pub struct Slot(std::cell::UnsafeCell<usize>);
 unsafe impl Sync for Slot {}
 
+/// The page-relative address of a symbol, in the object format's syntax
+/// (Mach-O `sym@PAGE`/`sym@PAGEOFF`, ELF `sym`/`:lo12:sym`); `sym` operands
+/// already carry the platform's symbol prefix.
+#[cfg(target_vendor = "apple")]
+macro_rules! forwarder_asm {
+    ($slot:path, $name:path) => {
+        core::arch::naked_asm!(
+            "adrp x16, {slot}@PAGE",
+            "add x16, x16, {slot}@PAGEOFF",
+            "ldr x17, [x16]",
+            "cbz x17, 1f",
+            "br x17",
+            "1:",
+            "adrp x17, {name}@PAGE",
+            "ldr x17, [x17, {name}@PAGEOFF]",
+            "b {slow}",
+            slot = sym $slot,
+            name = sym $name,
+            slow = sym resolve_and_jump,
+        )
+    };
+}
+#[cfg(not(target_vendor = "apple"))]
+macro_rules! forwarder_asm {
+    ($slot:path, $name:path) => {
+        core::arch::naked_asm!(
+            "adrp x16, {slot}",
+            "add x16, x16, :lo12:{slot}",
+            "ldr x17, [x16]",
+            "cbz x17, 1f",
+            "br x17",
+            "1:",
+            "adrp x17, {name}",
+            "ldr x17, [x17, :lo12:{name}]",
+            "b {slow}",
+            slot = sym $slot,
+            name = sym $name,
+            slow = sym resolve_and_jump,
+        )
+    };
+}
+
 macro_rules! forward {
     ($($name:ident),* $(,)?) => {$(
         mod $name {
@@ -91,20 +138,7 @@ macro_rules! forward {
         #[no_mangle]
         #[unsafe(naked)]
         pub unsafe extern "C" fn $name() {
-            core::arch::naked_asm!(
-                "adrp x16, {slot}@PAGE",
-                "add x16, x16, {slot}@PAGEOFF",
-                "ldr x17, [x16]",
-                "cbz x17, 1f",
-                "br x17",
-                "1:",
-                "adrp x17, {name}@PAGE",
-                "ldr x17, [x17, {name}@PAGEOFF]",
-                "b {slow}",
-                slot = sym $name::SLOT,
-                name = sym $name::NAME,
-                slow = sym resolve_and_jump,
-            )
+            forwarder_asm!($name::SLOT, $name::NAME)
         }
     )*};
 }
