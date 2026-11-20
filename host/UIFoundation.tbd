@@ -1,0 +1,16 @@
+--- !tapi-tbd
+# PearHost's UIKit re-exports macOS's UIFoundation (the text system iOS apps
+# reach through UIKit: attribute names, NSParagraphStyle, NSShadow, the
+# TextKit classes), as iOS's UIKit does, instead of all of AppKit. The SDK's
+# own UIFoundation.tbd only allows Apple's frameworks as clients, so this stub
+# names the same install name for the linker; at run time dyld loads the
+# system library and re-exports everything it exports. The symbols listed are
+# the ones games bind through UIKit today (tools/host-reexport-census.py).
+tbd-version:     4
+targets:         [ arm64-macos ]
+install-name:    '/System/Library/PrivateFrameworks/UIFoundation.framework/Versions/A/UIFoundation'
+exports:
+  - targets:     [ arm64-macos ]
+    symbols:     [ _NSBackgroundColorAttributeName, _NSBaselineOffsetAttributeName, _NSCharacterEncodingDocumentAttribute, _NSDocumentTypeDocumentAttribute, _NSFontAttributeName, _NSForegroundColorAttributeName, _NSHTMLTextDocumentType, _NSKernAttributeName, _NSLigatureAttributeName, _NSLinkAttributeName, _NSObliquenessAttributeName, _NSParagraphStyleAttributeName, _NSShadowAttributeName, _NSStrikethroughColorAttributeName, _NSStrikethroughStyleAttributeName, _NSStrokeColorAttributeName, _NSStrokeWidthAttributeName, _NSUnderlineColorAttributeName, _NSUnderlineStyleAttributeName ]
+    objc-classes: [ NSDataAsset, NSLayoutManager, NSMutableParagraphStyle, NSParagraphStyle, NSShadow, NSTextAttachment, NSTextContainer, NSTextStorage ]
+...

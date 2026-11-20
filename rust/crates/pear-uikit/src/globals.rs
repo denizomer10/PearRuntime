@@ -88,3 +88,8 @@ pub unsafe extern "C" fn PearUIKitTryProbeDisplayLinkSelector(target: Id, select
 pub extern "C" fn pear_uikit_uifont_class() -> Class {
     crate::objc_classes::UIFont::CLASS.ptr() as Class
 }
+
+/// UIGeometry's zero NSDirectionalEdgeInsets (top, leading, bottom, trailing).
+/// iOS UIKit defines it; macOS AppKit's copy is no longer re-exported.
+#[no_mangle]
+pub static NSDirectionalEdgeInsetsZero: [f64; 4] = [0.0, 0.0, 0.0, 0.0];

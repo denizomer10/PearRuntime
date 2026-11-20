@@ -38,9 +38,12 @@ RUST_UIKIT_LIB="$RUST_LIBS/libpear_uikit.a"
 
 rm -rf "$OUT_DIR/obj" # objects of earlier builds (Objective-C sources)
 
+# AppKit is linked for the macOS host backend (pear-host-macos) but not
+# re-exported: apps see UIKit's own symbols plus UIFoundation's text system,
+# as on iOS (host/UIFoundation.tbd, tools/host-reexport-census.py).
 "${LD[@]}" -dynamiclib -Wl,-force_load,"$RUST_UIKIT_LIB" -o "$OUT_DIR/UIKit.framework/UIKit" \
   -install_name @rpath/UIKit.framework/UIKit -compatibility_version 1.0.0 -current_version 6209.0.0 \
-  -framework Foundation -Wl,-reexport_framework,AppKit -framework QuartzCore -framework CoreGraphics -framework CoreText -framework ImageIO -framework IOKit -framework Security -lc++
+  -framework Foundation -framework AppKit -Wl,-reexport_library,"$ROOT/host/UIFoundation.tbd" -framework QuartzCore -framework CoreGraphics -framework CoreText -framework ImageIO -framework IOKit -framework Security -lc++
 echo ">> $OUT_DIR/UIKit.framework/UIKit"
 
 # Stub and overlay frameworks generated from the census: iOS-only frameworks

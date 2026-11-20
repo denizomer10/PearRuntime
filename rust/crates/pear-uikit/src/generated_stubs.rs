@@ -5,6 +5,10 @@
 use std::ffi::c_void;
 
 extern "C" {
+    #[link_name = "OBJC_CLASS_$_NSCollectionLayoutItem"]
+    static NSCollectionLayoutItem_CLASS: c_void;
+    #[link_name = "OBJC_METACLASS_$_NSCollectionLayoutItem"]
+    static NSCollectionLayoutItem_META: c_void;
     #[link_name = "OBJC_CLASS_$_NSObject"]
     static NSObject_CLASS: c_void;
     #[link_name = "OBJC_METACLASS_$_NSObject"]
@@ -15,6 +19,12 @@ extern "C" {
     static NSOperation_META: c_void;
 }
 
+pear_objc::empty_class!(NSCollectionLayoutDimension : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+pear_objc::empty_class!(NSCollectionLayoutItem : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+pear_objc::empty_class!(NSCollectionLayoutGroup : super::NSCollectionLayoutItem::CLASS.ptr(), super::NSCollectionLayoutItem::META.ptr());
+pear_objc::empty_class!(NSCollectionLayoutSection : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+pear_objc::empty_class!(NSCollectionLayoutSize : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+pear_objc::empty_class!(NSDiffableDataSourceSnapshot : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
 pear_objc::empty_class!(UIAccelerometer : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
 pear_objc::empty_class!(UIAccessibilityCustomAction : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
 pear_objc::empty_class!(UIAccessibilityCustomRotor : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);

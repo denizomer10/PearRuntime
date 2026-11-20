@@ -291,9 +291,20 @@ Each milestone is small, testable alone, and keeps working paths working.
    that returns nil like NSFont, family members via font descriptors);
    pear-uikit names no AppKit class. 41 CoreText-vs-NSFont cases agree;
    the behaviour probe gained 16 font and UILabel-pixel facts, identical
-   before and after (51 facts). Next: UIKit.framework still re-exports
-   AppKit (`-reexport_framework,AppKit`, since the Minecraft work): measure
-   which symbols games bind through it, define them, drop the re-export.
+   before and after (51 facts). *Step 2 done (2026-11-21):* UIKit.framework
+   no longer re-exports AppKit. `tools/host-reexport-census.py` read every
+   image of the 22 prepared games: 77 symbols bound "from UIKit" that UIKit
+   does not define; 27 come from UIFoundation (text attributes,
+   NSParagraphStyle, NSShadow, TextKit classes), 1 from AppKit
+   (`NSDirectionalEdgeInsetsZero`, now defined in UIKit), 49 from nowhere
+   (all weak imports). UIKit re-exports UIFoundation through
+   `host/UIFoundation.tbd` (the SDK's tbd only allows Apple clients), as
+   iOS's UIKit does; AppKit stays linked for pear-host-macos only. The stub
+   generator now skips UIFoundation names only, which adds empty
+   NSCollectionLayout*/NSDiffableDataSourceSnapshot classes (AppKit has
+   same-named classes in the process; no prepared game binds them) Probes
+   identical (51 facts); all 22 games launch as before (Burger Shop 2 and
+   GTA VC render; Gutterball calls 25 missing APIs instead of 31).
 5. **M5 — Graphics backend selection in PearANGLE.** Build the fork with the
    Vulkan backend for Linux; `pear-gles` takes `NativeSurface`. Run
    the pear-gles GL smoke (Rust example) on Linux in a container.

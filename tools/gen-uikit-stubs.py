@@ -58,13 +58,14 @@ STRUCT_FIELDS = {"CGPoint": 2, "CGSize": 2, "UIOffset": 2, "CGRect": 4, "UIEdgeI
                  "NSDirectionalEdgeInsets": 4, "CGAffineTransform": 6}
 STRUCT_VALUES = {"UILayoutFittingExpandedSize": [1e6, 1e6]}
 
-# Names a macOS framework already exports (AppKit re-exports UIFoundation:
-# NSParagraphStyle, NSFontAttributeName, ...). Our UIKit re-exports AppKit for
-# these instead of defining a second copy.
+# Names UIFoundation already exports (the text system: NSParagraphStyle,
+# NSFontAttributeName, ...). Our UIKit re-exports UIFoundation for these, as
+# iOS's does (host/UIFoundation.tbd), instead of defining a second copy.
+# AppKit is not re-exported, so AppKit-only names are stubbed like any other.
 def macos_exports():
     sdk = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip()
     names = set()
-    for fw in ("AppKit", "UIFoundation"):
+    for fw in ("UIFoundation",):
         for t in glob.glob(os.path.join(sdk, f"System/Library/*Frameworks/{fw}.framework/*.tbd")):
             text = open(t, errors="ignore").read()
             names |= set(re.findall(r"\b_?(NS\w+)\b", text))
