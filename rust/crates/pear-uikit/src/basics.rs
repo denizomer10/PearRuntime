@@ -642,16 +642,44 @@ pub extern "C" fn PearUIKitDeliverPointer(window: Id, phase: isize, point: CGPoi
 // UIPasteboard
 // ============================================================================
 
-static PB_INNER_KEY: u8 = 0;
+static PB_NAME_KEY: u8 = 0;
 static GENERAL_PB: AtomicUsize = AtomicUsize::new(0);
+/// UIPasteboardNameGeneral.
+const GENERAL_PASTEBOARD_NAME: &str = "com.apple.UIKit.pboard.general";
 
-unsafe fn pb_inner(obj: Id) -> Id {
-    let p = assoc_get(obj, &PB_INNER_KEY);
-    if p.is_null() {
-        msg0(cls("NSPasteboard"), "generalPasteboard")
-    } else {
-        p
+/// The host pasteboard behind a UIPasteboard: None for the general one.
+unsafe fn pb_host_name(obj: Id) -> Option<String> {
+    nsstring_to_string(assoc_get(obj, &PB_NAME_KEY))
+}
+
+unsafe fn pb_read(obj: Id) -> Vec<pear_host::PasteboardItem> {
+    pear_host::host().pasteboard_read(pb_host_name(obj).as_deref())
+}
+
+unsafe fn pb_write(obj: Id, items: &[pear_host::PasteboardItem]) {
+    pear_host::host().pasteboard_write(pb_host_name(obj).as_deref(), items);
+}
+
+unsafe fn pb_has_type(obj: Id, utis: &[&str]) -> bool {
+    pear_host::host().pasteboard_types(pb_host_name(obj).as_deref()).iter().any(|t| utis.contains(&t.as_str()))
+}
+
+unsafe fn ns_url(s: &str) -> Id {
+    msg1(cls("NSURL"), "URLWithString:", nsstring(s))
+}
+
+/// NSString and NSURL objects of `array` as pasteboard items.
+unsafe fn pb_items_from(array: Id) -> Vec<pear_host::PasteboardItem> {
+    let mut items = Vec::new();
+    for i in 0..nsarray_count(array) {
+        let o = nsarray_object_at(array, i);
+        if is_kind_of(o, "NSString") {
+            items.push(pear_host::PasteboardItem::Text(nsstring_to_string(o).unwrap_or_default()));
+        } else if is_kind_of(o, "NSURL") {
+            items.push(pear_host::PasteboardItem::Url(nsstring_to_string(msg0(o, "absoluteString")).unwrap_or_default()));
+        }
     }
+    items
 }
 
 unsafe extern "C" fn pb_general(self_cls: Id, _cmd: Sel) -> Id {
@@ -660,8 +688,6 @@ unsafe extern "C" fn pb_general(self_cls: Id, _cmd: Sel) -> Id {
         return cached as Id;
     }
     let pb: Id = msg0(self_cls, "new");
-    let ns_pb: Id = msg0(cls("NSPasteboard"), "generalPasteboard");
-    assoc_set(pb, &PB_INNER_KEY, ns_pb);
     objc_retain(pb);
     GENERAL_PB.store(pb as usize, Ordering::Release);
     pb
@@ -669,109 +695,84 @@ unsafe extern "C" fn pb_general(self_cls: Id, _cmd: Sel) -> Id {
 
 unsafe extern "C" fn pb_with_name(self_cls: Id, _cmd: Sel, name: Id, _create: bool) -> Id {
     let pb: Id = msg0(self_cls, "new");
-    let ns_pb: Id = msg1(cls("NSPasteboard"), "pasteboardWithName:", name);
-    assoc_set(pb, &PB_INNER_KEY, ns_pb);
+    if nsstring_to_string(name).as_deref() != Some(GENERAL_PASTEBOARD_NAME) {
+        assoc_set(pb, &PB_NAME_KEY, name);
+    }
     pb
 }
 
 unsafe extern "C" fn pb_name(self_obj: Id, _cmd: Sel) -> Id {
-    msg0(pb_inner(self_obj), "name")
+    nsstring(&pb_host_name(self_obj).unwrap_or_else(|| GENERAL_PASTEBOARD_NAME.to_string()))
 }
 unsafe extern "C" fn pb_change_count(self_obj: Id, _cmd: Sel) -> isize {
-    msg0(pb_inner(self_obj), "changeCount")
+    pear_host::host().pasteboard_change_count(pb_host_name(self_obj).as_deref())
 }
 unsafe extern "C" fn pb_string(self_obj: Id, _cmd: Sel) -> Id {
-    msg1(pb_inner(self_obj), "stringForType:", nsstring("public.utf8-plain-text"))
+    pb_read(self_obj)
+        .into_iter()
+        .find_map(|i| if let pear_host::PasteboardItem::Text(s) = i { Some(nsstring(&s)) } else { None })
+        .unwrap_or(NIL)
 }
 unsafe extern "C" fn pb_set_string(self_obj: Id, _cmd: Sel, val: Id) {
-    let p = pb_inner(self_obj);
-    msg0::<isize>(p, "clearContents");
-    if !val.is_null() {
-        msg2::<Id, Id, bool>(p, "setString:forType:", val, nsstring("public.utf8-plain-text"));
-    }
+    let items = nsstring_to_string(val).map(pear_host::PasteboardItem::Text).into_iter().collect::<Vec<_>>();
+    pb_write(self_obj, &items);
 }
 unsafe extern "C" fn pb_strings(self_obj: Id, _cmd: Sel) -> Id {
-    let p = pb_inner(self_obj);
-    let items: Id = msg0(p, "pasteboardItems");
-    if items.is_null() {
-        return NIL;
-    }
-    let mut out = Vec::new();
-    let ty = nsstring("public.utf8-plain-text");
-    for i in 0..nsarray_count(items) {
-        let item = nsarray_object_at(items, i);
-        let s: Id = msg1(item, "stringForType:", ty);
-        if !s.is_null() {
-            out.push(s);
-        }
-    }
-    if out.is_empty() {
-        NIL
-    } else {
-        nsarray_from_ids(&out)
-    }
+    let out: Vec<Id> = pb_read(self_obj)
+        .into_iter()
+        .filter_map(|i| if let pear_host::PasteboardItem::Text(s) = i { Some(nsstring(&s)) } else { None })
+        .collect();
+    if out.is_empty() { NIL } else { nsarray_from_ids(&out) }
 }
 unsafe extern "C" fn pb_set_strings(self_obj: Id, _cmd: Sel, val: Id) {
-    let p = pb_inner(self_obj);
-    msg0::<isize>(p, "clearContents");
-    if !val.is_null() {
-        msg1::<Id, bool>(p, "writeObjects:", val);
-    }
+    let items = if val.is_null() { Vec::new() } else { pb_items_from(val) };
+    pb_write(self_obj, &items);
 }
 unsafe extern "C" fn pb_has_strings(self_obj: Id, _cmd: Sel) -> bool {
-    let p = pb_inner(self_obj);
-    let types = nsarray_from_ids(&[nsstring("public.utf8-plain-text")]);
-    msg1(p, "canReadItemWithDataConformingToTypes:", types)
+    pb_has_type(self_obj, &[pear_host::UTI_TEXT])
 }
 unsafe extern "C" fn pb_url(self_obj: Id, _cmd: Sel) -> Id {
-    let p = pb_inner(self_obj);
-    let s: Id = msg1(p, "stringForType:", nsstring("public.url"));
-    if !s.is_null() {
-        let u: Id = msg1(cls("NSURL"), "URLWithString:", s);
-        if !u.is_null() {
-            return u;
-        }
-    }
-    let arr: Id = msg2(p, "readObjectsForClasses:options:", nsarray_from_ids(&[cls("NSURL") as Id]), NIL);
-    if nsarray_count(arr) > 0 {
-        nsarray_object_at(arr, 0)
-    } else {
-        NIL
-    }
+    pb_read(self_obj)
+        .into_iter()
+        .find_map(|i| if let pear_host::PasteboardItem::Url(u) = i { Some(ns_url(&u)) } else { None })
+        .unwrap_or(NIL)
 }
 unsafe extern "C" fn pb_set_url(self_obj: Id, _cmd: Sel, val: Id) {
-    let p = pb_inner(self_obj);
-    msg0::<isize>(p, "clearContents");
-    if !val.is_null() {
-        msg1::<Id, bool>(p, "writeObjects:", nsarray_from_ids(&[val]));
-    }
+    let items = if val.is_null() { Vec::new() } else { pb_items_from(nsarray_from_ids(&[val])) };
+    pb_write(self_obj, &items);
 }
 unsafe extern "C" fn pb_urls(self_obj: Id, _cmd: Sel) -> Id {
-    let p = pb_inner(self_obj);
-    msg2(p, "readObjectsForClasses:options:", nsarray_from_ids(&[cls("NSURL") as Id]), NIL)
+    let out: Vec<Id> = pb_read(self_obj)
+        .into_iter()
+        .filter_map(|i| if let pear_host::PasteboardItem::Url(u) = i { Some(ns_url(&u)) } else { None })
+        .filter(|u| !u.is_null())
+        .collect();
+    nsarray_from_ids(&out)
 }
 unsafe extern "C" fn pb_set_urls(self_obj: Id, _cmd: Sel, val: Id) {
-    let p = pb_inner(self_obj);
-    msg0::<isize>(p, "clearContents");
-    if !val.is_null() {
-        msg1::<Id, bool>(p, "writeObjects:", val);
-    }
+    let items = if val.is_null() { Vec::new() } else { pb_items_from(val) };
+    pb_write(self_obj, &items);
 }
 unsafe extern "C" fn pb_has_urls(self_obj: Id, _cmd: Sel) -> bool {
-    let p = pb_inner(self_obj);
-    msg2(p, "canReadObjectForClasses:options:", nsarray_from_ids(&[cls("NSURL") as Id]), NIL)
+    pb_has_type(self_obj, &[pear_host::UTI_URL, pear_host::UTI_FILE_URL])
 }
 unsafe extern "C" fn pb_has_images(self_obj: Id, _cmd: Sel) -> bool {
-    let p = pb_inner(self_obj);
-    msg2(p, "canReadObjectForClasses:options:", nsarray_from_ids(&[cls("NSImage") as Id]), NIL)
+    pb_has_type(self_obj, &["public.png", "public.jpeg", "public.tiff", "public.heic", "public.image"])
 }
 unsafe extern "C" fn pb_data_for_type(self_obj: Id, _cmd: Sel, ty: Id) -> Id {
-    msg1(pb_inner(self_obj), "dataForType:", ty)
+    let uti = nsstring_to_string(ty).unwrap_or_default();
+    match pear_host::host().pasteboard_data(pb_host_name(self_obj).as_deref(), &uti) {
+        Some(bytes) => nsdata_from_bytes(&bytes),
+        None => NIL,
+    }
 }
 unsafe extern "C" fn pb_set_data_for_type(self_obj: Id, _cmd: Sel, data: Id, ty: Id) {
-    let p = pb_inner(self_obj);
-    msg0::<isize>(p, "clearContents");
-    msg2::<Id, Id, bool>(p, "setData:forType:", data, ty);
+    let uti = nsstring_to_string(ty).unwrap_or_default();
+    let items = match nsdata_to_vec(data) {
+        Some(bytes) => vec![pear_host::PasteboardItem::Data { uti, bytes }],
+        None => Vec::new(),
+    };
+    pb_write(self_obj, &items);
 }
 unsafe extern "C" fn pb_value_for_type(self_obj: Id, _cmd: Sel, ty: Id) -> Id {
     let s = nsstring_to_string(ty).unwrap_or_default();
@@ -977,9 +978,11 @@ pub unsafe fn register_classes() {
         add_method(pb, "strings", pb_strings as Imp, "@@:");
         add_method(pb, "setStrings:", pb_set_strings as Imp, "v@:@");
         add_method(pb, "hasStrings", pb_has_strings as Imp, "B@:");
-        add_method(pb, "url", pb_url as Imp, "@@:");
+        // UIPasteboard's properties are URL / URLs (the getters were
+        // registered as url / urls before, which apps never call).
+        add_method(pb, "URL", pb_url as Imp, "@@:");
         add_method(pb, "setURL:", pb_set_url as Imp, "v@:@");
-        add_method(pb, "urls", pb_urls as Imp, "@@:");
+        add_method(pb, "URLs", pb_urls as Imp, "@@:");
         add_method(pb, "setURLs:", pb_set_urls as Imp, "v@:@");
         add_method(pb, "hasURLs", pb_has_urls as Imp, "B@:");
         add_method(pb, "hasImages", pb_has_images as Imp, "B@:");

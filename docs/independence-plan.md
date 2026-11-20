@@ -202,22 +202,19 @@ usages) delivering to UIKit's `PearUIKitDeliver*` / lifecycle entry points.
 pear-uikit depends on it only on macOS and calls `pear_host_macos::install()`
 from its image initializer; everything else goes through `pear_host::host()`.
 
-AppKit still used inside pear-uikit (next trait candidates):
-
-| Use | Where | Planned home |
-|---|---|---|
-| `NSFont`, `NSFontManager`, `NSImage` | graphics.rs (UIFont, UIImage, text drawing) | `HostText` / `HostImage`, or pure Rust (M4) |
-| `NSPasteboard` | UIPasteboard | `HostPlatform::pasteboard_*` |
-| `NSOpenPanel`, `NSSavePanel` | UIDocumentPickerViewController | `HostPlatform::pick_document` |
-| `NSSharingServicePicker`, `NSApplication.keyWindow` | UIActivityViewController | `HostPlatform::share` |
-| `NSWorkspace` (VoiceOver state) | accessibility.rs | `HostPlatform::accessibility` |
+*M3 step 3 (2026-11-21):* the pasteboard (`PasteboardItem` Text/Url/Data,
+`pasteboard_read/_types/_data/_write/_change_count`), document picker
+(`DocumentRequest`, `pick_documents`), share sheet (`share`) and screen
+reader state (`screen_reader_running`) are trait methods; NullHost keeps
+in-memory pasteboards, so pasteboard behaviour exists on any OS. The only
+AppKit left in pear-uikit is text: `NSFont`/`NSFontManager` in graphics.rs
+(UIFont, text drawing), which M4 replaces with `HostText` or pure Rust.
 
 Next steps for the boundary, in order:
 
-1. Move the remaining AppKit uses above behind the trait.
-2. An event sink trait for input/lifecycle (`HostEvent`) replacing the
+1. An event sink trait for input/lifecycle (`HostEvent`) replacing the
    `PearUIKitDeliver*` C calls.
-3. Surfaces for graphics backends, so pear-gles/MetalKit stop taking a
+2. Surfaces for graphics backends, so pear-gles/MetalKit stop taking a
    CALayer:
 
 ```rust
@@ -259,8 +256,9 @@ Each milestone is small, testable alone, and keeps working paths working.
    *Step 2 done (2026-11-21):* the AppKit backend and input in
    `pear-host-macos`; UIKit no longer links IOKit or creates NSWindows;
    census and probe identical, a scripted tap takes Burger Shop 2 from its
-   menu into gameplay. Next: the remaining AppKit uses (§4 table), the event
-   sink, surfaces.
+   menu into gameplay. *Step 3 done:* pasteboard, document picker, share
+   sheet, screen reader behind the trait (only text/fonts remain, M4). Next:
+   the event sink, surfaces.
 4. **M4 — Text and images off CoreGraphics/CoreText/ImageIO.** Pure-Rust
    decoding and a glyph rasteriser behind `HostImage`/`HostText`;
    compare rendered UILabel/UIImage output against today's pixels.

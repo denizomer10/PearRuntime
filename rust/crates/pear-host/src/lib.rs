@@ -76,6 +76,42 @@ unsafe impl Send for GuestObject {}
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct GuestSelector(pub *mut c_void);
 
+/// One item on a pasteboard, in the forms iOS apps exchange through
+/// UIPasteboard and share sheets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PasteboardItem {
+    Text(String),
+    /// An absolute URL string (web or file URL).
+    Url(String),
+    /// Bytes of a uniform type (e.g. "public.png", an app's own type).
+    Data { uti: String, bytes: Vec<u8> },
+}
+
+/// Uniform type identifiers of the common pasteboard representations.
+pub const UTI_TEXT: &str = "public.utf8-plain-text";
+pub const UTI_URL: &str = "public.url";
+pub const UTI_FILE_URL: &str = "public.file-url";
+
+impl PasteboardItem {
+    /// The uniform type this item is stored as.
+    pub fn uti(&self) -> &str {
+        match self {
+            PasteboardItem::Text(_) => UTI_TEXT,
+            PasteboardItem::Url(_) => UTI_URL,
+            PasteboardItem::Data { uti, .. } => uti,
+        }
+    }
+}
+
+/// A document picker request (UIDocumentPickerViewController).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DocumentRequest {
+    /// Choose existing files; `directory` is a file URL to start in.
+    Open { multiple: bool, directory: Option<String> },
+    /// Choose where to save a document named `suggested_name`.
+    Save { suggested_name: String, directory: Option<String> },
+}
+
 /// The services the portable runtime asks of the host OS.
 pub trait HostPlatform: Send + Sync {
     /// Once, before the first window: connect to the window system and read
@@ -106,6 +142,32 @@ pub trait HostPlatform: Send + Sync {
     /// A modal alert; `reply` receives the chosen button index (-1 for none),
     /// on the main thread.
     fn present_alert(&self, title: &str, message: &str, buttons: &[String], reply: Box<dyn FnOnce(isize) + Send>);
+
+    /// The text and URL items on the pasteboard `name` (None: the general
+    /// pasteboard); other types are read with [`HostPlatform::pasteboard_data`].
+    fn pasteboard_read(&self, name: Option<&str>) -> Vec<PasteboardItem>;
+
+    /// The uniform types present on the pasteboard.
+    fn pasteboard_types(&self, name: Option<&str>) -> Vec<String>;
+
+    /// The first item's bytes of uniform type `uti`.
+    fn pasteboard_data(&self, name: Option<&str>, uti: &str) -> Option<Vec<u8>>;
+
+    /// Replaces the pasteboard's contents with `items` (empty clears it).
+    fn pasteboard_write(&self, name: Option<&str>, items: &[PasteboardItem]);
+
+    /// Increments whenever the pasteboard's contents change.
+    fn pasteboard_change_count(&self, name: Option<&str>) -> isize;
+
+    /// Asks the user for documents; `reply` receives the chosen file URLs, or
+    /// None when cancelled, on the main thread.
+    fn pick_documents(&self, request: DocumentRequest, reply: Box<dyn FnOnce(Option<Vec<String>>) + Send>);
+
+    /// Offers `items` to the host's sharing services (UIActivityViewController).
+    fn share(&self, items: &[PasteboardItem]);
+
+    /// A screen reader (VoiceOver on macOS) is running.
+    fn screen_reader_running(&self) -> bool;
 
     /// Runs the main loop; `did_finish_launching` runs once the host is ready.
     /// Returns only on hosts whose loop ends (tests); a real host terminates
@@ -138,11 +200,13 @@ pub fn installed() -> bool {
 pub struct NullHost {
     pub screen: ScreenInfo,
     windows: std::sync::atomic::AtomicUsize,
+    /// In-memory pasteboards by name ("" is the general one), with change counts.
+    pasteboards: std::sync::Mutex<std::collections::HashMap<String, (isize, Vec<PasteboardItem>)>>,
 }
 
 impl NullHost {
     pub fn new(screen: ScreenInfo) -> Self {
-        NullHost { screen, windows: std::sync::atomic::AtomicUsize::new(0) }
+        NullHost { screen, windows: std::sync::atomic::AtomicUsize::new(0), pasteboards: Default::default() }
     }
     pub fn windows_created(&self) -> usize {
         self.windows.load(std::sync::atomic::Ordering::Relaxed)
@@ -176,6 +240,44 @@ impl HostPlatform for NullHost {
     fn present_alert(&self, _title: &str, _message: &str, _buttons: &[String], reply: Box<dyn FnOnce(isize) + Send>) {
         reply(-1);
     }
+    fn pasteboard_read(&self, name: Option<&str>) -> Vec<PasteboardItem> {
+        let boards = self.pasteboards.lock().unwrap();
+        let items = boards.get(name.unwrap_or("")).map(|(_, items)| items.clone()).unwrap_or_default();
+        items.into_iter().filter(|i| !matches!(i, PasteboardItem::Data { .. })).collect()
+    }
+    fn pasteboard_types(&self, name: Option<&str>) -> Vec<String> {
+        let boards = self.pasteboards.lock().unwrap();
+        let mut types: Vec<String> = Vec::new();
+        for item in boards.get(name.unwrap_or("")).map(|(_, items)| items.as_slice()).unwrap_or_default() {
+            if !types.iter().any(|t| t == item.uti()) {
+                types.push(item.uti().to_string());
+            }
+        }
+        types
+    }
+    fn pasteboard_data(&self, name: Option<&str>, uti: &str) -> Option<Vec<u8>> {
+        let boards = self.pasteboards.lock().unwrap();
+        boards.get(name.unwrap_or(""))?.1.iter().find(|i| i.uti() == uti).map(|i| match i {
+            PasteboardItem::Text(s) | PasteboardItem::Url(s) => s.clone().into_bytes(),
+            PasteboardItem::Data { bytes, .. } => bytes.clone(),
+        })
+    }
+    fn pasteboard_write(&self, name: Option<&str>, items: &[PasteboardItem]) {
+        let mut boards = self.pasteboards.lock().unwrap();
+        let entry = boards.entry(name.unwrap_or("").to_string()).or_default();
+        entry.0 += 1;
+        entry.1 = items.to_vec();
+    }
+    fn pasteboard_change_count(&self, name: Option<&str>) -> isize {
+        self.pasteboards.lock().unwrap().get(name.unwrap_or("")).map(|(count, _)| *count).unwrap_or(0)
+    }
+    fn pick_documents(&self, _request: DocumentRequest, reply: Box<dyn FnOnce(Option<Vec<String>>) + Send>) {
+        reply(None);
+    }
+    fn share(&self, _items: &[PasteboardItem]) {}
+    fn screen_reader_running(&self) -> bool {
+        false
+    }
     fn run(&self, did_finish_launching: Box<dyn FnOnce()>) {
         did_finish_launching();
     }
@@ -204,6 +306,34 @@ mod tests {
         let flag = launched.clone();
         host.run(Box::new(move || flag.store(true, Ordering::SeqCst)));
         assert!(launched.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn null_host_pasteboards_and_pickers() {
+        let host = NullHost::default();
+        assert!(host.pasteboard_read(None).is_empty());
+        assert_eq!(host.pasteboard_change_count(None), 0);
+        let items = vec![PasteboardItem::Text("pear".into()), PasteboardItem::Url("https://example.com".into())];
+        host.pasteboard_write(None, &items);
+        assert_eq!(host.pasteboard_read(None), items);
+        assert_eq!(host.pasteboard_change_count(None), 1);
+        assert!(host.pasteboard_read(Some("game")).is_empty(), "named pasteboards are separate");
+        assert_eq!(host.pasteboard_types(None), vec![UTI_TEXT.to_string(), UTI_URL.to_string()]);
+        assert_eq!(host.pasteboard_data(None, UTI_TEXT), Some(b"pear".to_vec()));
+        let save = PasteboardItem::Data { uti: "com.example.save".into(), bytes: vec![1, 2, 3] };
+        host.pasteboard_write(Some("game"), &[save]);
+        assert!(host.pasteboard_read(Some("game")).is_empty(), "data items are read by type");
+        assert_eq!(host.pasteboard_data(Some("game"), "com.example.save"), Some(vec![1, 2, 3]));
+        host.pasteboard_write(None, &[]);
+        assert!(host.pasteboard_read(None).is_empty() && host.pasteboard_change_count(None) == 2);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        host.pick_documents(
+            DocumentRequest::Open { multiple: false, directory: None },
+            Box::new(move |urls| flag.store(urls.is_none(), Ordering::SeqCst)),
+        );
+        assert!(cancelled.load(Ordering::SeqCst));
+        assert!(!host.screen_reader_running());
     }
 
     #[test]

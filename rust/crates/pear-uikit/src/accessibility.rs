@@ -9,14 +9,7 @@ use std::ffi::c_void;
 
 #[no_mangle]
 pub extern "C" fn UIAccessibilityIsVoiceOverRunning() -> bool {
-    unsafe {
-        let ws: Id = msg0(cls("NSWorkspace"), "sharedWorkspace");
-        if ws.is_null() {
-            false
-        } else {
-            msg0(ws, "isVoiceOverEnabled")
-        }
-    }
+    pear_host::host().screen_reader_running()
 }
 
 #[no_mangle]

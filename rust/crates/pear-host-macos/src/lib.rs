@@ -11,9 +11,13 @@
 
 #![allow(non_snake_case, clippy::missing_safety_doc)]
 
-use pear_host::{GuestObject, GuestSelector, HostPlatform, LayerRef, Rect, ScreenInfo, Size, WindowHandle};
+use pear_host::{
+    DocumentRequest, GuestObject, GuestSelector, HostPlatform, LayerRef, PasteboardItem, Rect, ScreenInfo, Size,
+    WindowHandle, UTI_FILE_URL, UTI_TEXT, UTI_URL,
+};
 use pear_objc::{
-    cls, is_kind_of, msg0, msg1, msg2, msg3, msg4, nsarray_from_ids, nsnumber_i64, nsstring,
+    cls, is_kind_of, msg0, msg1, msg2, msg3, msg4, nsarray_count, nsarray_from_ids, nsarray_object_at,
+    nsdata_from_bytes, nsdata_to_vec, nsnumber_i64, nsstring, nsstring_to_string,
     objc_getAssociatedObject, objc_release, objc_setAssociatedObject, replace_method as add_method,
     responds_to, sel, CGPoint, CGRect, CGSize, Class, Id, Imp, Sel, NIL, OBJC_ASSOCIATION_RETAIN,
 };
@@ -626,6 +630,14 @@ unsafe fn register_classes() {
 
 // ---- pear-host ---------------------------------------------------------------
 
+/// NSPasteboard for a UIPasteboard name (None: the general pasteboard).
+unsafe fn pasteboard(name: Option<&str>) -> Id {
+    match name {
+        None => msg0(cls("NSPasteboard"), "generalPasteboard"),
+        Some(n) => msg1(cls("NSPasteboard"), "pasteboardWithName:", nsstring(n)),
+    }
+}
+
 pub struct MacHost;
 
 extern "C" fn alert_reply(ctx: *mut c_void, index: isize) {
@@ -691,6 +703,148 @@ impl HostPlatform for MacHost {
         let ctx = Box::into_raw(Box::new(reply)) as *mut c_void;
         // The backend copies the strings before returning.
         PearBackendPresentAlert(title.as_ptr(), message.as_ptr(), pointers.as_ptr(), pointers.len(), ctx, alert_reply);
+    }
+
+    fn pasteboard_read(&self, name: Option<&str>) -> Vec<PasteboardItem> {
+        unsafe {
+            let items: Id = msg0(pasteboard(name), "pasteboardItems");
+            let mut out = Vec::new();
+            for i in 0..nsarray_count(items) {
+                let item = nsarray_object_at(items, i);
+                let read = |uti: &str| nsstring_to_string(msg1(item, "stringForType:", nsstring(uti)));
+                let url = read(UTI_FILE_URL).or_else(|| read(UTI_URL));
+                let text = read(UTI_TEXT);
+                if let Some(u) = &url {
+                    out.push(PasteboardItem::Url(u.clone()));
+                }
+                if let Some(s) = text {
+                    if url.as_deref() != Some(s.as_str()) {
+                        out.push(PasteboardItem::Text(s));
+                    }
+                }
+            }
+            out
+        }
+    }
+
+    fn pasteboard_types(&self, name: Option<&str>) -> Vec<String> {
+        unsafe {
+            let types: Id = msg0(pasteboard(name), "types");
+            (0..nsarray_count(types)).filter_map(|i| nsstring_to_string(nsarray_object_at(types, i))).collect()
+        }
+    }
+
+    fn pasteboard_data(&self, name: Option<&str>, uti: &str) -> Option<Vec<u8>> {
+        unsafe { nsdata_to_vec(msg1(pasteboard(name), "dataForType:", nsstring(uti))) }
+    }
+
+    fn pasteboard_write(&self, name: Option<&str>, items: &[PasteboardItem]) {
+        unsafe {
+            let pb = pasteboard(name);
+            msg0::<isize>(pb, "clearContents");
+            if items.is_empty() {
+                return;
+            }
+            // NSString/NSURL write their standard representations; other
+            // types go into one pasteboard item.
+            let mut objects = Vec::new();
+            let data_item: Id = msg0(cls("NSPasteboardItem"), "new");
+            let mut has_data = false;
+            for item in items {
+                match item {
+                    PasteboardItem::Text(s) => objects.push(nsstring(s)),
+                    PasteboardItem::Url(u) => {
+                        let url: Id = msg1(cls("NSURL"), "URLWithString:", nsstring(u));
+                        if !url.is_null() {
+                            objects.push(url);
+                        }
+                    }
+                    PasteboardItem::Data { uti, bytes } => {
+                        msg2::<Id, Id, bool>(data_item, "setData:forType:", nsdata_from_bytes(bytes), nsstring(uti));
+                        has_data = true;
+                    }
+                }
+            }
+            if has_data {
+                objects.push(data_item);
+            }
+            msg1::<Id, bool>(pb, "writeObjects:", nsarray_from_ids(&objects));
+            objc_release(data_item);
+        }
+    }
+
+    fn pasteboard_change_count(&self, name: Option<&str>) -> isize {
+        unsafe { msg0(pasteboard(name), "changeCount") }
+    }
+
+    fn pick_documents(&self, request: DocumentRequest, reply: Box<dyn FnOnce(Option<Vec<String>>) + Send>) {
+        unsafe {
+            let url_string = |u: Id| nsstring_to_string(msg0(u, "absoluteString"));
+            let directory = |d: &Option<String>| -> Id {
+                d.as_deref().map(|s| msg1(cls("NSURL"), "URLWithString:", nsstring(s))).unwrap_or(NIL)
+            };
+            let chosen = match &request {
+                DocumentRequest::Save { suggested_name, directory: dir } => {
+                    let panel: Id = msg0(cls("NSSavePanel"), "savePanel");
+                    let d = directory(dir);
+                    if !d.is_null() {
+                        msg1::<Id, ()>(panel, "setDirectoryURL:", d);
+                    }
+                    msg1::<Id, ()>(panel, "setNameFieldStringValue:", nsstring(suggested_name));
+                    (msg0::<isize>(panel, "runModal") == 1)
+                        .then(|| url_string(msg0(panel, "URL")).into_iter().collect::<Vec<_>>())
+                }
+                DocumentRequest::Open { multiple, directory: dir } => {
+                    let panel: Id = msg0(cls("NSOpenPanel"), "openPanel");
+                    msg1::<bool, ()>(panel, "setAllowsMultipleSelection:", *multiple);
+                    let d = directory(dir);
+                    if !d.is_null() {
+                        msg1::<Id, ()>(panel, "setDirectoryURL:", d);
+                    }
+                    (msg0::<isize>(panel, "runModal") == 1).then(|| {
+                        let urls: Id = msg0(panel, "URLs");
+                        (0..nsarray_count(urls)).filter_map(|i| url_string(nsarray_object_at(urls, i))).collect()
+                    })
+                }
+            };
+            reply(chosen);
+        }
+    }
+
+    fn share(&self, items: &[PasteboardItem]) {
+        unsafe {
+            let objects: Vec<Id> = items
+                .iter()
+                .filter_map(|item| match item {
+                    PasteboardItem::Text(s) => Some(nsstring(s)),
+                    PasteboardItem::Url(u) => {
+                        let url: Id = msg1(cls("NSURL"), "URLWithString:", nsstring(u));
+                        (!url.is_null()).then_some(url)
+                    }
+                    PasteboardItem::Data { .. } => None,
+                })
+                .collect();
+            let picker: Id = msg1(msg0(cls("NSSharingServicePicker"), "alloc"), "initWithItems:", nsarray_from_ids(&objects));
+            let ns_app: Id = msg0(cls("NSApplication"), "sharedApplication");
+            let key: Id = msg0(ns_app, "keyWindow");
+            let content: Id = if key.is_null() { NIL } else { msg0(key, "contentView") };
+            if !content.is_null() {
+                let b: CGRect = msg0(content, "bounds");
+                let anchor = CGRect {
+                    origin: CGPoint { x: b.origin.x + b.size.width * 0.5, y: b.origin.y + b.size.height * 0.5 },
+                    size: CGSize { width: 1.0, height: 1.0 },
+                };
+                msg3::<CGRect, Id, usize, ()>(picker, "showRelativeToRect:ofView:preferredEdge:", anchor, content, 1);
+            }
+            objc_release(picker);
+        }
+    }
+
+    fn screen_reader_running(&self) -> bool {
+        unsafe {
+            let workspace: Id = msg0(cls("NSWorkspace"), "sharedWorkspace");
+            !workspace.is_null() && msg0::<bool>(workspace, "isVoiceOverEnabled")
+        }
     }
 
     fn run(&self, did_finish_launching: Box<dyn FnOnce()>) {

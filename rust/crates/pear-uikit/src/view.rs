@@ -1744,19 +1744,16 @@ unsafe extern "C" fn act_init_coder(s: Id, _c: Sel, coder: Id) -> Id {
 unsafe extern "C" fn act_did_appear(s: Id, _c: Sel, anim: bool) {
     super1::<bool, ()>(s, "UIActivityViewController", "viewDidAppear:", anim);
     let items = assoc_get(s, &ACT_ITEMS_KEY);
-    let picker: Id = msg1(msg0(cls("NSSharingServicePicker"), "alloc"), "initWithItems:", items);
-    let ns_app = msg0::<Id>(cls("NSApplication"), "sharedApplication");
-    let kw: Id = msg0(ns_app, "keyWindow");
-    let cv: Id = if kw.is_null() { NIL } else { msg0(kw, "contentView") };
-    if !cv.is_null() {
-        let b: CGRect = msg0(cv, "bounds");
-        let rect = CGRect {
-            origin: CGPoint { x: b.origin.x + b.size.width * 0.5, y: b.origin.y + b.size.height * 0.5 },
-            size: CGSize { width: 1.0, height: 1.0 },
-        };
-        msg3::<CGRect, Id, usize, ()>(picker, "showRelativeToRect:ofView:preferredEdge:", rect, cv, 1);
+    let mut shared = Vec::new();
+    for i in 0..nsarray_count(items) {
+        let o = nsarray_object_at(items, i);
+        if is_kind_of(o, "NSString") {
+            shared.push(pear_host::PasteboardItem::Text(nsstring_to_string(o).unwrap_or_default()));
+        } else if is_kind_of(o, "NSURL") {
+            shared.push(pear_host::PasteboardItem::Url(nsstring_to_string(msg0(o, "absoluteString")).unwrap_or_default()));
+        }
     }
-    objc_release(picker);
+    pear_host::host().share(&shared);
 }
 unsafe extern "C" fn act_excl(s: Id, _c: Sel) -> Id { assoc_get(s, &ACT_EXCL_KEY) }
 unsafe extern "C" fn act_set_excl(s: Id, _c: Sel, v: Id) { assoc_set(s, &ACT_EXCL_KEY, v); }
@@ -1799,42 +1796,41 @@ extern "C" fn dp_run_panel_async(ctx: *mut c_void) {
         let s = ctx as Id;
         let is_save = !assoc_get(s, &DP_SAVE_KEY).is_null() && msg0::<bool>(assoc_get(s, &DP_SAVE_KEY), "boolValue");
         let dir = assoc_get(s, &DP_DIR_KEY);
-        let del = pear_objc::assoc_get_weak(s, &DP_DEL_KEY);
-        if is_save {
-            let panel: Id = msg0(cls("NSSavePanel"), "savePanel");
-            if !dir.is_null() { msg1::<Id, ()>(panel, "setDirectoryURL:", dir); }
+        let directory = if dir.is_null() { None } else { nsstring_to_string(msg0(dir, "absoluteString")) };
+        let request = if is_save {
             let urls = assoc_get(s, &DP_URLS_KEY);
             let name = if nsarray_count(urls) > 0 {
-                msg0(nsarray_object_at(urls, 0), "lastPathComponent")
+                nsstring_to_string(msg0(nsarray_object_at(urls, 0), "lastPathComponent")).unwrap_or_default()
             } else {
-                nsstring("Document")
+                "Document".to_string()
             };
-            msg1::<Id, ()>(panel, "setNameFieldStringValue:", name);
-            let resp: isize = msg0(panel, "runModal");
-            if resp == 1 {
-                let dest: Id = msg0(panel, "URL");
-                if !dest.is_null() && !del.is_null() && responds_to(del, "documentPicker:didPickDocumentsAtURLs:") {
-                    msg2::<Id, Id, ()>(del, "documentPicker:didPickDocumentsAtURLs:", s, nsarray_from_ids(&[dest]));
-                }
-            } else if !del.is_null() && responds_to(del, "documentPickerWasCancelled:") {
-                msg1::<Id, ()>(del, "documentPickerWasCancelled:", s);
-            }
+            pear_host::DocumentRequest::Save { suggested_name: name, directory }
         } else {
-            let panel: Id = msg0(cls("NSOpenPanel"), "openPanel");
-            let multi = !assoc_get(s, &DP_MULTI_KEY).is_null() && msg0::<bool>(assoc_get(s, &DP_MULTI_KEY), "boolValue");
-            msg1::<bool, ()>(panel, "setAllowsMultipleSelection:", multi);
-            if !dir.is_null() { msg1::<Id, ()>(panel, "setDirectoryURL:", dir); }
-            let resp: isize = msg0(panel, "runModal");
-            if resp == 1 {
-                let picked: Id = msg0(panel, "URLs");
-                if !del.is_null() && responds_to(del, "documentPicker:didPickDocumentsAtURLs:") {
-                    msg2::<Id, Id, ()>(del, "documentPicker:didPickDocumentsAtURLs:", s, picked);
+            let multiple = !assoc_get(s, &DP_MULTI_KEY).is_null() && msg0::<bool>(assoc_get(s, &DP_MULTI_KEY), "boolValue");
+            pear_host::DocumentRequest::Open { multiple, directory }
+        };
+        let picker = s as usize;
+        pear_host::host().pick_documents(
+            request,
+            Box::new(move |chosen| {
+                let s = picker as Id;
+                let del = pear_objc::assoc_get_weak(s, &DP_DEL_KEY);
+                match chosen {
+                    Some(urls) if !urls.is_empty() => {
+                        let urls: Vec<Id> = urls.iter().map(|u| msg1(cls("NSURL"), "URLWithString:", nsstring(u))).filter(|u: &Id| !u.is_null()).collect();
+                        if !del.is_null() && responds_to(del, "documentPicker:didPickDocumentsAtURLs:") {
+                            msg2::<Id, Id, ()>(del, "documentPicker:didPickDocumentsAtURLs:", s, nsarray_from_ids(&urls));
+                        }
+                    }
+                    _ => {
+                        if !del.is_null() && responds_to(del, "documentPickerWasCancelled:") {
+                            msg1::<Id, ()>(del, "documentPickerWasCancelled:", s);
+                        }
+                    }
                 }
-            } else if !del.is_null() && responds_to(del, "documentPickerWasCancelled:") {
-                msg1::<Id, ()>(del, "documentPickerWasCancelled:", s);
-            }
-        }
-        objc_release(s);
+                objc_release(s);
+            }),
+        );
     }
 }
 unsafe extern "C" fn dp_did_appear(s: Id, _c: Sel, anim: bool) {

@@ -82,6 +82,34 @@ def probe(host):
     font_class.restype = ctypes.c_void_p
     out.append(f"uifont class is image's={font_class() == cls('UIFont')}")
 
+    # A named pasteboard only: the user's general pasteboard is never touched.
+    board = msg(ctypes.c_void_p, cls("UIPasteboard"), "pasteboardWithName:create:", nsstring("pear-probe"), True,
+                argtypes=(ctypes.c_void_p, ctypes.c_bool))
+    out.append(f"pasteboard name={text(msg(ctypes.c_void_p, board, 'name'))}")
+    before = msg(ctypes.c_long, board, "changeCount")
+    msg(None, board, "setString:", nsstring("pear text"), argtypes=(ctypes.c_void_p,))
+    out.append(f"pasteboard string={text(msg(ctypes.c_void_p, board, 'string'))} "
+               f"hasStrings={msg(ctypes.c_bool, board, 'hasStrings')} hasURLs={msg(ctypes.c_bool, board, 'hasURLs')} "
+               f"changed={msg(ctypes.c_long, board, 'changeCount') > before}")
+    url = msg(ctypes.c_void_p, objc.objc_getClass(b"NSURL"), "URLWithString:", nsstring("https://example.com/pear"),
+              argtypes=(ctypes.c_void_p,))
+    msg(None, board, "setURL:", url, argtypes=(ctypes.c_void_p,))
+    got = msg(ctypes.c_void_p, board, "URL")
+    out.append(f"pasteboard URL={text(msg(ctypes.c_void_p, got, 'absoluteString')) if got else None} "
+               f"hasURLs={msg(ctypes.c_bool, board, 'hasURLs')}")
+    data = msg(ctypes.c_void_p, objc.objc_getClass(b"NSData"), "dataWithBytes:length:", b"\x01\x02\x03", 3,
+               argtypes=(ctypes.c_char_p, ctypes.c_ulong))
+    msg(None, board, "setData:forPasteboardType:", data, nsstring("com.pearsilicon.probe"),
+        argtypes=(ctypes.c_void_p, ctypes.c_void_p))
+    back = msg(ctypes.c_void_p, board, "dataForPasteboardType:", nsstring("com.pearsilicon.probe"), argtypes=(ctypes.c_void_p,))
+    out.append(f"pasteboard data length={msg(ctypes.c_ulong, back, 'length') if back else None} "
+               f"string={text(msg(ctypes.c_void_p, board, 'string'))}")
+    msg(None, board, "setString:", None, argtypes=(ctypes.c_void_p,))
+    out.append(f"pasteboard cleared hasStrings={msg(ctypes.c_bool, board, 'hasStrings')}")
+    voice = uikit.UIAccessibilityIsVoiceOverRunning
+    voice.restype = ctypes.c_bool
+    out.append(f"VoiceOver running={voice()}")
+
     eagl = cls("EAGLContext", gles)
     for api in (1, 2, 3):
         ctx = msg(ctypes.c_void_p, msg(ctypes.c_void_p, eagl, "alloc"), "initWithAPI:", api,
