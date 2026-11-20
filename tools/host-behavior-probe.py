@@ -106,6 +106,67 @@ def probe(host):
                f"string={text(msg(ctypes.c_void_p, board, 'string'))}")
     msg(None, board, "setString:", None, argtypes=(ctypes.c_void_p,))
     out.append(f"pasteboard cleared hasStrings={msg(ctypes.c_bool, board, 'hasStrings')}")
+    # UIFont: which font each constructor picks, and its metrics.
+    font = cls("UIFont")
+
+    def font_fact(label, f):
+        if not f:
+            return f"font {label}=nil"
+        return (f"font {label}={text(msg(ctypes.c_void_p, f, 'fontName'))} "
+                f"family={text(msg(ctypes.c_void_p, f, 'familyName'))} size={msg(ctypes.c_double, f, 'pointSize'):g} "
+                f"line={msg(ctypes.c_double, f, 'lineHeight'):.2f}")
+    d = ctypes.c_double
+    out.append(font_fact("system 17", msg(ctypes.c_void_p, font, "systemFontOfSize:", d(17), argtypes=(d,))))
+    out.append(font_fact("bold 12", msg(ctypes.c_void_p, font, "boldSystemFontOfSize:", d(12), argtypes=(d,))))
+    out.append(font_fact("italic 12", msg(ctypes.c_void_p, font, "italicSystemFontOfSize:", d(12), argtypes=(d,))))
+    for w in (-0.4, 0.3, 0.62):
+        out.append(font_fact(f"weight {w}", msg(ctypes.c_void_p, font, "systemFontOfSize:weight:", d(14), d(w),
+                                                 argtypes=(d, d))))
+    for n in ("Helvetica-Bold", "Arial", "Courier New", "NoSuchFont"):
+        out.append(font_fact(f"named {n}", msg(ctypes.c_void_p, font, "fontWithName:size:", nsstring(n), d(15),
+                                                argtypes=(ctypes.c_void_p, d))))
+    resized = msg(ctypes.c_void_p, msg(ctypes.c_void_p, font, "systemFontOfSize:", d(10), argtypes=(d,)),
+                  "fontWithSize:", d(22), argtypes=(d,))
+    out.append(font_fact("resized 22", resized))
+    for fam in ("Futura", "Avenir Next", "NoSuch"):
+        names = msg(ctypes.c_void_p, font, "fontNamesForFamilyName:", nsstring(fam), argtypes=(ctypes.c_void_p,))
+        count = msg(ctypes.c_ulong, names, "count")
+        out.append(f"font family {fam} count={count} names="
+                   + ",".join(text(msg(ctypes.c_void_p, names, "objectAtIndex:", i, argtypes=(ctypes.c_ulong,)))
+                              for i in range(count)))
+    # A UILabel drawn into an image context: its pixels, hashed.
+    class Rect(ctypes.Structure):
+        _fields_ = [("x", d), ("y", d), ("w", d), ("h", d)]
+
+    class Size(ctypes.Structure):
+        _fields_ = [("w", d), ("h", d)]
+    label = msg(ctypes.c_void_p, msg(ctypes.c_void_p, cls("UILabel"), "alloc"), "initWithFrame:",
+                Rect(0, 0, 160, 40), argtypes=(Rect,))
+    msg(None, label, "setText:", nsstring("Pear 123 ağ"), argtypes=(ctypes.c_void_p,))
+    msg(None, label, "setFont:", msg(ctypes.c_void_p, font, "boldSystemFontOfSize:", d(18), argtypes=(d,)),
+        argtypes=(ctypes.c_void_p,))
+    fits = msg(Size, label, "sizeThatFits:", Size(1000, 1000), argtypes=(Size,))
+    begin = uikit.UIGraphicsBeginImageContextWithOptions
+    begin.argtypes = [Size, ctypes.c_bool, d]
+    begin(Size(160, 40), False, 2.0)
+    msg(None, label, "drawRect:", Rect(0, 0, 160, 40), argtypes=(Rect,))
+    get_image = uikit.UIGraphicsGetImageFromCurrentImageContext
+    get_image.restype = ctypes.c_void_p
+    image = get_image()
+    uikit.UIGraphicsEndImageContext()
+    cg = msg(ctypes.c_void_p, image, "CGImage")
+    cgl = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+    for name in ("CGImageGetDataProvider", "CGDataProviderCopyData"):
+        getattr(cgl, name).restype = ctypes.c_void_p
+        getattr(cgl, name).argtypes = [ctypes.c_void_p]
+    pixels = cgl.CGDataProviderCopyData(cgl.CGImageGetDataProvider(cg))
+    raw = ctypes.string_at(msg(ctypes.c_void_p, pixels, "bytes"), msg(ctypes.c_ulong, pixels, "length"))
+    import hashlib
+    out.append(f"label fits={fits.w:.2f}x{fits.h:.2f} pixels={len(raw)} inked={sum(1 for b in raw[3::4] if b)} "
+               f"sha={hashlib.sha256(raw).hexdigest()[:16]}")
+    families = msg(ctypes.c_void_p, font, "familyNames")
+    out.append(f"font familyNames nonempty={msg(ctypes.c_ulong, families, 'count') > 0}")
+
     voice = uikit.UIAccessibilityIsVoiceOverRunning
     voice.restype = ctypes.c_bool
     out.append(f"VoiceOver running={voice()}")

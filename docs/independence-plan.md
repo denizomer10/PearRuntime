@@ -209,6 +209,7 @@ reader state (`screen_reader_running`) are trait methods; NullHost keeps
 in-memory pasteboards, so pasteboard behaviour exists on any OS. The only
 AppKit left in pear-uikit is text: `NSFont`/`NSFontManager` in graphics.rs
 (UIFont, text drawing), which M4 replaces with `HostText` or pure Rust.
+*M4 step 1:* NSFont/NSFontManager are gone; UIFont is CoreText only.
 
 *M3 step 4 (2026-11-21):* the event sink. `pear_host::GuestEvents`
 (pointer with `TouchPhase`, `KeyEvent` with HID usage and UIKeyModifierFlags
@@ -281,6 +282,18 @@ Each milestone is small, testable alone, and keeps working paths working.
 4. **M4 — Text and images off CoreGraphics/CoreText/ImageIO.** Pure-Rust
    decoding and a glyph rasteriser behind `HostImage`/`HostText`;
    compare rendered UILabel/UIImage output against today's pixels.
+   Note: CoreGraphics, CoreText and ImageIO are *guest* APIs (iOS apps call
+   CGContext*/CTFont* directly, UIFont is a CTFont, UIImage.CGImage is a
+   CGImageRef), so off macOS they become PearRuntime frameworks of their
+   own, with `HostText`/`HostImage` below them only for what is genuinely
+   the host's (system fonts, codecs). *Step 1 done (2026-11-21):* UIFont
+   is made with CoreText alone (UI font types, weight traits, name lookup
+   that returns nil like NSFont, family members via font descriptors);
+   pear-uikit names no AppKit class. 41 CoreText-vs-NSFont cases agree;
+   the behaviour probe gained 16 font and UILabel-pixel facts, identical
+   before and after (51 facts). Next: UIKit.framework still re-exports
+   AppKit (`-reexport_framework,AppKit`, since the Minecraft work): measure
+   which symbols games bind through it, define them, drop the re-export.
 5. **M5 — Graphics backend selection in PearANGLE.** Build the fork with the
    Vulkan backend for Linux; `pear-gles` takes `NativeSurface`. Run
    the pear-gles GL smoke (Rust example) on Linux in a container.
@@ -307,7 +320,7 @@ Each milestone is small, testable alone, and keeps working paths working.
 | Workspace build | `cargo build` (host), `host/build-host.sh`, `build.sh` (Catalyst while it exists) | passes on macOS |
 | Linux portability | `container run … rust` builds of each crate | pear-macho, pear-nib, pear-objc, pear-core, pear-host, pear-opengles, pear-gles build on arm64 Linux (the GLES forwarders use ELF `:lo12:` relocations there, Mach-O `@PAGE` on Apple; x86-64 needs its own trampolines); tests of pear-host/pear-macho/pear-nib pass; tests of pear-macho/pear-nib pass; pear-uikit/pear-keychain/pear-metalkit link Apple frameworks |
 | ObjC ABI parity | `tools/host-abi-census.py --compare` | identical to the last ObjC build and across M3 |
-| Host behaviour | `tools/host-behavior-probe.py --compare` (UIKit accessors, exception boundaries, constants, EAGL GLES 1/2/3) | identical across M3 (35 facts) |
+| Host behaviour | `tools/host-behavior-probe.py --compare` (UIKit accessors, exception boundaries, constants, EAGL GLES 1/2/3) | identical across M3 (35 facts) and M4 step 1 (51 facts: + UIFont constructors/metrics, a UILabel's pixels) |
 | Host input path | `tools/host-event-probe.py` (synthetic NSEvents → host view → `events()` → guest UIView) | touches and presses delivered (M3 step 4) |
 | GL | `pear-gles --example pearangle-smoke`; EAGL GLES1/2/3 context test | pass on macOS |
 | Game regression | §7 | see below |

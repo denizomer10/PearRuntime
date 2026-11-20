@@ -116,7 +116,23 @@ extern "C" {
         mask: u32,
     ) -> *mut c_void;
     fn CTFontManagerCopyAvailableFontFamilyNames() -> Id;
+    fn CTFontCreateUIFontForLanguage(kind: u32, size: f64, language: *mut c_void) -> *mut c_void;
+    fn CTFontCreateWithName(name: Id, size: f64, matrix: *const c_void) -> *mut c_void;
+    fn CTFontCopyFullName(font: *mut c_void) -> *mut c_void;
+    fn CTFontCopyFontDescriptor(font: *mut c_void) -> *mut c_void;
+    fn CTFontDescriptorCreateWithAttributes(attrs: Id) -> *mut c_void;
+    fn CTFontDescriptorCreateCopyWithAttributes(desc: *mut c_void, attrs: Id) -> *mut c_void;
+    fn CTFontDescriptorCreateMatchingFontDescriptors(desc: *mut c_void, mandatory: *mut c_void) -> Id;
+    fn CTFontDescriptorCopyAttribute(desc: *mut c_void, attr: Id) -> Id;
+    static kCTFontTraitsAttribute: Id;
+    static kCTFontWeightTrait: Id;
+    static kCTFontFamilyNameAttribute: Id;
+    static kCTFontNameAttribute: Id;
 }
+
+/// CTFontUIFontType: the UI fonts UIFont's class constructors return.
+const K_CT_FONT_UI_FONT_SYSTEM: u32 = 2;
+const K_CT_FONT_UI_FONT_EMPHASIZED_SYSTEM: u32 = 3;
 
 #[repr(C)]
 struct CTParagraphStyleSetting {
@@ -730,7 +746,7 @@ unsafe fn make_uifont(nsfont: Id) -> Id {
     autoreleased(obj)
 }
 
-/// Wraps a +1 CTFont/NSFont, consuming that reference.
+/// Wraps a +1 CTFont, consuming that reference.
 unsafe fn make_uifont_owned(ct: *mut c_void) -> Id {
     if ct.is_null() {
         return NIL;
@@ -744,17 +760,64 @@ unsafe fn font_ct(obj: Id) -> *mut c_void {
     objc_getAssociatedObject(obj, &FONT_KEY as *const u8 as *const c_void)
 }
 
+// UIFont is a CTFont underneath (toll-free bridged on iOS), made with CoreText
+// alone: the same fonts NSFont returns (system, emphasized, weights, names).
+unsafe fn dictionary(key: Id, value: Id) -> Id {
+    msg2(cls("NSDictionary"), "dictionaryWithObject:forKey:", value, key)
+}
+unsafe fn system_ct_font(size: f64) -> *mut c_void {
+    CTFontCreateUIFontForLanguage(K_CT_FONT_UI_FONT_SYSTEM, size, std::ptr::null_mut())
+}
 unsafe extern "C" fn font_system(_cls: Class, _cmd: Sel, size: f64) -> Id {
-    make_uifont(msg1::<f64, Id>(cls("NSFont"), "systemFontOfSize:", size))
+    make_uifont_owned(system_ct_font(size))
 }
 unsafe extern "C" fn font_system_weight(_cls: Class, _cmd: Sel, size: f64, weight: f64) -> Id {
-    make_uifont(msg2::<f64, f64, Id>(cls("NSFont"), "systemFontOfSize:weight:", size, weight))
+    let base = system_ct_font(size);
+    if base.is_null() {
+        return NIL;
+    }
+    let weight_number: Id = msg1(cls("NSNumber"), "numberWithDouble:", weight);
+    let traits = dictionary(kCTFontTraitsAttribute, dictionary(kCTFontWeightTrait, weight_number));
+    let base_desc = CTFontCopyFontDescriptor(base);
+    let desc = CTFontDescriptorCreateCopyWithAttributes(base_desc, traits);
+    CFRelease(base_desc);
+    let font = if desc.is_null() { std::ptr::null_mut() } else { CTFontCreateWithFontDescriptor(desc, size, std::ptr::null()) };
+    if !desc.is_null() {
+        CFRelease(desc);
+    }
+    if font.is_null() {
+        make_uifont_owned(base)
+    } else {
+        CFRelease(base);
+        make_uifont_owned(font)
+    }
 }
 unsafe extern "C" fn font_bold(_cls: Class, _cmd: Sel, size: f64) -> Id {
-    make_uifont(msg1::<f64, Id>(cls("NSFont"), "boldSystemFontOfSize:", size))
+    make_uifont_owned(CTFontCreateUIFontForLanguage(K_CT_FONT_UI_FONT_EMPHASIZED_SYSTEM, size, std::ptr::null_mut()))
 }
+/// nil unless a font has this PostScript or full name (CTFontCreateWithName
+/// falls back to another font; UIFont, like NSFont, returns nil).
 unsafe extern "C" fn font_with_name(_cls: Class, _cmd: Sel, name: Id, size: f64) -> Id {
-    make_uifont(msg2::<Id, f64, Id>(cls("NSFont"), "fontWithName:size:", name, size))
+    if name.is_null() {
+        return NIL;
+    }
+    let font = CTFontCreateWithName(name, size, std::ptr::null());
+    if font.is_null() {
+        return NIL;
+    }
+    let matches = |copied: *mut c_void| {
+        let same = !copied.is_null() && msg1::<Id, bool>(copied as Id, "isEqualToString:", name);
+        if !copied.is_null() {
+            CFRelease(copied);
+        }
+        same
+    };
+    if matches(CTFontCopyPostScriptName(font)) || matches(CTFontCopyFullName(font)) {
+        make_uifont_owned(font)
+    } else {
+        CFRelease(font);
+        NIL
+    }
 }
 unsafe extern "C" fn font_point_size(self_obj: Id, _cmd: Sel) -> f64 {
     let ct = font_ct(self_obj);
@@ -770,20 +833,21 @@ unsafe extern "C" fn font_name(self_obj: Id, _cmd: Sel) -> Id {
 }
 unsafe extern "C" fn font_italic(_cls: Class, _cmd: Sel, size: f64) -> Id {
     const K_CT_FONT_ITALIC_TRAIT: u32 = 1 << 0;
-    let base: Id = msg1::<f64, Id>(cls("NSFont"), "systemFontOfSize:", size);
+    let base = system_ct_font(size);
     if base.is_null() {
         return NIL;
     }
     let italic = CTFontCreateCopyWithSymbolicTraits(base, size, std::ptr::null(), K_CT_FONT_ITALIC_TRAIT, K_CT_FONT_ITALIC_TRAIT);
     if italic.is_null() {
-        make_uifont(base)
+        make_uifont_owned(base)
     } else {
+        CFRelease(base);
         make_uifont_owned(italic)
     }
 }
 unsafe extern "C" fn font_with_descriptor(_cls: Class, _cmd: Sel, desc: Id, size: f64) -> Id {
     if !desc.is_null() {
-        // NSFontDescriptor and CTFontDescriptor are toll-free bridged.
+        // UIFontDescriptor is a CTFontDescriptor (toll-free bridged).
         let ct = CTFontCreateWithFontDescriptor(desc, size, std::ptr::null());
         if !ct.is_null() {
             return make_uifont_owned(ct);
@@ -804,14 +868,24 @@ unsafe extern "C" fn font_names_for_family(_cls: Class, _cmd: Sel, family: Id) -
     if family.is_null() {
         return out;
     }
-    let mgr: Id = msg0(cls("NSFontManager"), "sharedFontManager");
-    let members: Id = msg1(mgr, "availableMembersOfFontFamily:", family);
-    for i in 0..pear_objc::nsarray_count(members) {
-        let m = pear_objc::nsarray_object_at(members, i);
-        if pear_objc::nsarray_count(m) > 0 {
-            msg1::<Id, ()>(out, "addObject:", pear_objc::nsarray_object_at(m, 0));
+    // Every face of the family, in CoreText's order (NSFontManager's too).
+    let desc = CTFontDescriptorCreateWithAttributes(dictionary(kCTFontFamilyNameAttribute, family));
+    if desc.is_null() {
+        return out;
+    }
+    let matches = CTFontDescriptorCreateMatchingFontDescriptors(desc, std::ptr::null_mut());
+    CFRelease(desc);
+    if matches.is_null() {
+        return out;
+    }
+    for i in 0..pear_objc::nsarray_count(matches) {
+        let name = CTFontDescriptorCopyAttribute(pear_objc::nsarray_object_at(matches, i) as *mut c_void, kCTFontNameAttribute);
+        if !name.is_null() {
+            msg1::<Id, ()>(out, "addObject:", name);
+            CFRelease(name as *mut c_void);
         }
     }
+    CFRelease(matches as *mut c_void);
     out
 }
 unsafe extern "C" fn font_ascender(self_obj: Id, _cmd: Sel) -> f64 {
