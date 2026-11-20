@@ -13,7 +13,6 @@ mod basics;
 mod generated_stubs;
 mod globals;
 mod graphics;
-mod host_macos;
 pub mod objc_classes;
 mod view;
 
@@ -35,8 +34,10 @@ extern "C" fn pear_uikit_load() {
     let msg = std::ffi::CString::new(format!("PearHost UIKit {version} (no iOSSupport) loading")).unwrap_or_default();
     unsafe {
         PearHostLogMessage(c"".as_ptr(), msg.as_ptr());
-        // The portable layer reaches the OS only through pear-host.
-        pear_host::install(Box::new(host_macos::MacHost));
+        // The portable layer reaches the OS only through pear-host; this
+        // build's host is macOS (AppKit, pear-host-macos).
+        #[cfg(target_os = "macos")]
+        pear_host_macos::install();
         pear_uikit_register_classes();
         PearMissingInstallForImage(pear_uikit_load as *const std::ffi::c_void);
     }

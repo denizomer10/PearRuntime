@@ -18,3 +18,7 @@ pear-nib = { path = "../pear-nib" }
 pear-objc = { path = "../pear-objc" }
 pear-host = { path = "../pear-host" }
 pear-keychain = { path = "../pear-keychain" }
+
+# The host for this OS (pear-host's HostPlatform); other OSes get their own.
+[target.'cfg(target_os = "macos")'.dependencies]
+pear-host-macos = { path = "../pear-host-macos" }

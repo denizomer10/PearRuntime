@@ -44,6 +44,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pear-host-macos"
+version = "0.1.0"
+dependencies = [
+ "pear-host",
+ "pear-objc",
+]
+
+[[package]]
 name = "pear-keychain"
 version = "0.1.0"
 dependencies = [
@@ -83,6 +91,7 @@ version = "0.1.0"
 dependencies = [
  "pear-core",
  "pear-host",
+ "pear-host-macos",
  "pear-keychain",
  "pear-nib",
  "pear-objc",

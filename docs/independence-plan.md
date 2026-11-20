@@ -193,16 +193,28 @@ pub trait HostPlatform: Send + Sync {
 }
 ```
 
-pear-uikit installs `host_macos::MacHost` (AppKit) in its image initializer;
-UIApplication, UIWindow, UIScreen, UIAlertController and the display link
-now reach the OS only through `pear_host::host()`. The AppKit code itself is
-still in pear-uikit `app.rs` (`PearBackend*`, also kept as C exports). Input
-flows the other way through `PearUIKitDeliver*`.
+**Implemented (M3, step 2): crate `pear-host-macos`**, the only PearHost
+crate that names AppKit for windows, the run loop and input: `MacHost`, the
+`PearBackend*` functions (still exported from UIKit.framework for the C
+ABI), display-link compatibility, IOKit power assertions, and the AppKit side
+of input (PearHostView, window/application delegates, Mac key codes → HID
+usages) delivering to UIKit's `PearUIKitDeliver*` / lifecycle entry points.
+pear-uikit depends on it only on macOS and calls `pear_host_macos::install()`
+from its image initializer; everything else goes through `pear_host::host()`.
+
+AppKit still used inside pear-uikit (next trait candidates):
+
+| Use | Where | Planned home |
+|---|---|---|
+| `NSFont`, `NSFontManager`, `NSImage` | graphics.rs (UIFont, UIImage, text drawing) | `HostText` / `HostImage`, or pure Rust (M4) |
+| `NSPasteboard` | UIPasteboard | `HostPlatform::pasteboard_*` |
+| `NSOpenPanel`, `NSSavePanel` | UIDocumentPickerViewController | `HostPlatform::pick_document` |
+| `NSSharingServicePicker`, `NSApplication.keyWindow` | UIActivityViewController | `HostPlatform::share` |
+| `NSWorkspace` (VoiceOver state) | accessibility.rs | `HostPlatform::accessibility` |
 
 Next steps for the boundary, in order:
 
-1. Move the AppKit implementation (app.rs backend, PearHostView/window
-   delegate, input translation) into its own crate `pear-host-macos`.
+1. Move the remaining AppKit uses above behind the trait.
 2. An event sink trait for input/lifecycle (`HostEvent`) replacing the
    `PearUIKitDeliver*` C calls.
 3. Surfaces for graphics backends, so pear-gles/MetalKit stop taking a
@@ -243,8 +255,12 @@ Each milestone is small, testable alone, and keeps working paths working.
 3. **M3 — `pear-host` trait + `pear-host-macos`.** *Step 1 done
    (2026-11-21):* `pear-host` crate, pear-uikit calls the trait, MacHost
    over the AppKit backend; ABI census and behaviour probe identical, Burger
-   Shop 2 and GTA VC render as before, pear-host tests pass on Linux. Next:
-   the AppKit code into `pear-host-macos`, the event sink, surfaces (§4).
+   Shop 2 and GTA VC render as before, pear-host tests pass on Linux.
+   *Step 2 done (2026-11-21):* the AppKit backend and input in
+   `pear-host-macos`; UIKit no longer links IOKit or creates NSWindows;
+   census and probe identical, a scripted tap takes Burger Shop 2 from its
+   menu into gameplay. Next: the remaining AppKit uses (§4 table), the event
+   sink, surfaces.
 4. **M4 — Text and images off CoreGraphics/CoreText/ImageIO.** Pure-Rust
    decoding and a glyph rasteriser behind `HostImage`/`HostText`;
    compare rendered UILabel/UIImage output against today's pixels.
