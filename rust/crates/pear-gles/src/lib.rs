@@ -17,6 +17,7 @@ const EGL_SURFACE_TYPE: i32 = 0x3033;
 const EGL_WINDOW_BIT: i32 = 0x0004;
 const EGL_PBUFFER_BIT: i32 = 0x0001;
 const EGL_RENDERABLE_TYPE: i32 = 0x3040;
+const EGL_OPENGL_ES_BIT: i32 = 0x0001;
 const EGL_OPENGL_ES2_BIT: i32 = 0x0004;
 const EGL_OPENGL_ES3_BIT: i32 = 0x0040;
 const EGL_WIDTH: i32 = 0x3057;
@@ -108,7 +109,9 @@ fn egl_bridge() -> &'static EglBridge {
                 bind_fn(EGL_OPENGL_ES_API);
                 let cfg_attribs: [i32; 13] = [
                     EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
-                    EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT,
+                    // kEAGLRenderingAPIOpenGLES1..3 share one config, so it
+                    // must render every ES version (GLES 1 titles included).
+                    EGL_RENDERABLE_TYPE, EGL_OPENGL_ES_BIT | EGL_OPENGL_ES2_BIT | EGL_OPENGL_ES3_BIT,
                     EGL_RED_SIZE, 8,
                     EGL_GREEN_SIZE, 8,
                     EGL_BLUE_SIZE, 8,
@@ -190,6 +193,13 @@ struct ContextState {
     default_surface: EglSurface,
     bound_surface: EglSurface,
     multi_threaded: bool,
+    /// The renderbuffer `renderbufferStorage:fromDrawable:` gave storage
+    /// (iOS's drawable renderbuffer), its pixel size, and the framebuffer
+    /// presentation reads it through (0 until first present).
+    drawable_renderbuffer: u32,
+    drawable_width: i32,
+    drawable_height: i32,
+    present_framebuffer: u32,
 }
 
 static CTX_STATE_KEY: u8 = 0;
@@ -257,7 +267,9 @@ unsafe extern "C" fn eagl_init_with_api_sg(
         msg0(cls("EAGLSharegroup"), "new")
     };
     let shared_egl = get_sg_ctx(sg);
-    let version = if api >= 3 { 3 } else { 2 };
+    // kEAGLRenderingAPIOpenGLES1/2/3 are GLES 1.1/2.0/3.0 contexts: a GLES 1
+    // title issues fixed-function and OES calls that a GLES 2 context rejects.
+    let version = api as i32;
     let egl_ctx = bridge.create_context(version, shared_egl);
     if egl_ctx.is_null() {
         pear_objc::objc_release(sg);
@@ -275,6 +287,10 @@ unsafe extern "C" fn eagl_init_with_api_sg(
         default_surface: default_surf,
         bound_surface: std::ptr::null_mut(),
         multi_threaded: false,
+        drawable_renderbuffer: 0,
+        drawable_width: 0,
+        drawable_height: 0,
+        present_framebuffer: 0,
     });
     let ptr = Box::into_raw(state) as *mut c_void;
     let val: Id = msg1::<*mut c_void, Id>(cls("NSValue"), "valueWithPointer:", ptr);
@@ -343,10 +359,12 @@ unsafe extern "C" fn eagl_set_current_context(_self_cls: Id, _cmd: pear_objc::Se
             return false;
         }
         msg2::<Id, Id, ()>(dict, "setObject:forKey:", context, key);
+        gl_symbols::CURRENT_API.with(|api| api.set(state.api));
         true
     } else {
         bridge.make_current(std::ptr::null_mut(), std::ptr::null_mut());
         msg1::<Id, ()>(dict, "removeObjectForKey:", key);
+        gl_symbols::CURRENT_API.with(|api| api.set(0));
         true
     }
 }
@@ -374,6 +392,11 @@ unsafe extern "C" fn eagl_renderbuffer_storage(
         if is_current {
             let surf = if ok { state.bound_surface } else { state.default_surface };
             bridge.make_current(surf, state.egl_context);
+            // As on iOS, the bound renderbuffer gets storage of the layer's
+            // pixel size; presentRenderbuffer: copies it to the window.
+            if ok {
+                drawable_storage::allocate(state, drawable);
+            }
         }
         ok
     } else {
@@ -396,7 +419,132 @@ unsafe extern "C" fn eagl_present_renderbuffer(self_obj: Id, _cmd: pear_objc::Se
     } else {
         state.default_surface
     };
+    if !state.bound_surface.is_null() && state.drawable_renderbuffer != 0 {
+        drawable_storage::copy_to_window(state);
+    }
     bridge.swap_buffers(surf)
+}
+
+/// iOS's drawable renderbuffer on an ANGLE window surface: the app draws into
+/// its own framebuffer, whose colour renderbuffer `renderbufferStorage:
+/// fromDrawable:` backs; ANGLE presents only framebuffer 0 of the window
+/// surface. The renderbuffer gets real storage, and presentation blits it into
+/// the window surface (GLES 1/2 through ANGLE_framebuffer_blit with the OES or
+/// core binding names of the context's version, GLES 3 through core).
+mod drawable_storage {
+    use super::{gl_symbols::angle, ContextState};
+    use pear_objc::{msg0, CGRect, Id};
+    use std::ffi::{c_char, c_void, CStr, CString};
+
+    extern "C" {
+        fn PearHostLogMessage(area: *const c_char, message: *const c_char);
+    }
+
+    /// PEAR_DEBUG_GL: drawable storage and presentation, first few times.
+    fn debug(message: &str) {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNT: AtomicU32 = AtomicU32::new(0);
+        if std::env::var_os("PEAR_DEBUG_GL").is_some() && COUNT.fetch_add(1, Ordering::Relaxed) < 40 {
+            let m = CString::new(message).unwrap_or_default();
+            unsafe { PearHostLogMessage(c"gl".as_ptr(), m.as_ptr()) };
+        }
+    }
+
+    const RENDERBUFFER: u32 = 0x8D41;
+    const RENDERBUFFER_BINDING: u32 = 0x8CA7;
+    const RGBA8: u32 = 0x8058;
+    const READ_FRAMEBUFFER: u32 = 0x8CA8;
+    const DRAW_FRAMEBUFFER: u32 = 0x8CA9;
+    const READ_FRAMEBUFFER_BINDING: u32 = 0x8CAA;
+    const DRAW_FRAMEBUFFER_BINDING: u32 = 0x8CA6;
+    const COLOR_ATTACHMENT0: u32 = 0x8CE0;
+    const SCISSOR_TEST: u32 = 0x0C11;
+    const COLOR_BUFFER_BIT: u32 = 0x4000;
+    const NEAREST: u32 = 0x2600;
+
+    /// GL entry point `name`, or its OES form in a GLES 1 context.
+    unsafe fn gl<T: Copy>(state: &ContextState, name: &str) -> Option<T> {
+        let full = if state.api == 1 && name.contains("buffer") { format!("{name}OES\0") } else { format!("{name}\0") };
+        let f = angle(CStr::from_bytes_with_nul(full.as_bytes()).ok()?);
+        (!f.is_null()).then(|| std::mem::transmute_copy::<*mut c_void, T>(&f))
+    }
+
+    unsafe fn plain<T: Copy>(name: &CStr) -> Option<T> {
+        let f = angle(name);
+        (!f.is_null()).then(|| std::mem::transmute_copy::<*mut c_void, T>(&f))
+    }
+
+    pub unsafe fn allocate(state: &mut ContextState, layer: Id) {
+        let bounds: CGRect = msg0(layer, "bounds");
+        let scale: f64 = msg0(layer, "contentsScale");
+        let scale = if scale > 0.0 { scale } else { 1.0 };
+        let (w, h) = ((bounds.size.width * scale).round() as i32, (bounds.size.height * scale).round() as i32);
+        let get: Option<unsafe extern "C" fn(u32, *mut i32)> = plain(c"glGetIntegerv");
+        let storage: Option<unsafe extern "C" fn(u32, u32, i32, i32)> = gl(state, "glRenderbufferStorage");
+        let (Some(get), Some(storage)) = (get, storage) else { return };
+        let mut bound = 0;
+        get(RENDERBUFFER_BINDING, &mut bound);
+        if bound == 0 {
+            bound = super::gl_symbols::BOUND_RENDERBUFFER.with(|b| b.get()) as i32;
+        }
+        debug(&format!("renderbufferStorage:fromDrawable: GLES{} renderbuffer={bound} {w}x{h}", state.api));
+        if bound == 0 || w <= 0 || h <= 0 {
+            return;
+        }
+        storage(RENDERBUFFER, RGBA8, w, h);
+        state.drawable_renderbuffer = bound as u32;
+        state.drawable_width = w;
+        state.drawable_height = h;
+    }
+
+    pub unsafe fn copy_to_window(state: &mut ContextState) {
+        type Bind = unsafe extern "C" fn(u32, u32);
+        type Gen = unsafe extern "C" fn(i32, *mut u32);
+        type Attach = unsafe extern "C" fn(u32, u32, u32, u32);
+        type Blit = unsafe extern "C" fn(i32, i32, i32, i32, i32, i32, i32, i32, u32, u32);
+        let get: Option<unsafe extern "C" fn(u32, *mut i32)> = plain(c"glGetIntegerv");
+        let enabled: Option<unsafe extern "C" fn(u32) -> u8> = plain(c"glIsEnabled");
+        let enable: Option<unsafe extern "C" fn(u32)> = plain(c"glEnable");
+        let disable: Option<unsafe extern "C" fn(u32)> = plain(c"glDisable");
+        let bind: Option<Bind> = gl(state, "glBindFramebuffer");
+        let gen: Option<Gen> = gl(state, "glGenFramebuffers");
+        let attach: Option<Attach> = gl(state, "glFramebufferRenderbuffer");
+        let blit: Option<Blit> = if state.api >= 3 { plain(c"glBlitFramebuffer") } else { plain(c"glBlitFramebufferANGLE") };
+        let (Some(get), Some(enabled), Some(enable), Some(disable), Some(bind), Some(gen), Some(attach), Some(blit)) =
+            (get, enabled, enable, disable, bind, gen, attach, blit)
+        else {
+            return;
+        };
+        let (mut old_read, mut old_draw) = (0, 0);
+        get(READ_FRAMEBUFFER_BINDING, &mut old_read);
+        get(DRAW_FRAMEBUFFER_BINDING, &mut old_draw);
+        if state.present_framebuffer == 0 {
+            gen(1, &mut state.present_framebuffer);
+        }
+        bind(READ_FRAMEBUFFER, state.present_framebuffer);
+        // Re-attached each time: the app may have given a new renderbuffer
+        // drawable storage (a resize) since.
+        attach(READ_FRAMEBUFFER, COLOR_ATTACHMENT0, RENDERBUFFER, state.drawable_renderbuffer);
+        bind(DRAW_FRAMEBUFFER, 0);
+        let scissor = enabled(SCISSOR_TEST) != 0;
+        if scissor {
+            disable(SCISSOR_TEST);
+        }
+        let (w, h) = (state.drawable_width, state.drawable_height);
+        blit(0, 0, w, h, 0, 0, w, h, COLOR_BUFFER_BIT, NEAREST);
+        let error: Option<unsafe extern "C" fn() -> u32> = plain(c"glGetError");
+        debug(&format!(
+            "present renderbuffer={} via framebuffer={} {w}x{h} (game read={old_read} draw={old_draw}) glError=0x{:x}",
+            state.drawable_renderbuffer,
+            state.present_framebuffer,
+            error.map(|e| e()).unwrap_or(0)
+        ));
+        if scissor {
+            enable(SCISSOR_TEST);
+        }
+        bind(READ_FRAMEBUFFER, old_read as u32);
+        bind(DRAW_FRAMEBUFFER, old_draw as u32);
+    }
 }
 
 #[no_mangle]
@@ -559,6 +707,77 @@ mod gl_symbols {
         blit(0, 0, w, h, 0, 0, w, h, 0x4000, 0x2600); // COLOR_BUFFER_BIT, NEAREST
     }
 
+    thread_local! {
+        /// EAGL API version of this thread's current context (0: none).
+        pub static CURRENT_API: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        /// Renderbuffer last bound to GL_RENDERBUFFER on this thread: the one
+        /// `renderbufferStorage:fromDrawable:` backs (a GLES 1 context does
+        /// not report RENDERBUFFER_BINDING through ANGLE).
+        pub static BOUND_RENDERBUFFER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    fn track(core: &str, args: &[usize]) {
+        static DEBUG: OnceLock<bool> = OnceLock::new();
+        if *DEBUG.get_or_init(|| std::env::var_os("PEAR_DEBUG_GL").is_some()) {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static N: AtomicU32 = AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 30 {
+                let m = CString::new(format!("{core}{args:x?} GLES{}", CURRENT_API.with(|a| a.get()))).unwrap_or_default();
+                extern "C" {
+                    fn PearHostLogMessage(area: *const c_char, message: *const c_char);
+                }
+                unsafe { PearHostLogMessage(c"gl".as_ptr(), m.as_ptr()) };
+            }
+        }
+        if core == "glBindRenderbuffer" && args.first() == Some(&0x8D41) {
+            BOUND_RENDERBUFFER.with(|b| b.set(args[1] as u32));
+        }
+    }
+
+    // iOS GLES 1 apps import the unsuffixed framebuffer names, which ANGLE
+    // validates as GLES 2 core and rejects in a GLES 1 context: dispatch them
+    // to the OES entry points while a GLES 1 context is current.
+    macro_rules! framebuffer_alias {
+        ($($fname:ident = $core:literal ($($a:ident: $t:ty),*) $(-> $r:ty)?;)*) => {
+            $(unsafe extern "C" fn $fname($($a: $t),*) $(-> $r)? {
+                type F = unsafe extern "C" fn($($t),*) $(-> $r)?;
+                static CORE: OnceLock<usize> = OnceLock::new();
+                static OES: OnceLock<usize> = OnceLock::new();
+                let core = *CORE.get_or_init(|| angle(CStr::from_bytes_with_nul(concat!($core, "\0").as_bytes()).unwrap()) as usize);
+                let oes = *OES.get_or_init(|| angle(CStr::from_bytes_with_nul(concat!($core, "OES\0").as_bytes()).unwrap()) as usize);
+                let f = if CURRENT_API.with(|api| api.get()) == 1 && oes != 0 { oes } else { core };
+                let f: F = std::mem::transmute::<usize, F>(f);
+                track($core, &[$($a as usize),*]);
+                f($($a),*)
+            })*
+            /// The wrapper for `name`, unsuffixed or OES (apps use both).
+            fn framebuffer_alias(name: &[u8]) -> *mut c_void {
+                let name = name.strip_suffix(b"OES").unwrap_or(name);
+                match name {
+                    $(n if n == $core.as_bytes() => $fname as *mut c_void,)*
+                    _ => std::ptr::null_mut(),
+                }
+            }
+        };
+    }
+    framebuffer_alias! {
+        gen_renderbuffers = "glGenRenderbuffers" (n: i32, names: *mut u32);
+        bind_renderbuffer = "glBindRenderbuffer" (target: u32, name: u32);
+        is_renderbuffer = "glIsRenderbuffer" (name: u32) -> u8;
+        delete_renderbuffers = "glDeleteRenderbuffers" (n: i32, names: *const u32);
+        renderbuffer_storage = "glRenderbufferStorage" (target: u32, format: u32, w: i32, h: i32);
+        get_renderbuffer_parameteriv = "glGetRenderbufferParameteriv" (target: u32, p: u32, v: *mut i32);
+        gen_framebuffers = "glGenFramebuffers" (n: i32, names: *mut u32);
+        bind_framebuffer = "glBindFramebuffer" (target: u32, name: u32);
+        delete_framebuffers = "glDeleteFramebuffers" (n: i32, names: *const u32);
+        is_framebuffer = "glIsFramebuffer" (name: u32) -> u8;
+        check_framebuffer_status = "glCheckFramebufferStatus" (target: u32) -> u32;
+        framebuffer_renderbuffer = "glFramebufferRenderbuffer" (target: u32, attachment: u32, kind: u32, name: u32);
+        framebuffer_texture_2d = "glFramebufferTexture2D" (target: u32, attachment: u32, kind: u32, name: u32, level: i32);
+        get_framebuffer_attachment_parameteriv = "glGetFramebufferAttachmentParameteriv" (target: u32, attachment: u32, p: u32, v: *mut i32);
+        generate_mipmap = "glGenerateMipmap" (target: u32);
+    }
+
     /// The GLES (and EAGL) implementation for `name`, or null.
     #[export_name = "_Z19PearANGLEGameSymbolPKc"]
     pub unsafe extern "C" fn game_symbol(name: *const c_char) -> *mut c_void {
@@ -566,6 +785,10 @@ mod gl_symbols {
             return std::ptr::null_mut();
         }
         let c = CStr::from_ptr(name);
+        let alias = framebuffer_alias(c.to_bytes());
+        if !alias.is_null() {
+            return alias;
+        }
         match c.to_bytes() {
             b"glResolveMultisampleFramebufferAPPLE" => return resolve_multisample_apple as *mut c_void,
             b"EAGLGetVersion" => return super::EAGLGetVersion as *mut c_void,
