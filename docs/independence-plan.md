@@ -1,0 +1,290 @@
+# PearRuntime independence plan
+
+Goal: PearRuntime as an independent, Rust-first iOS compatibility runtime that
+runs 32-bit and 64-bit ARM iOS apps and games on macOS, Linux and Windows,
+with no `/System/iOSSupport`, no Mac Catalyst and no macOS framework behind the
+compatibility layer. This file is the inventory, the boundary and the plan; it
+is updated as milestones land. Nothing here is "independent" until a check in
+§6 shows it.
+
+Status date: 2026-11-21 (branch `pearhost-rust-completion`).
+
+## 1. Where the runtime is today
+
+Three execution paths exist:
+
+| Path | What runs the app | iOS API provided by | Status |
+|---|---|---|---|
+| **PearHost** (64-bit) | macOS dyld loads the retargeted Mach-O natively on Apple silicon | PearRuntime's own UIKit / OpenGLES / MetalKit + generated stub and overlay frameworks (Rust); Foundation, CoreFoundation, libobjc, CoreGraphics, Metal… are **macOS's** | Default launch path for 64-bit apps in the launcher since 2026-11-20 |
+| **Mac Catalyst** (64-bit, legacy) | macOS dyld, Catalyst platform | Apple's UIKit from `/System/iOSSupport` + `libPearRuntime.dylib` (pear-catalyst) patching it | Being retired: no longer used by the launcher for 64-bit apps; code still present |
+| **PearLegacyEngine** (32-bit) | touchHLE fork: own Mach-O loader, Dynarmic A32 JIT, own Objective-C runtime and framework emulation, SDL2, OpenAL Soft, ANGLE | Its own Rust implementation | Works (Miku Flick); separate repository, prebuilt binary in the shipped app |
+
+The 32-bit engine is already structurally independent (own loader, own ObjC
+runtime, own frameworks, SDL host layer); the 64-bit PearHost path is not yet:
+it owns UIKit but borrows Apple's ObjC runtime, Foundation, CoreFoundation,
+dyld and graphics stack.
+
+## 2. Dependency inventory
+
+### 2.1 Non-Rust sources
+
+| Item | Language | Role | Class (§3) |
+|---|---|---|---|
+| `compat/swift/PearSwiftUIKit.swift`, `PearUIKitNumeric.swift` | Swift | UIKit Swift overlay ABI (`libswiftUIKit.dylib`): IndexPath/numeric conformances iOS Swift apps import | External/ABI — Swift metadata cannot be emitted by hand from Rust safely |
+| `compat/swift/MarketplaceKit.swift` | Swift | MarketplaceKit stub (Catalyst path) | Catalyst-only, retire with it |
+| `third_party/angle` (PearANGLE fork) | C++ | GLES → Metal | External component |
+| PearLegacyEngine (separate repo) | Rust + C/C++ (SDL2, OpenAL Soft, Dynarmic) | 32-bit engine | External component |
+| `tools/*.py`, `*.sh` | Python/Bash | build, census, preparation tooling | Build-time only |
+| PearSilicon launcher (`Sources/`) | Swift/SwiftUI | installer, preparer, launcher UI | Host application, not runtime |
+| `scripts/*-smoke*.mm` (PearSilicon) | ObjC++ | test fixtures standing in for iOS app code | Tests only |
+
+The runtime crates themselves have no Objective-C, C or assembly source files;
+Objective-C ABI data and `@try` frames are emitted from Rust (`pear_objc::abi`).
+
+### 2.2 Apple frameworks and system libraries, per crate
+
+| Crate (lines) | Path | Links / messages |
+|---|---|---|
+| pear-objc (842) | all | **libobjc**, Foundation (every `msg*` call is Apple's ObjC runtime) |
+| pear-core (497) | PearHost | libobjc (forwarding / missing-call reporter) |
+| pear-uikit (13 170) | PearHost | **AppKit** (NSApplication, NSWindow, NSView, NSScreen, NSAlert, NSMenu, NSPasteboard, NSWorkspace, NSFont…: ~33 call sites, nearly all in `app.rs` behind `PearBackend*`), **QuartzCore** (CALayer tree, CADisplayLink, CATransaction), **CoreGraphics/CoreText/ImageIO** (~150 calls in `graphics.rs`: UIImage, UIFont, drawing), **Foundation** (NSArray, NSBundle, NSNotificationCenter, NSData, NSURL… used as the guest's own Foundation) |
+| pear-gles (819) | PearHost | ANGLE (libEGL/libGLESv2), CALayer as the EGL native window |
+| pear-metalkit (729) | PearHost | **Metal**, CAMetalLayer (MTKView) |
+| pear-keychain (841) | both | **Security**, CoreFoundation (SecKey crypto) |
+| pear-host-frameworks (generated) | PearHost | re-exports AVKit, GameController, StoreKit, MediaPlayer, SafariServices, Social, GLKit from macOS (overlays) |
+| pear-catalyst (19 681) | Catalyst | Apple UIKit (iOSSupport), AppKit, Metal, GameController, AVFoundation… |
+| pear-opengles (188) | both | ANGLE (forwarders) |
+| pear-macho, pear-nib, pear-cxxcompat, pear-empty-framework, pear-swift-support | — | none (portable) |
+
+### 2.3 Dependencies that are not visible as links
+
+These matter most for Linux/Windows and are easy to miss:
+
+1. **dyld** loads every 64-bit app image, resolves its imports against the
+   PearHost frameworks and macOS libraries, runs initializers, and applies
+   interposing. Linux/Windows need PearRuntime's own Mach-O loader and binder
+   (pear-macho is the parser; the 32-bit engine has a loader).
+2. **libobjc** (Apple's Objective-C runtime) runs all guest Objective-C:
+   class realization, message dispatch, ARC, exceptions, associated objects.
+3. **Foundation + CoreFoundation** (macOS's) *are* the guest's Foundation:
+   NSString, collections, run loops, NSFileManager, NSUserDefaults,
+   NSURLSession… iOS apps call them directly. This is guest-facing API served
+   by the host OS, the largest single macOS dependency.
+4. **libSystem / Darwin syscalls** (pthreads, mmap, files, sockets): native
+   on macOS, need a translation layer elsewhere.
+5. **CPU**: arm64 code runs natively on Apple silicon; Linux arm64 can run it
+   natively once loaded; x86-64 hosts need A64 translation (Dynarmic supports
+   A64 as well as A32).
+6. **The macOS overlays re-export system frameworks** (AVKit, GameController,
+   StoreKit, …): on macOS the iOS API surface they share is Apple's.
+
+### 2.4 iOSSupport / Mac Catalyst
+
+- `pear-catalyst`, `build.sh`'s `libPearRuntime.dylib`, `libPearOpenGLES`
+  (pear-opengles `catalyst` feature), the Swift overlay build (macabi), and the
+  launcher's Catalyst preparation (`PackageInstaller`) exist only for the
+  Catalyst path.
+- PearHost never loads `/System/iOSSupport` (the preparers rewrite every such
+  path; verified with `DYLD_PRINT_LIBRARIES` for GTA VC earlier). Note: the
+  installer still converts newly installed apps for Catalyst first; PearHost
+  then re-prepares them. M2 below removes that step.
+
+## 2.5 Research: what exists to build on (2026-11-21)
+
+Checked with the GitHub API (licence, last push) and web search. "Use" means
+code may enter PearRuntime under its licence; "reference" means study only.
+
+| Component | Candidate | Licence | State | Fit |
+|---|---|---|---|---|
+| Kernel semantics (syscalls, Mach traps, errno, struct layouts, signals) | apple-oss-distributions/**xnu** | APSL 2.0 | active (2026-06) | Reference for Darwin ABI facts our libSystem layer must reproduce on Linux (stat/dirent/sockaddr layouts, errno and signal numbers, `mach_absolute_time`, Mach ports apps touch) |
+| Loader / binder | apple-oss-distributions/**dyld** | APSL 2.0 | active | Reference for chained fixups, binding, initializers, TLV; our loader builds on pear-macho |
+| Objective-C runtime, **Apple ABI** | apple-oss-distributions/**objc4** | APSL 2.0 | active | The definitive Apple-ABI runtime (class_ro_t, `__objc_classlist`, `objc_msgSend`, ARC, tagged pointers). Port or reference; iOS binaries need this ABI |
+| Objective-C runtime | gnustep/**libobjc2** | MIT | active | **Does not implement Apple's ABI** (GNUstep v2 ABI): cannot run iOS binaries as is. Useful for EH/blocks/ARC algorithms only |
+| Objective-C runtime in Rust | touchHLE / **PearLegacyEngine** (`objc` module) | MPL-2.0 | active | Reads Apple-ABI metadata from Mach-O in Rust (32-bit). Closest to a Rust-first Apple-ABI runtime; extend to 64-bit layouts |
+| CoreFoundation | apple-oss-distributions/**CF** (CF-Lite) | APSL 2.0 | 2021 | Portable C CF; also inside swiftlang/**swift-corelibs-foundation** (Apache-2.0, active) which builds CF on Linux/Windows |
+| Foundation | swift-corelibs-foundation | Apache-2.0 | active | Swift-native classes, **not** Objective-C: iOS code expecting ObjC `NSString` etc. cannot use it directly. Reference for semantics |
+| Foundation (ObjC) | darlinghq/darling-foundation (from Apportable) | LGPL-2.1 | active | ObjC Foundation on CF; LGPL (dynamic linking only) |
+| Foundation (ObjC) | gnustep/libs-base | GPL-2.0 (LGPL lib) | active | GNUstep ABI, GPL family |
+| libdispatch / blocks | swift-corelibs-libdispatch, apple **libdispatch**, **libclosure** | Apache-2.0 / APSL | active | GCD on Linux exists (Apache-2.0): reusable |
+| libc / pthreads / malloc | apple **Libc**, **libpthread**, **libmalloc** | APSL | active | Reference for Darwin-specific behaviour; on Linux the shim maps to glibc/musl |
+| Whole Darwin userland on Linux | darlinghq/**darling** | GPL-3.0 | very active; **initial arm64 support** (arm64 macOS games load and open windows on arm64 Linux); experimenting with Dynarmic for arm64-on-x86-64 | Proof that native arm64 Darwin binaries can run on arm64 Linux. GPL-3.0: reference only unless PearRuntime adopts GPL |
+| Metal on Vulkan | darlinghq/**indium** (with **Iridium**: AIR → SPIR-V) | **0BSD** | active (2026-11) | Use: no Foundation/ObjC dependency by design; an ABI-compatible Metal (MTLDevice…) layer on top is ours to write. Also `metal2vulkan` (Rust crate, AIR → Vulkan SPIR-V) |
+| GLES | google/**angle** (PearANGLE fork) | BSD | active | Re-enable the Vulkan backend in the fork for Linux/Windows |
+| iOS on Windows | microsoft/**WinObjC** (archived 2022), ipasimulator/**ipasim** (2023) | MIT | inactive | Reference: UIKit/Foundation on Windows (WinObjC), emulated iOS with translated system calls (ipasim) |
+| 32-bit iOS | touchHLE / PearLegacyEngine | MPL-2.0 (engine binary GPL-3.0 via linked libs) | active | Already independent; integrate |
+| CPU translation (non-arm64 hosts) | Dynarmic (azahar-emu fork, 0BSD; A32 + A64) | 0BSD | active | arm64 guests on x86-64 Linux/Windows; A32 already used by the 32-bit engine. FEX/box64 go the other way (x86 → arm) |
+
+Darwin-on-Linux ABI facts that bite (from xnu/dyld and Darling's experience),
+all of which the libSystem layer has to handle:
+
+- **Variadic calls**: Darwin arm64 passes variadic arguments on the stack;
+  Linux AAPCS64 passes them in registers. Every variadic libc entry an app
+  calls (`printf`, `open`, `fcntl`, `ioctl`…) needs a Darwin-convention shim.
+- **`long double`** is 64-bit on Darwin arm64, 128-bit on Linux aarch64.
+- **TLS / thread pointer**: Darwin reads thread-specific data via
+  `TPIDRRO_EL0`, Linux uses `TPIDR_EL0`; Darwin also reserves `x18`.
+- **Struct layouts and constants** differ: `stat`, `dirent`, `sockaddr`
+  (`sa_len`), `errno` values, signal numbers, `fcntl`/`open` flags, `O_*`.
+- **Raw syscalls** (`svc #0x80`, number in `x16`) from apps or bundled
+  libraries need trapping (Linux syscall user dispatch, as Darling uses).
+- **Mach**: `mach_absolute_time`, `mach_task_self`, ports used by run loops
+  and dispatch; our CF/run loop must not depend on real Mach IPC.
+- **Page size**: iOS uses 16 KiB pages; Linux arm64 is often 4 KiB (mapping
+  works; `vm_page_size` and allocator assumptions must agree).
+
+### What is realistically reachable
+
+- **32-bit iOS on macOS/Linux/Windows**: PearLegacyEngine already has the
+  architecture (own loader, ObjC runtime, frameworks, Dynarmic, SDL); the work
+  is integration and sharing PearANGLE and `pear-host`.
+- **64-bit iOS on arm64 Linux, natively**: reachable; Darling shows Darwin arm64
+  binaries running on arm64 Linux. Needs our loader, Darwin-ABI libSystem
+  layer, an Apple-ABI ObjC runtime, CF + an Objective-C Foundation, our UIKit,
+  ANGLE-Vulkan and an Indium-based Metal. Foundation and Metal are the largest
+  pieces.
+- **64-bit iOS on x86-64 Linux/Windows**: needs arm64 translation as well
+  (Dynarmic A64 or whole-process translation); slowest and last.
+- **Swift apps**: the Swift runtime is open source but must be the Darwin-ABI
+  build (Objective-C interop on); Darling builds it that way.
+
+## 3. Classification
+
+**Portable compatibility logic (Rust, keep growing):** UIKit object model and
+behaviour (pear-uikit except the AppKit backend and CG drawing), nib loading
+(pear-nib), Mach-O parsing (pear-macho), the keychain store's item model,
+EAGL state machine and GLES ABI (pear-gles, pear-opengles), the missing-call
+reporter (pear-core), Objective-C ABI emission (pear_objc::abi), generated
+stub/overlay frameworks.
+
+**Replaceable host services (behind a backend):** windows, layers and
+presentation surfaces (AppKit/CALayer), display link / vsync (CADisplayLink),
+run loop integration (NSApplication), input (NSEvent → touches, keys,
+gamepads via GameController), alerts, URL opening, pasteboard, screen info,
+text rendering and image decoding (CoreText/ImageIO/CoreGraphics), crypto
+(Security), audio.
+
+**External components needing their own migration:** the Objective-C runtime
+(libobjc), Foundation/CoreFoundation, dyld/Mach-O binding, Darwin syscall
+surface, CPU translation for non-arm64 hosts (Dynarmic, PearLegacyJIT), PearANGLE
+graphics backends (Metal today; Vulkan/D3D needed), PearLegacyEngine (already
+independent; integrate rather than rewrite), Swift runtime for Swift apps.
+
+## 4. Rust boundary for platform-neutral services
+
+A new crate `pear-host` defines the services the portable runtime may ask of
+the host; each OS provides one implementation (`pear-host-macos` first, from
+today's `PearBackend*` functions in pear-uikit `app.rs`). The portable crates
+depend only on `pear-host`, never on AppKit/QuartzCore types.
+
+```rust
+/// Opaque handles: the portable runtime never sees NSWindow/HWND/wl_surface.
+pub struct WindowId(pub u64);
+pub struct SurfaceId(pub u64);
+
+pub struct ScreenInfo { pub points: (f64, f64), pub scale: f64, pub max_fps: u32 }
+
+pub enum HostEvent {
+    Pointer { window: WindowId, phase: TouchPhase, x: f64, y: f64, time: f64 },
+    Key { window: WindowId, code: u16, down: bool, modifiers: u32 },
+    Text { window: WindowId, text: String },
+    Resized { window: WindowId, points: (f64, f64), scale: f64 },
+    Gamepad(GamepadEvent),
+    Lifecycle(Lifecycle), // active / inactive / background / terminate
+}
+
+pub trait HostPlatform: Send + Sync {
+    // Windows and presentation
+    fn screen(&self) -> ScreenInfo;
+    fn create_window(&self, title: &str, points: (f64, f64)) -> WindowId;
+    fn show_window(&self, window: WindowId, key: bool);
+    /// A surface the graphics backend renders into (CAMetalLayer on macOS,
+    /// VkSurfaceKHR source on Linux/Windows), sized to the window.
+    fn create_surface(&self, window: WindowId) -> SurfaceId;
+    fn native_surface(&self, surface: SurfaceId) -> NativeSurface;
+
+    // Time and the main loop
+    fn run(&self, on_event: &mut dyn FnMut(HostEvent), on_frame: &mut dyn FnMut(f64)) -> !;
+    fn post_to_main(&self, job: Box<dyn FnOnce() + Send>);
+    fn set_frame_rate(&self, window: WindowId, fps: u32);
+
+    // Services
+    fn present_alert(&self, title: &str, message: &str, buttons: &[&str], reply: Box<dyn FnOnce(i32) + Send>);
+    fn open_url(&self, url: &str) -> bool;
+    fn pasteboard_text(&self) -> Option<String>;
+    fn set_pasteboard_text(&self, text: &str);
+    fn set_idle_timer_disabled(&self, disabled: bool);
+}
+
+/// What a graphics backend needs to create its swapchain.
+pub enum NativeSurface {
+    MetalLayer(*mut core::ffi::c_void),   // macOS
+    Wayland { display: *mut core::ffi::c_void, surface: *mut core::ffi::c_void },
+    Xlib { display: *mut core::ffi::c_void, window: u64 },
+    Win32 { hinstance: *mut core::ffi::c_void, hwnd: *mut core::ffi::c_void },
+}
+```
+
+Separate traits follow the same pattern for services with their own
+lifecycles: `HostText` (font lookup, shaping, rasterising glyph runs),
+`HostImage` (decode PNG/JPEG/HEIC to RGBA), `HostAudio`, `HostCrypto`
+(the keychain's key generation/signing), `HostFiles` (container roots).
+Where a pure-Rust implementation exists (image decoding, crypto) the portable
+default needs no host at all.
+
+Graphics: PearANGLE keeps ANGLE's backend model; the boundary is
+`NativeSurface` → EGL native window. Metal stays the macOS backend; ANGLE's
+upstream Vulkan backend is the Linux/Windows target (re-enabled in the fork).
+
+## 5. Prioritized migration plan
+
+Each milestone is small, testable alone, and keeps working paths working.
+
+1. **M1 — PearHost runs the regression set** (in progress). Make the 64-bit
+   test games start and render under PearHost on macOS. Done so far: stub and
+   overlay frameworks, full GLES ABI, GLES 1 contexts and drawable
+   presentation, launcher preparation; see §7.
+2. **M2 — Retire the Catalyst conversion at install.** Install 64-bit apps
+   straight into PearHost form (from the IPA's iOS binaries); remove the
+   Catalyst preparation once every regression game is at least as good under
+   PearHost as under Catalyst.
+3. **M3 — `pear-host` trait + `pear-host-macos`.** Move today's
+   `PearBackend*` (app.rs) behind `HostPlatform`; pear-uikit calls the trait.
+   No behaviour change; regression set identical. First portability proof:
+   pear-uikit compiles for Linux with a stub host.
+4. **M4 — Text and images off CoreGraphics/CoreText/ImageIO.** Pure-Rust
+   decoding and a glyph rasteriser behind `HostImage`/`HostText`;
+   compare rendered UILabel/UIImage output against today's pixels.
+5. **M5 — Graphics backend selection in PearANGLE.** Build the fork with the
+   Vulkan backend for Linux; `pear-gles` takes `NativeSurface`. Run
+   the pear-gles GL smoke (Rust example) on Linux in a container.
+6. **M6 — Own Mach-O loader for 64-bit.** Load and bind an iOS image with
+   pear-macho (segments, chained fixups, initializers) without dyld; start with
+   a tiny test binary, then a real app on macOS behind a flag.
+7. **M7 — Objective-C runtime.** Decide between embedding a portable runtime
+   (GNUstep libobjc2 has the Apple 64-bit ABI) and a Rust one; the 32-bit
+   engine's runtime is the reference for semantics.
+8. **M8 — Foundation/CoreFoundation for the guest.** Rust implementations of
+   the classes apps actually use, census-driven (the census tools already
+   record every imported class and selector).
+9. **M9 — Linux host backend** (Wayland/X11 windowing, input, audio) and an
+   end-to-end run of one 64-bit and one 32-bit game in a Linux arm64 VM.
+10. **M10 — x86-64 hosts / Windows**: A64 translation (Dynarmic), Win32 backend.
+11. **32-bit track (parallel):** bring PearLegacyEngine into this workspace
+    (it is Rust already), share PearANGLE and `pear-host` with it, then retire
+    its SDL dependency per platform as `pear-host` backends mature.
+
+## 6. Validation matrix
+
+| Check | How | Today |
+|---|---|---|
+| Workspace build | `cargo build` (host), `host/build-host.sh`, `build.sh` (Catalyst while it exists) | passes on macOS |
+| Linux portability | `container run … rust` builds of each crate | pear-macho, pear-nib, pear-objc, pear-core, pear-gles build; tests of pear-macho/pear-nib pass; pear-uikit/pear-keychain/pear-metalkit link Apple frameworks |
+| ObjC ABI parity | `tools/host-abi-census.py --compare` | identical to the last ObjC build |
+| GL | `pear-gles --example pearangle-smoke`; EAGL GLES1/2/3 context test | pass on macOS |
+| Game regression | §7 | see below |
+| 32-bit | Miku Flick via PearLegacyEngine | runs (log 2026-11-19) |
+
+## 7. Baseline (2026-11-21)
+
+See `docs/runs/baseline-2026-11-21.md` for the per-game table (PearHost on
+macOS, 20-second runs, window-only capture, rendered = window not black).
