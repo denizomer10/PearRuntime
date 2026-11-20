@@ -65,6 +65,48 @@ impl WindowHandle {
 pub struct LayerRef(pub *mut c_void);
 unsafe impl Send for LayerRef {}
 
+/// What a graphics backend renders into: the host's native window-system
+/// object behind a guest layer (a CAEAGLLayer, an MTKView's layer). An EGL
+/// implementation takes [`NativeSurface::egl_window`] as its
+/// `EGLNativeWindowType`; a Vulkan one picks the matching
+/// `VK_KHR_*_surface` extension by variant.
+#[repr(C, u32)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum NativeSurface {
+    /// A CAMetalLayer, or any CALayer ANGLE's Metal backend wraps (macOS).
+    MetalLayer(*mut c_void),
+    /// A `wl_egl_window` (EGL) on `surface` (Vulkan) of `display`.
+    Wayland { display: *mut c_void, surface: *mut c_void, egl_window: *mut c_void },
+    /// An X11 window of `display`.
+    Xlib { display: *mut c_void, window: u64 },
+    /// A Win32 window.
+    Win32 { hinstance: *mut c_void, hwnd: *mut c_void },
+}
+unsafe impl Send for NativeSurface {}
+unsafe impl Sync for NativeSurface {}
+
+impl NativeSurface {
+    /// The `EGLNativeWindowType` for this surface on its platform.
+    pub fn egl_window(&self) -> *mut c_void {
+        match *self {
+            NativeSurface::MetalLayer(layer) => layer,
+            NativeSurface::Wayland { egl_window, .. } => egl_window,
+            NativeSurface::Xlib { window, .. } => window as usize as *mut c_void,
+            NativeSurface::Win32 { hwnd, .. } => hwnd,
+        }
+    }
+}
+
+/// A [`NativeSurface`] with its size in pixels, as the host currently lays
+/// it out (iOS sizes a drawable from the layer's bounds × contentsScale).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct SurfaceInfo {
+    pub surface: NativeSurface,
+    pub pixels: Size,
+    pub scale: f64,
+}
+
 /// An object of the iOS app's Objective-C world (a UIWindow, a display-link
 /// target), passed through the host opaquely.
 #[repr(transparent)]
@@ -129,6 +171,11 @@ pub trait HostPlatform: Send + Sync {
     fn set_root_layer(&self, window: WindowHandle, layer: LayerRef);
 
     fn show_window(&self, window: WindowHandle, key: bool);
+
+    /// The native surface behind `layer`, a guest layer a graphics API is
+    /// asked to render into (EAGL's `renderbufferStorage:fromDrawable:`), or
+    /// None if this host cannot present it.
+    fn surface(&self, layer: LayerRef) -> Option<SurfaceInfo>;
 
     /// A display link (CADisplayLink as iOS apps use it) that sends
     /// `selector` to `target` once per host frame.
@@ -317,6 +364,9 @@ impl HostPlatform for NullHost {
     }
     fn set_root_layer(&self, _window: WindowHandle, _layer: LayerRef) {}
     fn show_window(&self, _window: WindowHandle, _key: bool) {}
+    fn surface(&self, _layer: LayerRef) -> Option<SurfaceInfo> {
+        None
+    }
     fn display_link(&self, _target: GuestObject, _selector: GuestSelector) -> GuestObject {
         GuestObject(std::ptr::null_mut())
     }
@@ -494,5 +544,15 @@ mod tests {
         assert!(!install(Box::new(NullHost::default())));
         assert!(installed());
         assert_eq!(host().screen().max_fps, 60);
+    }
+
+    #[test]
+    fn native_surfaces_map_to_egl_windows() {
+        let p = 0x1000 as *mut c_void;
+        assert_eq!(NativeSurface::MetalLayer(p).egl_window(), p);
+        assert_eq!(NativeSurface::Xlib { display: p, window: 0x42 }.egl_window() as usize, 0x42);
+        let w = NativeSurface::Win32 { hinstance: std::ptr::null_mut(), hwnd: p };
+        assert_eq!(w.egl_window(), p);
+        assert!(NullHost::default().surface(LayerRef(p)).is_none());
     }
 }

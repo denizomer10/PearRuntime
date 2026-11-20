@@ -222,20 +222,21 @@ NSEvents to the host view of an off-screen window and checks that a guest
 UIView gets touchesBegan/Moved/Ended at the right points and
 pressesBegan/Ended with HID usage 0x04.
 
+*M3 step 5 (2026-11-21):* surfaces. `HostPlatform::surface(LayerRef)`
+returns a `SurfaceInfo` (a `NativeSurface` and its pixel size) for a guest
+layer; `NativeSurface` is `MetalLayer` / `Wayland` / `Xlib` / `Win32`, with
+`egl_window()` giving the `EGLNativeWindowType` per platform. UIKit exports
+it to other images as `PearHostSurfaceForLayer`; pear-gles' EAGL
+`renderbufferStorage:fromDrawable:` now creates its EGL window surface and
+sizes the drawable renderbuffer from it, instead of checking for a CALayer
+and reading its bounds. MetalKit is unchanged: `CAMetalLayer` is part of the
+guest API MTKView exposes, and moves with QuartzCore/Metal (M5+), not with
+the host boundary.
+
 Next steps for the boundary, in order:
 
 1. ~~An event sink trait for input/lifecycle~~ (done, step 4).
-2. Surfaces for graphics backends, so pear-gles/MetalKit stop taking a
-   CALayer:
-
-```rust
-pub enum NativeSurface {
-    MetalLayer(*mut core::ffi::c_void),   // macOS
-    Wayland { display: *mut core::ffi::c_void, surface: *mut core::ffi::c_void },
-    Xlib { display: *mut core::ffi::c_void, window: u64 },
-    Win32 { hinstance: *mut core::ffi::c_void, hwnd: *mut core::ffi::c_void },
-}
-```
+2. ~~Surfaces for graphics backends~~ (done, step 5).
 
 Separate traits follow the same pattern for services with their own
 lifecycles: `HostText` (font lookup, shaping, rasterising glyph runs),
@@ -272,7 +273,11 @@ Each milestone is small, testable alone, and keeps working paths working.
    *Step 4 done:* the `GuestEvents` sink; the AppKit backend talks to the
    guest only through it (event probe passes, census/probe identical,
    Burger Shop 2 and GTA VC render, pear-host tests pass on Linux). Next:
-   surfaces.
+   surfaces. *Step 5 done:* `NativeSurface`/`SurfaceInfo` and
+   `HostPlatform::surface`; pear-gles asks the host for its EGL window
+   (probes identical, census adds only `PearHostSurfaceForLayer`, Burger
+   Shop 2 and GTA VC render; GTA LCS now opens no window, also with the
+   step 3 build, so not caused by M3 steps 4–5). Next: M4 text.
 4. **M4 — Text and images off CoreGraphics/CoreText/ImageIO.** Pure-Rust
    decoding and a glyph rasteriser behind `HostImage`/`HostText`;
    compare rendered UILabel/UIImage output against today's pixels.
@@ -300,7 +305,7 @@ Each milestone is small, testable alone, and keeps working paths working.
 | Check | How | Today |
 |---|---|---|
 | Workspace build | `cargo build` (host), `host/build-host.sh`, `build.sh` (Catalyst while it exists) | passes on macOS |
-| Linux portability | `container run … rust` builds of each crate | pear-macho, pear-nib, pear-objc, pear-core, pear-gles build; tests of pear-macho/pear-nib pass; pear-uikit/pear-keychain/pear-metalkit link Apple frameworks |
+| Linux portability | `container run … rust` builds of each crate | pear-macho, pear-nib, pear-objc, pear-core build; pear-host tests pass; pear-gles fails since the all-Rust port (pear-objc's ObjC metadata macros emit Mach-O `@PAGEOFF` asm, to gate to Apple targets); tests of pear-macho/pear-nib pass; pear-uikit/pear-keychain/pear-metalkit link Apple frameworks |
 | ObjC ABI parity | `tools/host-abi-census.py --compare` | identical to the last ObjC build and across M3 |
 | Host behaviour | `tools/host-behavior-probe.py --compare` (UIKit accessors, exception boundaries, constants, EAGL GLES 1/2/3) | identical across M3 (35 facts) |
 | Host input path | `tools/host-event-probe.py` (synthetic NSEvents → host view → `events()` → guest UIView) | touches and presses delivered (M3 step 4) |

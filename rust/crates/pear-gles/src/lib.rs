@@ -36,6 +36,9 @@ const RTLD_LOCAL: c_int = 0x4;
 const PEAR_MISSING_BEHAVIOR: c_int = 3;
 
 extern "C" {
+    /// UIKit.framework's host: the native surface behind a guest layer.
+    fn PearHostSurfaceForLayer(layer: *mut c_void, out: *mut pear_host::SurfaceInfo) -> bool;
+
     fn PearMissingReport(kind: c_int, owner: *const c_char, name: *const c_char, caller: *const c_void);
     fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
@@ -164,9 +167,9 @@ impl EglBridge {
         f(self.display, self.config, attribs.as_ptr())
     }
 
-    unsafe fn create_window_surface(&self, layer: Id) -> EglSurface {
+    unsafe fn create_window_surface(&self, surface: &pear_host::NativeSurface) -> EglSurface {
         let Some(f) = self.fn_create_window else { return std::ptr::null_mut() };
-        f(self.display, self.config, layer, std::ptr::null())
+        f(self.display, self.config, surface.egl_window(), std::ptr::null())
     }
 
     unsafe fn destroy_surface(&self, surf: EglSurface) {
@@ -386,8 +389,10 @@ unsafe extern "C" fn eagl_renderbuffer_storage(
         bridge.make_current(state.default_surface, state.egl_context);
     }
     bridge.destroy_surface(state.bound_surface);
-    if !drawable.is_null() && pear_objc::is_kind_of(drawable, "CALayer") {
-        state.bound_surface = bridge.create_window_surface(drawable);
+    let mut info = std::mem::MaybeUninit::<pear_host::SurfaceInfo>::uninit();
+    if !drawable.is_null() && PearHostSurfaceForLayer(drawable as *mut c_void, info.as_mut_ptr()) {
+        let info = info.assume_init();
+        state.bound_surface = bridge.create_window_surface(&info.surface);
         let ok = !state.bound_surface.is_null();
         if is_current {
             let surf = if ok { state.bound_surface } else { state.default_surface };
@@ -395,7 +400,7 @@ unsafe extern "C" fn eagl_renderbuffer_storage(
             // As on iOS, the bound renderbuffer gets storage of the layer's
             // pixel size; presentRenderbuffer: copies it to the window.
             if ok {
-                drawable_storage::allocate(state, drawable);
+                drawable_storage::allocate(state, info.pixels);
             }
         }
         ok
@@ -433,7 +438,6 @@ unsafe extern "C" fn eagl_present_renderbuffer(self_obj: Id, _cmd: pear_objc::Se
 /// core binding names of the context's version, GLES 3 through core).
 mod drawable_storage {
     use super::{gl_symbols::angle, ContextState};
-    use pear_objc::{msg0, CGRect, Id};
     use std::ffi::{c_char, c_void, CStr, CString};
 
     extern "C" {
@@ -474,11 +478,8 @@ mod drawable_storage {
         (!f.is_null()).then(|| std::mem::transmute_copy::<*mut c_void, T>(&f))
     }
 
-    pub unsafe fn allocate(state: &mut ContextState, layer: Id) {
-        let bounds: CGRect = msg0(layer, "bounds");
-        let scale: f64 = msg0(layer, "contentsScale");
-        let scale = if scale > 0.0 { scale } else { 1.0 };
-        let (w, h) = ((bounds.size.width * scale).round() as i32, (bounds.size.height * scale).round() as i32);
+    pub unsafe fn allocate(state: &mut ContextState, pixels: pear_host::Size) {
+        let (w, h) = (pixels.width as i32, pixels.height as i32);
         let get: Option<unsafe extern "C" fn(u32, *mut i32)> = plain(c"glGetIntegerv");
         let storage: Option<unsafe extern "C" fn(u32, u32, i32, i32)> = gl(state, "glRenderbufferStorage");
         let (Some(get), Some(storage)) = (get, storage) else { return };

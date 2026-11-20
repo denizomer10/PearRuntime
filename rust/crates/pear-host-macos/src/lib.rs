@@ -14,7 +14,7 @@
 
 use pear_host::{
     events, DocumentRequest, EditCommand, GuestObject, GuestSelector, HostPlatform, KeyEvent, LayerRef, Lifecycle,
-    PasteboardItem, Rect, ScreenInfo, Size, TouchPhase, WindowHandle, UTI_FILE_URL, UTI_TEXT, UTI_URL,
+    NativeSurface, PasteboardItem, Rect, ScreenInfo, Size, SurfaceInfo, TouchPhase, WindowHandle, UTI_FILE_URL, UTI_TEXT, UTI_URL,
 };
 use pear_objc::{
     cls, is_kind_of, msg0, msg1, msg2, msg3, msg4, nsarray_count, nsarray_from_ids, nsarray_object_at,
@@ -700,6 +700,28 @@ impl HostPlatform for MacHost {
 
     fn show_window(&self, window: WindowHandle, key: bool) {
         PearBackendShowWindow(window.0, key);
+    }
+
+    fn surface(&self, layer: LayerRef) -> Option<SurfaceInfo> {
+        // The guest's layers are Core Animation layers here, and ANGLE's
+        // Metal backend presents into any CALayer it is given.
+        let layer = layer.0 as Id;
+        unsafe {
+            if layer.is_null() || !is_kind_of(layer, "CALayer") {
+                return None;
+            }
+            let bounds: CGRect = msg0(layer, "bounds");
+            let scale: f64 = msg0(layer, "contentsScale");
+            let scale = if scale > 0.0 { scale } else { 1.0 };
+            Some(SurfaceInfo {
+                surface: NativeSurface::MetalLayer(layer as *mut c_void),
+                pixels: Size {
+                    width: (bounds.size.width * scale).round(),
+                    height: (bounds.size.height * scale).round(),
+                },
+                scale,
+            })
+        }
     }
 
     fn display_link(&self, target: GuestObject, selector: GuestSelector) -> GuestObject {

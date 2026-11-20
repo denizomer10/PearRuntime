@@ -15,6 +15,7 @@ doctest = false
 
 [dependencies]
 pear-objc = { path = "../pear-objc" }
+pear-host = { path = "../pear-host" }
 
 [lints.rust]
 # The shared forwarders (pear-opengles/src/forwarders.rs) check pear-opengles'

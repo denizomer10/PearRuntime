@@ -63,3 +63,17 @@ impl GuestEvents for UIKitEvents {
         }
     }
 }
+
+/// The host's native surface behind a guest layer, for graphics frameworks
+/// in other images (OpenGLES.framework links UIKit, which owns the host).
+/// Writes `*out` and returns true when the host can present `layer`.
+#[no_mangle]
+pub unsafe extern "C" fn PearHostSurfaceForLayer(layer: *mut std::ffi::c_void, out: *mut pear_host::SurfaceInfo) -> bool {
+    match pear_host::host().surface(pear_host::LayerRef(layer)) {
+        Some(info) if !out.is_null() => {
+            out.write(info);
+            true
+        }
+        _ => false,
+    }
+}

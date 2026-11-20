@@ -29,6 +29,7 @@ version = "0.1.0"
 name = "pear-gles"
 version = "0.1.0"
 dependencies = [
+ "pear-host",
  "pear-objc",
 ]
 
