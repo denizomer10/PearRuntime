@@ -232,7 +232,8 @@ def main(argv):
          "#![allow(non_upper_case_globals)]", "",
          "use std::ffi::c_void;", ""]
     ns_supers = sorted({sup.get(c, "NSObject") for c in order if sup.get(c, "NSObject").startswith("NS")
-                        and sup.get(c, "NSObject") not in have_classes} | {"NSObject"})
+                        and sup.get(c, "NSObject") not in have_classes
+                        and sup.get(c, "NSObject") not in order} | {"NSObject"})
     m.append('extern "C" {')
     for s in ns_supers:
         m += [f'    #[link_name = "OBJC_CLASS_$_{s}"]', f"    static {s}_CLASS: c_void;",

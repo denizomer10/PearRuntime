@@ -296,6 +296,15 @@ unsafe fn cgimage_from_data(data: Id) -> *mut c_void {
     if data.is_null() {
         return std::ptr::null_mut();
     }
+    if !crate::image_decode::use_imageio_only() {
+        let length: usize = msg0(data, "length");
+        let bytes: *const u8 = msg0(data, "bytes");
+        if !bytes.is_null() && length > 0 {
+            if let Some(cg) = crate::image_decode::cgimage(std::slice::from_raw_parts(bytes, length)) {
+                return cg;
+            }
+        }
+    }
     let src = CGImageSourceCreateWithData(data, std::ptr::null_mut());
     if src.is_null() {
         return std::ptr::null_mut();

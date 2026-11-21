@@ -5,10 +5,6 @@
 use std::ffi::c_void;
 
 extern "C" {
-    #[link_name = "OBJC_CLASS_$_NSCollectionLayoutItem"]
-    static NSCollectionLayoutItem_CLASS: c_void;
-    #[link_name = "OBJC_METACLASS_$_NSCollectionLayoutItem"]
-    static NSCollectionLayoutItem_META: c_void;
     #[link_name = "OBJC_CLASS_$_NSObject"]
     static NSObject_CLASS: c_void;
     #[link_name = "OBJC_METACLASS_$_NSObject"]

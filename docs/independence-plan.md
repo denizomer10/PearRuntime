@@ -302,9 +302,23 @@ Each milestone is small, testable alone, and keeps working paths working.
    iOS's UIKit does; AppKit stays linked for pear-host-macos only. The stub
    generator now skips UIFoundation names only, which adds empty
    NSCollectionLayout*/NSDiffableDataSourceSnapshot classes (AppKit has
-   same-named classes in the process; no prepared game binds them) Probes
+   same-named classes in the process; no prepared game binds them). Probes
    identical (51 facts); all 22 games launch as before (Burger Shop 2 and
    GTA VC render; Gutterball calls 25 missing APIs instead of 31).
+   *Step 3 done (2026-11-21):* `pear-image`, PearRuntime's own decoders
+   in portable Rust with no dependencies (inflate, PNG with every colour
+   type/depth, Adam7, palettes, tRNS, gAMA, Apple's CgBI; JPEG baseline
+   and progressive, fancy chroma upsampling, Adobe CMYK). UIImage decodes
+   with it and presents the CGImage with ImageIO's layout for the same file
+   (gray stays gray, palettes stay indexed, CgBI premultiplied); files with
+   ICC profiles, PNG gamma, 16-bit samples or CMYK still use ImageIO on
+   macOS (`PEAR_IMAGE_DECODER=imageio` forces it for all). Evidence on the
+   2,613 PNG/JPEG files of the 22 games: every PNG (289 CgBI) identical to
+   ImageIO in layout, bytes and drawn pixels; the 48 JPEGs that differ
+   from ImageIO match Chromium/libjpeg-turbo within 3 levels (ImageIO's
+   decoder is the outlier, up to 82 on edges); identical pixel hashes on
+   macOS and arm64 Linux; 1.5× ImageIO's decode time (faster IDCT and
+   unfiltering are follow-ups). Not covered: ICC colour management.
 5. **M5 — Graphics backend selection in PearANGLE.** Build the fork with the
    Vulkan backend for Linux; `pear-gles` takes `NativeSurface`. Run
    the pear-gles GL smoke (Rust example) on Linux in a container.
@@ -332,6 +346,7 @@ Each milestone is small, testable alone, and keeps working paths working.
 | Linux portability | `container run … rust` builds of each crate | pear-macho, pear-nib, pear-objc, pear-core, pear-host, pear-opengles, pear-gles build on arm64 Linux (the GLES forwarders use ELF `:lo12:` relocations there, Mach-O `@PAGE` on Apple; x86-64 needs its own trampolines); tests of pear-host/pear-macho/pear-nib pass; tests of pear-macho/pear-nib pass; pear-uikit/pear-keychain/pear-metalkit link Apple frameworks |
 | ObjC ABI parity | `tools/host-abi-census.py --compare` | identical to the last ObjC build and across M3 |
 | Host behaviour | `tools/host-behavior-probe.py --compare` (UIKit accessors, exception boundaries, constants, EAGL GLES 1/2/3) | identical across M3 (35 facts) and M4 step 1 (51 facts: + UIFont constructors/metrics, a UILabel's pixels) |
+| Image decoding | `tools/host-image-probe.py` (UIImage vs ImageIO: layout, bytes, drawn pixels); `pear-image --example imageio-compare`, `decode-hash` (macOS vs Linux) | 2,565/2,613 identical, rest JPEG-only and within libjpeg-turbo's output (M4 step 3) |
 | Host input path | `tools/host-event-probe.py` (synthetic NSEvents → host view → `events()` → guest UIView) | touches and presses delivered (M3 step 4) |
 | GL | `pear-gles --example pearangle-smoke`; EAGL GLES1/2/3 context test | pass on macOS |
 | Game regression | §7 | see below |

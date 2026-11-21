@@ -17,6 +17,7 @@ pear-core = { path = "../pear-core" }
 pear-nib = { path = "../pear-nib" }
 pear-objc = { path = "../pear-objc" }
 pear-host = { path = "../pear-host" }
+pear-image = { path = "../pear-image" }
 pear-keychain = { path = "../pear-keychain" }
 
 # The host for this OS (pear-host's HostPlatform); other OSes get their own.

@@ -12,6 +12,7 @@ mod app;
 mod basics;
 mod generated_stubs;
 mod events;
+mod image_decode;
 mod globals;
 mod graphics;
 pub mod objc_classes;
@@ -19,7 +20,7 @@ mod view;
 
 extern "C" {
     fn PearMissingInstallForImage(address_in_image: *const std::ffi::c_void);
-    fn PearHostLogMessage(area: *const std::ffi::c_char, message: *const std::ffi::c_char);
+    pub(crate) fn PearHostLogMessage(area: *const std::ffi::c_char, message: *const std::ffi::c_char);
 }
 
 /// Image initializer: registers the Rust implementations on the UIKit class
