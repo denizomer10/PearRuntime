@@ -78,7 +78,7 @@ PearSilicon (parent) launches 64-bit apps through PearHost
 | M4 text/images | Steps 1–3 done: UIFont on CoreText only (no AppKit in pear-uikit); UIKit re-exports UIFoundation instead of AppKit; own image decoders behind UIImage. **Open:** ICC colour management (ImageIO fallback for ICC/gAMA/16-bit/CMYK on macOS), decoder speed (1.5× ImageIO), own CoreGraphics/CoreText for non-macOS (big). |
 | M5 GLES on Vulkan | Not started (PearANGLE Linux/Vulkan build). Only prerequisite done: forwarders build on arm64 Linux. |
 | M6 own Mach-O loader | Step 1 done. **Open:** re-exported symbols, arm64e, thread-local *initializer* sections (refused), resolving a real app against PearRuntime frameworks. |
-| M7 own ObjC runtime | Steps 1–2 done (129/158 census symbols + 23 register variants; `fixture.m` & `fixture2.m` pass on macOS & Linux), **step 3 next** (assembly cache, real LSDA exceptions, tagged pointers, Swift classes). |
+| M7 own ObjC runtime | **Done (steps 1–3):** 129/158 census symbols + 23 register variants; per-class lock-free ARM64 assembly cache, tagged pointers, Swift class flags (`bits & 3`), DWARF LSDA `___objc_personality_v0`, blocks, properties, `@synchronized`, associated objects, reflection, runtime classes; `fixture.m`, `fixture2.m`, and LSDA unit test pass on macOS & Linux. |
 | M8 Foundation/CF | Not started. |
 | M9 Linux host backend, M10 | Not started. |
 

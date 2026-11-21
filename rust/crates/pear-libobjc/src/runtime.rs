@@ -8,7 +8,7 @@
 use crate::abi::*;
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr, CString};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 // ---- selectors ---------------------------------------------------------
@@ -96,11 +96,80 @@ pub struct PropertyEntry {
 unsafe impl Send for PropertyEntry {}
 unsafe impl Sync for PropertyEntry {}
 
+const FAST_CACHE_SLOTS: usize = 64;
+
+#[repr(C)]
+pub struct CacheBucket {
+    pub sel: AtomicUsize,
+    pub imp: AtomicUsize,
+}
+
+#[repr(C)]
+pub struct FastClassCache {
+    pub buckets: AtomicUsize,
+    pub mask: AtomicU32,
+    pub occupied: AtomicU32,
+}
+
+impl FastClassCache {
+    pub fn alloc_and_attach(cls_ptr: *const ClassT) -> &'static FastClassCache {
+        let buckets: &'static [CacheBucket] = Box::leak(
+            (0..FAST_CACHE_SLOTS)
+                .map(|_| CacheBucket {
+                    sel: AtomicUsize::new(0),
+                    imp: AtomicUsize::new(0),
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        let cache = Box::leak(Box::new(FastClassCache {
+            buckets: AtomicUsize::new(buckets.as_ptr() as usize),
+            mask: AtomicU32::new((FAST_CACHE_SLOTS - 1) as u32),
+            occupied: AtomicU32::new(0),
+        }));
+        if !cls_ptr.is_null() {
+            unsafe {
+                (*(cls_ptr as *mut ClassT)).cache = cache as *const FastClassCache as *const std::ffi::c_void;
+            }
+        }
+        cache
+    }
+
+    pub fn insert(&self, s: Sel, imp: Imp) {
+        let ptr = self.buckets.load(Ordering::Acquire) as *const CacheBucket;
+        let mask = self.mask.load(Ordering::Acquire) as usize;
+        if ptr.is_null() || mask == 0 {
+            return;
+        }
+        let idx = ((s as usize) >> 3) & mask;
+        unsafe {
+            let b = &*ptr.add(idx);
+            b.imp.store(imp as usize, Ordering::Release);
+            b.sel.store(s as usize, Ordering::Release);
+        }
+    }
+
+    pub fn clear(&self) {
+        let ptr = self.buckets.load(Ordering::Acquire) as *const CacheBucket;
+        let mask = self.mask.load(Ordering::Acquire) as usize;
+        if ptr.is_null() {
+            return;
+        }
+        for i in 0..=mask {
+            unsafe {
+                let b = &*ptr.add(i);
+                b.sel.store(0, Ordering::Release);
+                b.imp.store(0, Ordering::Release);
+            }
+        }
+    }
+}
+
 pub struct Class {
     pub ptr: *const ClassT,
     pub name: String,
     pub meta: bool,
-    pub instance_size: std::sync::atomic::AtomicUsize,
+    pub instance_size: AtomicUsize,
     pub methods: RwLock<HashMap<usize, &'static MethodEntry>>,
     /// Methods in definition order, categories' after the class's own.
     pub method_list: RwLock<Vec<&'static MethodEntry>>,
@@ -111,6 +180,7 @@ pub struct Class {
     pub image: Option<CString>,
     /// Created by objc_allocateClassPair and not yet registered.
     pub building: std::sync::atomic::AtomicBool,
+    pub fast_cache: &'static FastClassCache,
     /// Cached custom retain/release/autorelease check (0=unknown, 1=default, 2=custom).
     custom_rr: AtomicU8,
     init: AtomicU8,
@@ -123,7 +193,7 @@ impl Class {
             ptr,
             name: name.to_string(),
             meta,
-            instance_size: std::sync::atomic::AtomicUsize::new(size),
+            instance_size: AtomicUsize::new(size),
             methods: RwLock::new(HashMap::new()),
             method_list: RwLock::new(Vec::new()),
             protocols: RwLock::new(Vec::new()),
@@ -131,6 +201,7 @@ impl Class {
             properties: RwLock::new(Vec::new()),
             image,
             building: std::sync::atomic::AtomicBool::new(false),
+            fast_cache: FastClassCache::alloc_and_attach(ptr),
             custom_rr: AtomicU8::new(0),
             init: AtomicU8::new(INIT_NONE),
             init_thread: Mutex::new(None),
@@ -203,6 +274,15 @@ pub fn flush_cache() {
     let r = registry().read().unwrap();
     for c in r.classes.values() {
         c.custom_rr.store(0, Ordering::Release);
+        c.fast_cache.clear();
+    }
+}
+
+pub fn fast_cache_insert(cls: *const ClassT, s: Sel, imp: Imp) {
+    if let Some(c) = class(cls) {
+        if c.init.load(Ordering::Acquire) == INIT_DONE {
+            c.fast_cache.insert(s, imp);
+        }
     }
 }
 
@@ -425,9 +505,41 @@ pub fn is_meta(cls: *const ClassT) -> bool {
     class(cls).is_some_and(|c| c.meta)
 }
 
+fn tagged_classes() -> &'static RwLock<HashMap<u8, usize>> {
+    static T: OnceLock<RwLock<HashMap<u8, usize>>> = OnceLock::new();
+    T.get_or_init(Default::default)
+}
+
+pub fn register_tagged_class(tag: u8, cls: *const ClassT) {
+    if !cls.is_null() {
+        tagged_classes().write().unwrap().insert(tag, cls as usize);
+    }
+}
+
+pub fn tagged_class(obj: Id) -> *const ClassT {
+    let addr = obj as usize;
+    // Basic tag in bits 60..62 (when MSB=1) or low bits 1..3 (when LSB=1).
+    let tag = if (addr & (1usize << 63)) != 0 {
+        ((addr >> 60) & 0x7) as u8
+    } else {
+        ((addr >> 1) & 0x7) as u8
+    };
+    tagged_classes()
+        .read()
+        .unwrap()
+        .get(&tag)
+        .map_or(crate::object::NSOBJECT_CLASS.ptr(), |&p| p as *const ClassT)
+}
+
+pub fn is_swift_class(cls: *const ClassT) -> bool {
+    !cls.is_null() && unsafe { ((*cls).bits & (FAST_IS_SWIFT_LEGACY | FAST_IS_SWIFT_STABLE)) != 0 }
+}
+
 pub unsafe fn object_class(obj: Id) -> *const ClassT {
     if obj.is_null() {
         std::ptr::null()
+    } else if is_tagged_pointer(obj) {
+        tagged_class(obj)
     } else {
         *(obj as *const *const ClassT)
     }

@@ -21,6 +21,14 @@ pub struct ClassT {
 /// (Darwin user addresses are below 2^47); Linux arm64 user space spans 48
 /// bits, and images only use the low bits for flags, so 48 bits are kept.
 pub const FAST_DATA_MASK: usize = 0x0000_ffff_ffff_fff8;
+pub const FAST_IS_SWIFT_LEGACY: usize = 1 << 0;
+pub const FAST_IS_SWIFT_STABLE: usize = 1 << 1;
+
+#[inline]
+pub fn is_tagged_pointer(obj: Id) -> bool {
+    let addr = obj as usize;
+    addr != 0 && (addr & ((1usize << 63) | 1)) != 0
+}
 
 #[repr(C)]
 pub struct ClassRo {

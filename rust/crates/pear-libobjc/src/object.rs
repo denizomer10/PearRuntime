@@ -288,7 +288,7 @@ pub fn retain_default(obj: Id) -> Id {
 }
 
 pub fn retain(obj: Id) -> Id {
-    if obj.is_null() {
+    if obj.is_null() || is_tagged_pointer(obj) {
         return obj;
     }
     let cls = unsafe { runtime::object_class(obj) };
@@ -323,7 +323,7 @@ pub fn release_default(obj: Id) {
 }
 
 pub fn release(obj: Id) {
-    if obj.is_null() {
+    if obj.is_null() || is_tagged_pointer(obj) {
         return;
     }
     let cls = unsafe { runtime::object_class(obj) };
@@ -405,7 +405,7 @@ pub fn autorelease_default(obj: Id) -> Id {
 }
 
 pub fn autorelease(obj: Id) -> Id {
-    if obj.is_null() {
+    if obj.is_null() || is_tagged_pointer(obj) {
         return obj;
     }
     let cls = unsafe { runtime::object_class(obj) };

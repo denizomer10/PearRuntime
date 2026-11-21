@@ -44,7 +44,12 @@ pub extern "C" fn lookup_for_send(receiver: Id, s: Sel) -> Dispatch {
         let target = if runtime::is_meta(cls) { receiver as *const ClassT } else { cls };
         runtime::ensure_initialized(target);
         match runtime::lookup(cls, s) {
-            Some(imp) => Dispatch { imp, receiver },
+            Some(imp) => {
+                if !is_tagged_pointer(receiver) {
+                    runtime::fast_cache_insert(cls, s, imp);
+                }
+                Dispatch { imp, receiver }
+            }
             None => forward(receiver, cls, s, 0),
         }
     }
@@ -162,9 +167,72 @@ macro_rules! dispatching_stub {
     };
 }
 
+macro_rules! dispatching_stub_cached {
+    ($lookup:path) => {
+        core::arch::naked_asm!(
+            "cbz x0, 9f",
+            "tst x0, #1",
+            "b.ne 1f",
+            "tbnz x0, #63, 1f",
+            "ldr x16, [x0]",
+            "ldr x11, [x16, #16]",
+            "ldr x10, [x11]",
+            "cbz x10, 1f",
+            "ldr w12, [x11, #8]",
+            "lsr x13, x1, #3",
+            "and x13, x13, x12",
+            "add x14, x10, x13, lsl #4",
+            "ldp x15, x17, [x14]",
+            "cmp x15, x1",
+            "b.ne 1f",
+            "cbz x17, 1f",
+            "br x17",
+            "1:",
+            "stp x29, x30, [sp, #-16]!",
+            "mov x29, sp",
+            "sub sp, sp, #208",
+            "stp x0, x1, [sp, #0]",
+            "stp x2, x3, [sp, #16]",
+            "stp x4, x5, [sp, #32]",
+            "stp x6, x7, [sp, #48]",
+            "str x8, [sp, #64]",
+            "stp q0, q1, [sp, #80]",
+            "stp q2, q3, [sp, #112]",
+            "stp q4, q5, [sp, #144]",
+            "stp q6, q7, [sp, #176]",
+            "bl {lookup}",
+            // x0 = IMP, x1 = receiver
+            "mov x17, x0",
+            "mov x16, x1",
+            "ldp x0, x1, [sp, #0]",
+            "ldp x2, x3, [sp, #16]",
+            "ldp x4, x5, [sp, #32]",
+            "ldp x6, x7, [sp, #48]",
+            "ldr x8, [sp, #64]",
+            "ldp q0, q1, [sp, #80]",
+            "ldp q2, q3, [sp, #112]",
+            "ldp q4, q5, [sp, #144]",
+            "ldp q6, q7, [sp, #176]",
+            "mov sp, x29",
+            "ldp x29, x30, [sp], #16",
+            "mov x0, x16",
+            "br x17",
+            // nil receiver: zero the integer and float result registers.
+            "9:",
+            "mov x1, #0",
+            "movi d0, #0",
+            "movi d1, #0",
+            "movi d2, #0",
+            "movi d3, #0",
+            "ret",
+            lookup = sym $lookup,
+        )
+    };
+}
+
 #[unsafe(naked)]
 pub extern "C" fn objc_msg_send() {
-    dispatching_stub!(lookup_for_send)
+    dispatching_stub_cached!(lookup_for_send)
 }
 
 /// x0 is a `struct objc_super *` (never nil).

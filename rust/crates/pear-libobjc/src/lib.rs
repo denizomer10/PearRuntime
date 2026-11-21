@@ -25,6 +25,7 @@
 
 pub mod abi;
 pub mod blocks;
+pub mod exceptions;
 pub mod message;
 pub mod object;
 pub mod props;
@@ -184,68 +185,6 @@ unsafe extern "C" fn class_add_method(cls: *const ClassT, s: Sel, imp: Imp, _typ
     true
 }
 
-/// While a C++ or Objective-C exception unwinds through image code: no
-/// handlers yet, so cleanups are skipped (`_URC_CONTINUE_UNWIND`).
-extern "C" fn objc_personality_v0() -> i32 {
-    8
-}
-
-// ---- Exceptions (step 2 placeholders; full LSDA unwinder in step 3) ------
-
-#[repr(C)]
-pub struct ObjcEhtype {
-    pub vtable: *const c_void,
-    pub name: *const c_char,
-    pub cls: *const ClassT,
-}
-unsafe impl Sync for ObjcEhtype {}
-
-#[repr(transparent)]
-pub struct StaticVtable(pub [usize; 4]);
-unsafe impl Sync for StaticVtable {}
-
-pub static OBJC_EMPTY_VTABLE: StaticVtable = StaticVtable([0; 4]);
-pub static OBJC_EHTYPE_VTABLE: StaticVtable = StaticVtable([0; 4]);
-pub static OBJC_EHTYPE_ID: ObjcEhtype = ObjcEhtype {
-    vtable: &raw const OBJC_EHTYPE_VTABLE as *const c_void,
-    name: c"id".as_ptr(),
-    cls: std::ptr::null(),
-};
-
-static EXCEPTION_PREPROCESSOR: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-extern "C" fn objc_set_exception_preprocessor(new_fn: *const c_void) -> *const c_void {
-    EXCEPTION_PREPROCESSOR.swap(new_fn as usize, std::sync::atomic::Ordering::AcqRel) as *const c_void
-}
-
-extern "C" fn objc_exception_throw(exception: Id) -> ! {
-    let cls_name = if exception.is_null() {
-        "nil".to_string()
-    } else {
-        let c = unsafe { runtime::object_class(exception) };
-        runtime::class(c).map_or_else(|| "?".to_string(), |ci| ci.name.clone())
-    };
-    eprintln!("[pear-libobjc] uncaught Objective-C exception <{cls_name} {:p}>", exception);
-    std::process::abort();
-}
-
-extern "C" fn objc_exception_rethrow() -> ! {
-    eprintln!("[pear-libobjc] objc_exception_rethrow");
-    std::process::abort();
-}
-
-extern "C" fn objc_begin_catch(exc_buf: *mut c_void) -> Id {
-    exc_buf as Id
-}
-
-extern "C" fn objc_end_catch() {}
-
-extern "C" fn objc_terminate() -> ! {
-    eprintln!("[pear-libobjc] objc_terminate");
-    std::process::abort();
-}
-
 /// The address of a libobjc symbol (Mach-O name, with its `_`), for a
 /// pear-dyld resolver (and libclosure symbols imported from libSystem).
 pub fn symbol(name: &str) -> Option<usize> {
@@ -260,9 +199,9 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_OBJC_CLASS_$_NSObject" => Some(object::NSOBJECT_CLASS.ptr() as usize),
         "_OBJC_METACLASS_$_NSObject" => Some(object::NSOBJECT_META.ptr() as usize),
         "__objc_empty_cache" => Some(&object::EMPTY_CACHE as *const _ as usize),
-        "__objc_empty_vtable" => Some(&OBJC_EMPTY_VTABLE as *const _ as usize),
-        "_objc_ehtype_vtable" | "__objc_ehtype_vtable" => Some(&OBJC_EHTYPE_VTABLE as *const _ as usize),
-        "_OBJC_EHTYPE_id" => Some(&OBJC_EHTYPE_ID as *const _ as usize),
+        "__objc_empty_vtable" => Some(&exceptions::OBJC_EMPTY_VTABLE as *const _ as usize),
+        "_objc_ehtype_vtable" | "__objc_ehtype_vtable" => Some(&exceptions::OBJC_EHTYPE_VTABLE as *const _ as usize),
+        "_OBJC_EHTYPE_id" => Some(&exceptions::OBJC_EHTYPE_ID as *const _ as usize),
         "_objc_retain" => f(objc_retain as *const ()),
         "_objc_release" => f(objc_release as *const ()),
         "_objc_autorelease" => f(objc_autorelease as *const ()),
@@ -388,13 +327,13 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_imp_getBlock" => f(blocks::imp_get_block as *const ()),
         "_imp_removeBlock" => f(blocks::imp_remove_block as *const ()),
         // Exceptions
-        "___objc_personality_v0" => f(objc_personality_v0 as *const ()),
-        "_objc_exception_throw" => f(objc_exception_throw as *const ()),
-        "_objc_exception_rethrow" => f(objc_exception_rethrow as *const ()),
-        "_objc_begin_catch" => f(objc_begin_catch as *const ()),
-        "_objc_end_catch" => f(objc_end_catch as *const ()),
-        "_objc_terminate" => f(objc_terminate as *const ()),
-        "_objc_setExceptionPreprocessor" => f(objc_set_exception_preprocessor as *const ()),
+        "___objc_personality_v0" => f(exceptions::objc_personality_v0 as *const ()),
+        "_objc_exception_throw" => f(exceptions::objc_exception_throw as *const ()),
+        "_objc_exception_rethrow" => f(exceptions::objc_exception_rethrow as *const ()),
+        "_objc_begin_catch" => f(exceptions::objc_begin_catch as *const ()),
+        "_objc_end_catch" => f(exceptions::objc_end_catch as *const ()),
+        "_objc_terminate" => f(exceptions::objc_terminate as *const ()),
+        "_objc_setExceptionPreprocessor" => f(exceptions::objc_set_exception_preprocessor as *const ()),
         _ => message::register_variant(name),
     }
 }
