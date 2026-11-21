@@ -50,6 +50,13 @@ foundation_class!(NSURL_CLASS, NSURL_META);
 foundation_class!(NSSET_CLASS, NSSET_META);
 foundation_class!(NSMUTABLESET_CLASS, NSMUTABLESET_META);
 foundation_class!(NSUSERDEFAULTS_CLASS, NSUSERDEFAULTS_META);
+foundation_class!(NSJSONSERIALIZATION_CLASS, NSJSONSERIALIZATION_META);
+foundation_class!(NSCHARACTERSET_CLASS, NSCHARACTERSET_META);
+foundation_class!(NSLOCALE_CLASS, NSLOCALE_META);
+foundation_class!(NSURLREQUEST_CLASS, NSURLREQUEST_META);
+foundation_class!(NSMUTABLEURLREQUEST_CLASS, NSMUTABLEURLREQUEST_META);
+foundation_class!(NSUUID_CLASS, NSUUID_META);
+foundation_class!(NSPROCESSINFO_CLASS, NSPROCESSINFO_META);
 
 static K_CF_ALLOCATOR_DEFAULT: usize = 0;
 
@@ -766,6 +773,90 @@ pub fn init_foundation() {
             ],
             &[("standardUserDefaults", i(ud_standard as *const ()))],
         );
+        runtime::register_builtin(
+            NSJSONSERIALIZATION_CLASS.ptr(),
+            NSJSONSERIALIZATION_META.ptr(),
+            "NSJSONSerialization",
+            16,
+            &[],
+            &[
+                ("JSONObjectWithData:options:error:", i(json_decode as *const ())),
+                ("dataWithJSONObject:options:error:", i(json_encode as *const ())),
+            ],
+        );
+        runtime::register_builtin(
+            NSCHARACTERSET_CLASS.ptr(),
+            NSCHARACTERSET_META.ptr(),
+            "NSCharacterSet",
+            16,
+            &[("dealloc", i(f_dealloc as *const ()))],
+            &[
+                ("whitespaceCharacterSet", i(cs_ws as *const ())),
+                ("whitespaceAndNewlineCharacterSet", i(cs_ws_nl as *const ())),
+                ("decimalDigitCharacterSet", i(cs_digits as *const ())),
+                ("alphanumericCharacterSet", i(cs_alnum as *const ())),
+            ],
+        );
+        runtime::register_builtin(
+            NSLOCALE_CLASS.ptr(),
+            NSLOCALE_META.ptr(),
+            "NSLocale",
+            16,
+            &[("localeIdentifier", i(locale_id as *const ())), ("dealloc", i(f_dealloc as *const ()))],
+            &[
+                ("currentLocale", i(locale_current as *const ())),
+                ("preferredLanguages", i(locale_langs as *const ())),
+            ],
+        );
+        runtime::register_builtin(
+            NSURLREQUEST_CLASS.ptr(),
+            NSURLREQUEST_META.ptr(),
+            "NSURLRequest",
+            16,
+            &[
+                ("URL", i(req_url as *const ())),
+                ("HTTPMethod", i(req_method as *const ())),
+                ("HTTPBody", i(req_body as *const ())),
+                ("dealloc", i(f_dealloc as *const ())),
+            ],
+            &[("requestWithURL:", i(req_with_url as *const ()))],
+        );
+        runtime::register_builtin(
+            NSMUTABLEURLREQUEST_CLASS.ptr(),
+            NSMUTABLEURLREQUEST_META.ptr(),
+            "NSMutableURLRequest",
+            16,
+            &[
+                ("URL", i(req_url as *const ())),
+                ("HTTPMethod", i(req_method as *const ())),
+                ("setHTTPMethod:", i(req_set_method as *const ())),
+                ("setValue:forHTTPHeaderField:", i(req_set_header as *const ())),
+                ("HTTPBody", i(req_body as *const ())),
+                ("setHTTPBody:", i(req_set_body as *const ())),
+                ("dealloc", i(f_dealloc as *const ())),
+            ],
+            &[("requestWithURL:", i(mreq_with_url as *const ()))],
+        );
+        runtime::register_builtin(
+            NSUUID_CLASS.ptr(),
+            NSUUID_META.ptr(),
+            "NSUUID",
+            16,
+            &[("UUIDString", i(uuid_string as *const ())), ("dealloc", i(f_dealloc as *const ()))],
+            &[("UUID", i(uuid_new as *const ()))],
+        );
+        runtime::register_builtin(
+            NSPROCESSINFO_CLASS.ptr(),
+            NSPROCESSINFO_META.ptr(),
+            "NSProcessInfo",
+            16,
+            &[
+                ("operatingSystemVersionString", i(pi_os_ver as *const ())),
+                ("processorCount", i(pi_cpus as *const ())),
+                ("physicalMemory", i(pi_mem as *const ())),
+            ],
+            &[("processInfo", i(pi_shared as *const ()))],
+        );
     });
 }
 
@@ -900,12 +991,342 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_OBJC_CLASS_$_NSSet" => Some(NSSET_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSMutableSet" => Some(NSMUTABLESET_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSUserDefaults" => Some(NSUSERDEFAULTS_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSJSONSerialization" => Some(NSJSONSERIALIZATION_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSCharacterSet" => Some(NSCHARACTERSET_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSLocale" => Some(NSLOCALE_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSURLRequest" => Some(NSURLREQUEST_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSMutableURLRequest" => Some(NSMUTABLEURLREQUEST_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSUUID" => Some(NSUUID_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSProcessInfo" => Some(NSPROCESSINFO_CLASS.ptr() as usize),
         "_CFRetain" => f(cf_retain as *const ()),
         "_CFRelease" => f(cf_release as *const ()),
         "_CFStringCreateWithCString" => f(cf_string_create_with_cstring as *const ()),
         "_CFStringGetCStringPtr" => f(cf_string_get_cstring_ptr as *const ()),
+        "_CFDataCreate" => f(cf_data_create as *const ()),
+        "_CFDataGetBytePtr" => f(cf_data_get_byte_ptr as *const ()),
+        "_CFDataGetLength" => f(cf_data_get_length as *const ()),
+        "_CFArrayGetCount" => f(cf_array_get_count as *const ()),
+        "_CFArrayGetValueAtIndex" => f(cf_array_get_value_at_index as *const ()),
+        "_CFDictionaryGetValue" => f(cf_dictionary_get_value as *const ()),
         _ => None,
     }
+}
+
+// ---- JSON / CharacterSet / Locale / URLRequest / UUID / ProcessInfo / CF ----
+
+fn json_skip_ws(b: &[u8], i: &mut usize) {
+    while *i < b.len() && b[*i].is_ascii_whitespace() {
+        *i += 1;
+    }
+}
+
+fn json_parse_str(b: &[u8], i: &mut usize) -> Option<String> {
+    if b.get(*i) != Some(&b'"') { return None; }
+    *i += 1;
+    let mut out = String::new();
+    while *i < b.len() {
+        let c = b[*i];
+        *i += 1;
+        if c == b'"' { return Some(out); }
+        if c == b'\\' && *i < b.len() {
+            let esc = b[*i];
+            *i += 1;
+            match esc {
+                b'"' => out.push('"'),
+                b'\\' => out.push('\\'),
+                b'/' => out.push('/'),
+                b'n' => out.push('\n'),
+                b'r' => out.push('\r'),
+                b't' => out.push('\t'),
+                _ => out.push(esc as char),
+            }
+        } else {
+            out.push(c as char);
+        }
+    }
+    None
+}
+
+unsafe fn json_parse_val(b: &[u8], i: &mut usize) -> Option<Id> {
+    json_skip_ws(b, i);
+    let c = *b.get(*i)?;
+    match c {
+        b'"' => json_parse_str(b, i).map(|s| nsstring_from_rust(&s)),
+        b'{' => {
+            *i += 1;
+            let mut map = HashMap::new();
+            json_skip_ws(b, i);
+            if b.get(*i) == Some(&b'}') {
+                *i += 1;
+                return Some(alloc_with_backing(NSDICTIONARY_CLASS.ptr(), Backing::Dict(map)));
+            }
+            loop {
+                json_skip_ws(b, i);
+                let k = json_parse_str(b, i)?;
+                json_skip_ws(b, i);
+                if b.get(*i) != Some(&b':') { return None; }
+                *i += 1;
+                let v = json_parse_val(b, i)?;
+                map.insert(k, retain(v) as usize);
+                json_skip_ws(b, i);
+                match b.get(*i) {
+                    Some(&b',') => *i += 1,
+                    Some(&b'}') => { *i += 1; break; }
+                    _ => return None,
+                }
+            }
+            Some(alloc_with_backing(NSDICTIONARY_CLASS.ptr(), Backing::Dict(map)))
+        }
+        b'[' => {
+            *i += 1;
+            let mut vec = Vec::new();
+            json_skip_ws(b, i);
+            if b.get(*i) == Some(&b']') {
+                *i += 1;
+                return Some(alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(vec)));
+            }
+            loop {
+                let v = json_parse_val(b, i)?;
+                vec.push(retain(v) as usize);
+                json_skip_ws(b, i);
+                match b.get(*i) {
+                    Some(&b',') => *i += 1,
+                    Some(&b']') => { *i += 1; break; }
+                    _ => return None,
+                }
+            }
+            Some(alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(vec)))
+        }
+        b't' if b[*i..].starts_with(b"true") => {
+            *i += 4;
+            Some(alloc_with_backing(NSNUMBER_CLASS.ptr(), Backing::NumBool(true)))
+        }
+        b'f' if b[*i..].starts_with(b"false") => {
+            *i += 5;
+            Some(alloc_with_backing(NSNUMBER_CLASS.ptr(), Backing::NumBool(false)))
+        }
+        b'n' if b[*i..].starts_with(b"null") => {
+            *i += 4;
+            Some(std::ptr::null_mut())
+        }
+        b'-' | b'0'..=b'9' => {
+            let start = *i;
+            while *i < b.len() && (b[*i].is_ascii_digit() || matches!(b[*i], b'-' | b'+' | b'.' | b'e' | b'E')) {
+                *i += 1;
+            }
+            let s = std::str::from_utf8(&b[start..*i]).ok()?;
+            if s.contains('.') || s.contains('e') || s.contains('E') {
+                let v: f64 = s.parse().ok()?;
+                Some(alloc_with_backing(NSNUMBER_CLASS.ptr(), Backing::NumF64(v)))
+            } else {
+                let v: i64 = s.parse().ok()?;
+                Some(alloc_with_backing(NSNUMBER_CLASS.ptr(), Backing::NumI64(v)))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn json_serialize_val(obj: Id, out: &mut String) {
+    if obj.is_null() {
+        out.push_str("null");
+        return;
+    }
+    let backing = store().lock().unwrap().get(&(obj as usize)).cloned();
+    match backing {
+        Some(Backing::Str(s)) => {
+            out.push('"');
+            for ch in s.chars() {
+                match ch {
+                    '"' => out.push_str("\\\""),
+                    '\\' => out.push_str("\\\\"),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\t' => out.push_str("\\t"),
+                    _ => out.push(ch),
+                }
+            }
+            out.push('"');
+        }
+        Some(Backing::NumBool(b)) => out.push_str(if b { "true" } else { "false" }),
+        Some(Backing::NumI64(n)) => out.push_str(&n.to_string()),
+        Some(Backing::NumF64(n)) => out.push_str(&n.to_string()),
+        Some(Backing::Arr(arr)) => {
+            out.push('[');
+            for (idx, p) in arr.into_iter().enumerate() {
+                if idx > 0 { out.push(','); }
+                json_serialize_val(p as Id, out);
+            }
+            out.push(']');
+        }
+        Some(Backing::Dict(d)) => {
+            out.push('{');
+            for (idx, (k, p)) in d.into_iter().enumerate() {
+                if idx > 0 { out.push(','); }
+                out.push('"');
+                out.push_str(&k);
+                out.push_str("\":");
+                json_serialize_val(p as Id, out);
+            }
+            out.push('}');
+        }
+        _ => out.push_str("null"),
+    }
+}
+
+extern "C" fn json_decode(_self: Id, _cmd: Sel, data: Id, _opts: usize, _err: *mut Id) -> Id {
+    let bytes = match store().lock().unwrap().get(&(data as usize)).cloned() {
+        Some(Backing::Bytes(b)) => b,
+        _ => return std::ptr::null_mut(),
+    };
+    let mut i = 0;
+    unsafe { json_parse_val(&bytes, &mut i) }.unwrap_or(std::ptr::null_mut())
+}
+
+extern "C" fn json_encode(_self: Id, _cmd: Sel, obj: Id, _opts: usize, _err: *mut Id) -> Id {
+    let mut out = String::new();
+    json_serialize_val(obj, &mut out);
+    unsafe { alloc_with_backing(NSDATA_CLASS.ptr(), Backing::Bytes(out.into_bytes())) }
+}
+
+extern "C" fn cs_ws(_self: Id, _cmd: Sel) -> Id {
+    unsafe { alloc_with_backing(NSCHARACTERSET_CLASS.ptr(), Backing::Str(" \t".into())) }
+}
+extern "C" fn cs_ws_nl(_self: Id, _cmd: Sel) -> Id {
+    unsafe { alloc_with_backing(NSCHARACTERSET_CLASS.ptr(), Backing::Str(" \t\r\n".into())) }
+}
+extern "C" fn cs_digits(_self: Id, _cmd: Sel) -> Id {
+    unsafe { alloc_with_backing(NSCHARACTERSET_CLASS.ptr(), Backing::Str("0123456789".into())) }
+}
+extern "C" fn cs_alnum(_self: Id, _cmd: Sel) -> Id {
+    unsafe { alloc_with_backing(NSCHARACTERSET_CLASS.ptr(), Backing::Str("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".into())) }
+}
+
+extern "C" fn locale_current(_self: Id, _cmd: Sel) -> Id {
+    let id = std::env::var("LANG").unwrap_or_else(|_| "en_US".to_string());
+    unsafe { alloc_with_backing(NSLOCALE_CLASS.ptr(), Backing::Str(id)) }
+}
+extern "C" fn locale_id(self_: Id, _cmd: Sel) -> Id {
+    let s = rust_str_from_nsstring(self_).unwrap_or_else(|| "en_US".to_string());
+    nsstring_from_rust(&s)
+}
+extern "C" fn locale_langs(_self: Id, _cmd: Sel) -> Id {
+    let en = nsstring_from_rust("en");
+    unsafe { alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(vec![retain(en) as usize])) }
+}
+
+extern "C" fn req_with_url(_self: Id, _cmd: Sel, url: Id) -> Id {
+    let mut map = HashMap::new();
+    map.insert("url".into(), retain(url) as usize);
+    map.insert("method".into(), retain(nsstring_from_rust("GET")) as usize);
+    unsafe { alloc_with_backing(NSURLREQUEST_CLASS.ptr(), Backing::Dict(map)) }
+}
+extern "C" fn mreq_with_url(_self: Id, _cmd: Sel, url: Id) -> Id {
+    let mut map = HashMap::new();
+    map.insert("url".into(), retain(url) as usize);
+    map.insert("method".into(), retain(nsstring_from_rust("GET")) as usize);
+    unsafe { alloc_with_backing(NSMUTABLEURLREQUEST_CLASS.ptr(), Backing::Dict(map)) }
+}
+extern "C" fn req_url(self_: Id, _cmd: Sel) -> Id {
+    if let Some(Backing::Dict(d)) = store().lock().unwrap().get(&(self_ as usize)) {
+        return d.get("url").copied().unwrap_or(0) as Id;
+    }
+    std::ptr::null_mut()
+}
+extern "C" fn req_method(self_: Id, _cmd: Sel) -> Id {
+    if let Some(Backing::Dict(d)) = store().lock().unwrap().get(&(self_ as usize)) {
+        return d.get("method").copied().unwrap_or(0) as Id;
+    }
+    nsstring_from_rust("GET")
+}
+extern "C" fn req_set_method(self_: Id, _cmd: Sel, m: Id) {
+    if let Some(Backing::Dict(d)) = store().lock().unwrap().get_mut(&(self_ as usize)) {
+        d.insert("method".into(), retain(m) as usize);
+    }
+}
+extern "C" fn req_set_header(self_: Id, _cmd: Sel, v: Id, field: Id) {
+    let f = rust_str_from_nsstring(field).unwrap_or_default();
+    if let Some(Backing::Dict(d)) = store().lock().unwrap().get_mut(&(self_ as usize)) {
+        d.insert(format!("hdr:{f}"), retain(v) as usize);
+    }
+}
+extern "C" fn req_body(self_: Id, _cmd: Sel) -> Id {
+    if let Some(Backing::Dict(d)) = store().lock().unwrap().get(&(self_ as usize)) {
+        return d.get("body").copied().unwrap_or(0) as Id;
+    }
+    std::ptr::null_mut()
+}
+extern "C" fn req_set_body(self_: Id, _cmd: Sel, body: Id) {
+    if let Some(Backing::Dict(d)) = store().lock().unwrap().get_mut(&(self_ as usize)) {
+        d.insert("body".into(), retain(body) as usize);
+    }
+}
+
+extern "C" fn uuid_new(_self: Id, _cmd: Sel) -> Id {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let s = format!("50656172-5369-4c69-8000-{n:012x}");
+    unsafe { alloc_with_backing(NSUUID_CLASS.ptr(), Backing::Str(s)) }
+}
+extern "C" fn uuid_string(self_: Id, _cmd: Sel) -> Id {
+    let s = rust_str_from_nsstring(self_).unwrap_or_default();
+    nsstring_from_rust(&s)
+}
+
+extern "C" fn pi_shared(_self: Id, _cmd: Sel) -> Id {
+    static S: OnceLock<usize> = OnceLock::new();
+    *S.get_or_init(|| unsafe { alloc_with_backing(NSPROCESSINFO_CLASS.ptr(), Backing::Arr(Vec::new())) } as usize) as Id
+}
+extern "C" fn pi_os_ver(_self: Id, _cmd: Sel) -> Id {
+    nsstring_from_rust("PearRuntime 1.0 (iOS 17.0 compatible)")
+}
+extern "C" fn pi_cpus(_self: Id, _cmd: Sel) -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+}
+extern "C" fn pi_mem(_self: Id, _cmd: Sel) -> u64 {
+    4u64 * 1024 * 1024 * 1024
+}
+
+pub unsafe extern "C" fn cf_data_create(_alloc: *const c_void, bytes: *const u8, len: isize) -> Id {
+    let slice = if bytes.is_null() || len <= 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(bytes, len as usize)
+    };
+    alloc_with_backing(NSDATA_CLASS.ptr(), Backing::Bytes(slice.to_vec()))
+}
+pub extern "C" fn cf_data_get_length(data: Id) -> isize {
+    if let Some(Backing::Bytes(b)) = store().lock().unwrap().get(&(data as usize)) {
+        return b.len() as isize;
+    }
+    0
+}
+pub extern "C" fn cf_data_get_byte_ptr(data: Id) -> *const u8 {
+    static EMPTY: [u8; 0] = [];
+    if let Some(Backing::Bytes(b)) = store().lock().unwrap().get(&(data as usize)) {
+        return b.as_ptr();
+    }
+    EMPTY.as_ptr()
+}
+pub extern "C" fn cf_array_get_count(arr: Id) -> isize {
+    if let Some(Backing::Arr(v)) = store().lock().unwrap().get(&(arr as usize)) {
+        return v.len() as isize;
+    }
+    0
+}
+pub extern "C" fn cf_array_get_value_at_index(arr: Id, idx: isize) -> *const c_void {
+    if idx < 0 { return std::ptr::null(); }
+    if let Some(Backing::Arr(v)) = store().lock().unwrap().get(&(arr as usize)) {
+        return v.get(idx as usize).copied().unwrap_or(0) as *const c_void;
+    }
+    std::ptr::null()
+}
+pub extern "C" fn cf_dictionary_get_value(dict: Id, key: Id) -> *const c_void {
+    let k = rust_str_from_nsstring(key).unwrap_or_default();
+    if let Some(Backing::Dict(d)) = store().lock().unwrap().get(&(dict as usize)) {
+        return d.get(&k).copied().unwrap_or(0) as *const c_void;
+    }
+    std::ptr::null()
 }
 
 #[cfg(test)]
@@ -956,7 +1377,39 @@ mod tests {
 
             let cls_name = ns_string_from_class(NSSTRING_CLASS.ptr());
             assert_eq!(rust_str_from_nsstring(cls_name).as_deref(), Some("NSString"));
+
+            let jraw = b"{\"ok\":true,\"n\":7,\"arr\":[1,\"hi\"]}";
+            let jdata = cf_data_create(std::ptr::null(), jraw.as_ptr(), jraw.len() as isize);
+            let parsed: Id = send3(
+                NSJSONSERIALIZATION_CLASS.ptr() as Id,
+                "JSONObjectWithData:options:error:",
+                jdata,
+                0usize,
+                std::ptr::null_mut::<Id>(),
+            );
+            let k_arr = nsstring_from_rust("arr");
+            let arr_ptr = cf_dictionary_get_value(parsed, k_arr) as Id;
+            assert_eq!(cf_array_get_count(arr_ptr), 2);
+            let encoded: Id = send3(
+                NSJSONSERIALIZATION_CLASS.ptr() as Id,
+                "dataWithJSONObject:options:error:",
+                parsed,
+                0usize,
+                std::ptr::null_mut::<Id>(),
+            );
+            assert!(cf_data_get_length(encoded) > 10);
+
+            let uuid: Id = send0(NSUUID_CLASS.ptr() as Id, "UUID");
+            let ustr: Id = send0(uuid, "UUIDString");
+            assert!(rust_str_from_nsstring(ustr).unwrap().starts_with("50656172-"));
         }
+    }
+
+    unsafe fn send3<A1, A2, A3, R>(obj: Id, name: &str, a1: A1, a2: A2, a3: A3) -> R {
+        let s = sel(name);
+        let d = lookup_for_send(obj, s);
+        let f: extern "C" fn(Id, Sel, A1, A2, A3) -> R = std::mem::transmute(d.imp);
+        f(d.receiver, s, a1, a2, a3)
     }
 
     unsafe fn send2<A1, A2, R>(obj: Id, name: &str, a1: A1, a2: A2) -> R {

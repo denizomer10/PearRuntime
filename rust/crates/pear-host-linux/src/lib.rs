@@ -22,6 +22,69 @@ struct LinuxWindow {
     frame: Rect,
     root_layer: usize,
     visible: bool,
+    x11_window: u64,
+}
+
+#[cfg(target_os = "linux")]
+mod x11_ffi {
+    use std::ffi::{c_char, c_int, c_ulong, c_void};
+
+    pub struct X11Lib {
+        pub display: *mut c_void,
+        pub x_create_simple_window: unsafe extern "C" fn(
+            *mut c_void,
+            c_ulong,
+            c_int,
+            c_int,
+            u32,
+            u32,
+            u32,
+            c_ulong,
+            c_ulong,
+        ) -> c_ulong,
+        pub x_root_window: unsafe extern "C" fn(*mut c_void, c_int) -> c_ulong,
+        pub x_default_screen: unsafe extern "C" fn(*mut c_void) -> c_int,
+        pub x_map_window: unsafe extern "C" fn(*mut c_void, c_ulong) -> c_int,
+        pub x_flush: unsafe extern "C" fn(*mut c_void) -> c_int,
+        pub _x_pending: unsafe extern "C" fn(*mut c_void) -> c_int,
+        pub _x_next_event: unsafe extern "C" fn(*mut c_void, *mut u8) -> c_int,
+    }
+
+    unsafe impl Send for X11Lib {}
+    unsafe impl Sync for X11Lib {}
+
+    extern "C" {
+        fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
+        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    }
+
+    pub fn try_open() -> Option<X11Lib> {
+        if std::env::var_os("DISPLAY").is_none() {
+            return None;
+        }
+        unsafe {
+            let h = dlopen(c"libX11.so.6".as_ptr(), 1);
+            if h.is_null() {
+                return None;
+            }
+            let x_open: unsafe extern "C" fn(*const c_char) -> *mut c_void =
+                std::mem::transmute(dlsym(h, c"XOpenDisplay".as_ptr()));
+            let display = x_open(std::ptr::null());
+            if display.is_null() {
+                return None;
+            }
+            Some(X11Lib {
+                display,
+                x_create_simple_window: std::mem::transmute(dlsym(h, c"XCreateSimpleWindow".as_ptr())),
+                x_root_window: std::mem::transmute(dlsym(h, c"XRootWindow".as_ptr())),
+                x_default_screen: std::mem::transmute(dlsym(h, c"XDefaultScreen".as_ptr())),
+                x_map_window: std::mem::transmute(dlsym(h, c"XMapWindow".as_ptr())),
+                x_flush: std::mem::transmute(dlsym(h, c"XFlush".as_ptr())),
+                _x_pending: std::mem::transmute(dlsym(h, c"XPending".as_ptr())),
+                _x_next_event: std::mem::transmute(dlsym(h, c"XNextEvent".as_ptr())),
+            })
+        }
+    }
 }
 
 #[derive(Default)]
@@ -107,12 +170,39 @@ impl HostPlatform for LinuxHost {
 
     fn create_window(&self, owner: GuestObject, frame: Rect) -> WindowHandle {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        #[allow(unused_mut)]
+        let mut x11_window = 0u64;
+        #[cfg(target_os = "linux")]
+        if !self.use_wayland {
+            if let Some(x11) = x11_ffi::try_open() {
+                unsafe {
+                    let scr = (x11.x_default_screen)(x11.display);
+                    let root = (x11.x_root_window)(x11.display, scr);
+                    let w = (frame.width as u32).max(64);
+                    let h = (frame.height as u32).max(64);
+                    x11_window = (x11.x_create_simple_window)(
+                        x11.display,
+                        root,
+                        frame.x as i32,
+                        frame.y as i32,
+                        w,
+                        h,
+                        0,
+                        0,
+                        0,
+                    ) as u64;
+                    (x11.x_map_window)(x11.display, x11_window as _);
+                    (x11.x_flush)(x11.display);
+                }
+            }
+        }
         let win = LinuxWindow {
             _id: id,
             _owner: owner.0 as usize,
             frame,
             root_layer: 0,
             visible: false,
+            x11_window,
         };
         self.state.lock().unwrap().windows.insert(id, win);
         WindowHandle(id as usize as *mut c_void)
@@ -154,7 +244,7 @@ impl HostPlatform for LinuxHost {
         } else {
             NativeSurface::Xlib {
                 display: std::ptr::null_mut(),
-                window: win_id,
+                window: if win.x11_window != 0 { win.x11_window } else { win_id },
             }
         };
         Some(SurfaceInfo {

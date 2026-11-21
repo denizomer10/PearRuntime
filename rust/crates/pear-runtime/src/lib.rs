@@ -13,7 +13,120 @@ pub use pear_macho;
 #[cfg(target_os = "linux")]
 pub use pear_host_linux;
 
+use std::cell::UnsafeCell;
 use std::ffi::{c_char, c_void};
+use std::sync::Once;
+use pear_libobjc::abi::{ClassT, Id, Imp, Sel};
+use pear_libobjc::object::{alloc, EMPTY_CACHE, NSOBJECT_CLASS, NSOBJECT_META, StaticClass};
+use pear_libobjc::runtime as objc_rt;
+
+macro_rules! guest_class {
+    ($cls:ident, $meta:ident) => {
+        static $meta: StaticClass = StaticClass(UnsafeCell::new(ClassT {
+            isa: &raw const NSOBJECT_META as *const ClassT,
+            superclass: &raw const NSOBJECT_META as *const ClassT,
+            cache: &raw const EMPTY_CACHE as *const c_void,
+            vtable: std::ptr::null(),
+            bits: 0,
+        }));
+        static $cls: StaticClass = StaticClass(UnsafeCell::new(ClassT {
+            isa: &raw const $meta as *const ClassT,
+            superclass: &raw const NSOBJECT_CLASS as *const ClassT,
+            cache: &raw const EMPTY_CACHE as *const c_void,
+            vtable: std::ptr::null(),
+            bits: 0,
+        }));
+    };
+}
+
+guest_class!(CALAYER_CLASS, CALAYER_META);
+guest_class!(CAMETALLAYER_CLASS, CAMETALLAYER_META);
+guest_class!(CAEAGLLAYER_CLASS, CAEAGLLAYER_META);
+guest_class!(CATRANSACTION_CLASS, CATRANSACTION_META);
+guest_class!(CADISPLAYLINK_CLASS, CADISPLAYLINK_META);
+guest_class!(UIAPPLICATION_CLASS, UIAPPLICATION_META);
+guest_class!(UIWINDOW_CLASS, UIWINDOW_META);
+guest_class!(UIVIEW_CLASS, UIVIEW_META);
+guest_class!(UISCREEN_CLASS, UISCREEN_META);
+guest_class!(UICOLOR_CLASS, UICOLOR_META);
+guest_class!(UIIMAGE_CLASS, UIIMAGE_META);
+guest_class!(UILABEL_CLASS, UILABEL_META);
+guest_class!(UIFONT_CLASS, UIFONT_META);
+guest_class!(UIDEVICE_CLASS, UIDEVICE_META);
+
+extern "C" fn shared_app_stub(_self: Id, _cmd: Sel) -> Id {
+    static APP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *APP.get_or_init(|| unsafe { alloc(UIAPPLICATION_CLASS.ptr()) } as usize) as Id
+}
+
+extern "C" fn main_screen_stub(_self: Id, _cmd: Sel) -> Id {
+    static SCR: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *SCR.get_or_init(|| unsafe { alloc(UISCREEN_CLASS.ptr()) } as usize) as Id
+}
+
+extern "C" fn screen_scale_stub(_self: Id, _cmd: Sel) -> f64 {
+    pear_host::host().screen().scale
+}
+
+extern "C" fn current_device_stub(_self: Id, _cmd: Sel) -> Id {
+    static DEV: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *DEV.get_or_init(|| unsafe { alloc(UIDEVICE_CLASS.ptr()) } as usize) as Id
+}
+
+extern "C" fn device_system_name(_self: Id, _cmd: Sel) -> Id {
+    pear_foundation::nsstring_from_rust("iOS")
+}
+
+extern "C" fn noop_method(_self: Id, _cmd: Sel) {}
+
+fn init_guest_frameworks() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let i = |p: *const ()| p as Imp;
+        for (cls, meta, name) in [
+            (&CALAYER_CLASS, &CALAYER_META, "CALayer"),
+            (&CAMETALLAYER_CLASS, &CAMETALLAYER_META, "CAMetalLayer"),
+            (&CAEAGLLAYER_CLASS, &CAEAGLLAYER_META, "CAEAGLLayer"),
+            (&CATRANSACTION_CLASS, &CATRANSACTION_META, "CATransaction"),
+            (&CADISPLAYLINK_CLASS, &CADISPLAYLINK_META, "CADisplayLink"),
+            (&UIWINDOW_CLASS, &UIWINDOW_META, "UIWindow"),
+            (&UIVIEW_CLASS, &UIVIEW_META, "UIView"),
+            (&UICOLOR_CLASS, &UICOLOR_META, "UIColor"),
+            (&UIIMAGE_CLASS, &UIIMAGE_META, "UIImage"),
+            (&UILABEL_CLASS, &UILABEL_META, "UILabel"),
+            (&UIFONT_CLASS, &UIFONT_META, "UIFont"),
+        ] {
+            objc_rt::register_builtin(cls.ptr(), meta.ptr(), name, 32, &[], &[]);
+        }
+        objc_rt::register_builtin(
+            UIAPPLICATION_CLASS.ptr(),
+            UIAPPLICATION_META.ptr(),
+            "UIApplication",
+            32,
+            &[],
+            &[("sharedApplication", i(shared_app_stub as *const ()))],
+        );
+        objc_rt::register_builtin(
+            UISCREEN_CLASS.ptr(),
+            UISCREEN_META.ptr(),
+            "UIScreen",
+            32,
+            &[("scale", i(screen_scale_stub as *const ()))],
+            &[("mainScreen", i(main_screen_stub as *const ()))],
+        );
+        objc_rt::register_builtin(
+            UIDEVICE_CLASS.ptr(),
+            UIDEVICE_META.ptr(),
+            "UIDevice",
+            32,
+            &[
+                ("systemName", i(device_system_name as *const ())),
+                ("beginGeneratingDeviceOrientationNotifications", i(noop_method as *const ())),
+            ],
+            &[("currentDevice", i(current_device_stub as *const ()))],
+        );
+    });
+}
 
 extern "C" {
     fn malloc(size: usize) -> *mut c_void;
@@ -98,6 +211,7 @@ pub fn init() {
     pear_libobjc::object::init_runtime();
     pear_libobjc::blocks::init_blocks();
     pear_foundation::init_foundation();
+    init_guest_frameworks();
     #[cfg(target_os = "linux")]
     {
         pear_host_linux::LinuxHost::install().initialize();
@@ -142,6 +256,11 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
         Some(path) if path.contains("CoreGraphics") => pear_graphics::symbol(symbol),
         Some(path) if path.contains("QuartzCore") => match symbol {
             "_CACurrentMediaTime" => Some(ca_current_media_time as *const () as usize),
+            "_OBJC_CLASS_$_CALayer" => Some(CALAYER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_CAMetalLayer" => Some(CAMETALLAYER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_CAEAGLLayer" => Some(CAEAGLLAYER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_CATransaction" => Some(CATRANSACTION_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_CADisplayLink" => Some(CADISPLAYLINK_CLASS.ptr() as usize),
             "_kCAFilterLinear"
             | "_kCAGravityResize"
             | "_kCAMediaTimingFunctionEaseInEaseOut"
@@ -149,6 +268,18 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             | "_kCAMediaTimingFunctionEaseOut"
             | "_kCAFillModeForwards" => Some(quartz_const(symbol)),
             _ => pear_graphics::quartz_symbol(symbol),
+        },
+        Some(path) if path.contains("UIKit") => match symbol {
+            "_OBJC_CLASS_$_UIApplication" => Some(UIAPPLICATION_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIWindow" => Some(UIWINDOW_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIView" => Some(UIVIEW_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIScreen" => Some(UISCREEN_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIColor" => Some(UICOLOR_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIImage" => Some(UIIMAGE_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UILabel" => Some(UILABEL_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIFont" => Some(UIFONT_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIDevice" => Some(UIDEVICE_CLASS.ptr() as usize),
+            _ => None,
         },
         None => pear_libobjc::symbol(symbol)
             .or_else(|| pear_foundation::symbol(symbol))
@@ -196,5 +327,8 @@ mod tests {
         assert!(resolve_symbol(Some("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"), "___CFConstantStringClassReference").is_some());
         assert!(resolve_symbol(Some("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"), "_CGRectInset").is_some());
         assert!(resolve_symbol(Some("/System/Library/Frameworks/QuartzCore.framework/QuartzCore"), "_CACurrentMediaTime").is_some());
+        assert!(resolve_symbol(Some("/System/Library/Frameworks/QuartzCore.framework/QuartzCore"), "_OBJC_CLASS_$_CAMetalLayer").is_some());
+        assert!(resolve_symbol(Some("/System/Library/Frameworks/UIKit.framework/UIKit"), "_OBJC_CLASS_$_UIApplication").is_some());
+        assert!(resolve_symbol(Some("/System/Library/Frameworks/UIKit.framework/UIKit"), "_OBJC_CLASS_$_UIScreen").is_some());
     }
 }

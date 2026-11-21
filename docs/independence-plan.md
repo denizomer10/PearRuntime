@@ -384,7 +384,9 @@ Each milestone is small, testable alone, and keeps working paths working.
    record every imported class and selector).
 9. **M9 — Linux host backend** (Wayland/X11 windowing, input, audio) and an
    end-to-end run of one 64-bit and one 32-bit game in a Linux arm64 VM.
-10. **M10 — x86-64 hosts / Windows**: A64 translation (Dynarmic), Win32 backend.
+10. **M10 — x86-64 Linux hosts** (Windows/Win32 cancelled by user decision
+    2026-11-21; Linux-first): A64 translation (Dynarmic) and x86-64 `pear-gles`
+    trampolines when targeting x86-64 Linux.
 11. **32-bit track (parallel):** bring PearLegacyEngine into this workspace
     (it is Rust already), share PearANGLE and `pear-host` with it, then retire
     its SDL dependency per platform as `pear-host` backends mature.
