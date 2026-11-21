@@ -37,15 +37,36 @@ unsafe impl Send for Region {}
 unsafe impl Sync for Region {}
 
 impl Region {
+    /// Images are placed low, from `FIRST_HINT` up and always below 2^47,
+    /// as on Darwin: iOS code may rely on it (objc4 masks class pointers to
+    /// 47 bits; engines tag pointers above it), while Linux arm64 otherwise
+    /// maps near the top of its 48-bit space.
     pub fn reserve(size: usize) -> Option<Region> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        const FIRST_HINT: usize = 0x2_0000_0000;
+        const LIMIT: usize = 1 << 47;
+        static NEXT_HINT: AtomicUsize = AtomicUsize::new(FIRST_HINT);
         let len = (size + SEGMENT_ALIGN - 1) & !(SEGMENT_ALIGN - 1);
         let mapping_len = len + SEGMENT_ALIGN;
-        let p = unsafe { mmap(std::ptr::null_mut(), mapping_len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0) };
-        if p == MAP_FAILED || p.is_null() {
-            return None;
+        let mut hint = NEXT_HINT.load(Ordering::Relaxed);
+        for _ in 0..64 {
+            let p = unsafe {
+                mmap(hint as *mut c_void, mapping_len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0)
+            };
+            if p == MAP_FAILED || p.is_null() {
+                return None;
+            }
+            let end = p as usize + mapping_len;
+            if end <= LIMIT {
+                NEXT_HINT.fetch_max(end, Ordering::Relaxed);
+                let start = ((p as usize + SEGMENT_ALIGN - 1) & !(SEGMENT_ALIGN - 1)) as *mut u8;
+                return Some(Region { mapping: p as *mut u8, mapping_len, start });
+            }
+            // The kernel ignored the hint (range busy): try further up.
+            unsafe { munmap(p, mapping_len) };
+            hint += mapping_len.max(1 << 30);
         }
-        let start = ((p as usize + SEGMENT_ALIGN - 1) & !(SEGMENT_ALIGN - 1)) as *mut u8;
-        Some(Region { mapping: p as *mut u8, mapping_len, start })
+        None
     }
 
     /// Sets the protection of `[offset, offset + len)` (aligned to pages).

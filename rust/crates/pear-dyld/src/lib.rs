@@ -101,12 +101,25 @@ pub struct LoadedImage {
     /// Imports bound to [`missing_symbol_called`].
     pub missing: Vec<String>,
     pub install_name: Option<String>,
+    /// The image's sections (unslid addresses; see [`LoadedImage::address`]).
+    pub sections: Vec<pear_macho::Section>,
 }
 
 impl LoadedImage {
     /// The live address of an unslid vmaddr of the image.
     pub fn address(&self, vmaddr: u64) -> *mut u8 {
         unsafe { self.region.start.add((vmaddr - self.low) as usize) }
+    }
+
+    /// A section by segment and section name.
+    pub fn section(&self, segment: &str, name: &str) -> Option<&pear_macho::Section> {
+        self.sections.iter().find(|s| s.segment == segment && s.name == name)
+    }
+
+    /// Sections named `name` in any segment (Objective-C metadata moves
+    /// between __DATA and __DATA_CONST across toolchains).
+    pub fn sections_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a pear_macho::Section> + 'a {
+        self.sections.iter().filter(move |s| s.name == name)
     }
 
     /// The mach header in memory.
@@ -184,6 +197,7 @@ pub fn load(data: &[u8], resolver: &dyn Resolver, options: Options) -> Result<Lo
         initializers: m.initializers()?,
         missing: Vec::new(),
         install_name: m.install_name.clone(),
+        sections: m.sections.clone(),
     };
 
     let fixups = m.fixups()?;

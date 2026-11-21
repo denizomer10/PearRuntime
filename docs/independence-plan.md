@@ -347,9 +347,32 @@ Each milestone is small, testable alone, and keeps working paths working.
    Objective-C metadata registered with a runtime (M7) and its imports
    resolved against PearRuntime's frameworks; re-exports and arm64e are
    not handled yet.
-7. **M7 — Objective-C runtime.** Decide between embedding a portable runtime
-   (GNUstep libobjc2 has the Apple 64-bit ABI) and a Rust one; the 32-bit
-   engine's runtime is the reference for semantics.
+7. **M7 — Objective-C runtime.** Decided (2026-11-21): our own, in Rust,
+   implementing Apple's 64-bit ABI (libobjc2 does not implement it, see
+   §2.5; porting objc4 would bring a large Darwin-bound C++ codebase); the
+   32-bit engine's runtime is the reference for semantics.
+   *Step 1 done (2026-11-21):* crate `pear-libobjc` (no dependencies
+   besides pear-dyld): selector uniquing (`__objc_selrefs`), class and
+   metaclass realization from `class_ro_t` with pointer and relative method
+   lists and non-fragile ivar sliding, categories, protocol conformance,
+   `objc_msgSend`/`objc_msgSendSuper2` in assembly with `+initialize`,
+   `+load` (classes then categories), NSObject's core methods, retain counts
+   in a side table, `.cxx_destruct`, zeroing weak references, autorelease
+   pools and the ARC entry points clang emits. It is not the host's libobjc:
+   pear-dyld binds an image's libobjc imports to it (`pear_libobjc::symbol`).
+   Evidence: an iOS fixture built by Apple's clang with ARC
+   (`pear-libobjc/fixtures/fixture.m`: classes, super calls, a category, a
+   protocol, introspection, strong/weak ARC, autorelease pools, +load) passes
+   all 8 checks on macOS and on arm64 Linux; the metadata of all 264 game
+   images registers on macOS (577,863 selector refs, 65,067 classes
+   realized, 10,732 waiting on UIKit/Foundation classes not loaded). Found
+   on the way: objc4 masks class data pointers to 47 bits (Darwin's user
+   space); Linux arm64 maps at the top of 48 bits, so pear-libobjc keeps 48
+   bits and pear-dyld now places images below 2^47 as Darwin does. Next: a
+   per-class message cache in assembly (every send takes the Rust lookup
+   today), forwarding and exceptions, associated objects, blocks,
+   properties/reflection API, tagged pointers and Swift classes, then
+   Foundation (M8) on top.
 8. **M8 — Foundation/CoreFoundation for the guest.** Rust implementations of
    the classes apps actually use, census-driven (the census tools already
    record every imported class and selector).
@@ -369,6 +392,7 @@ Each milestone is small, testable alone, and keeps working paths working.
 | ObjC ABI parity | `tools/host-abi-census.py --compare` | identical to the last ObjC build and across M3 |
 | Host behaviour | `tools/host-behavior-probe.py --compare` (UIKit accessors, exception boundaries, constants, EAGL GLES 1/2/3) | identical across M3 (35 facts) and M4 step 1 (51 facts: + UIFont constructors/metrics, a UILabel's pixels) |
 | Mach-O loading | `pear-macho --example fixups-dump` vs `dyld_info -fixups`; `pear-dyld` tests (fixtures run); `pear-dyld --example load-check` over every game image | 228/228 identical fixups; fixtures run on macOS and Linux; 264/264 images load on both (M6 step 1) |
+| Objective-C runtime | `pear-libobjc` test (iOS ARC fixture, 8 checks); `pear-libobjc --example objc-register` over every game image | fixture passes on macOS and Linux; 264/264 images register on macOS (M7 step 1) |
 | Image decoding | `tools/host-image-probe.py` (UIImage vs ImageIO: layout, bytes, drawn pixels); `pear-image --example imageio-compare`, `decode-hash` (macOS vs Linux) | 2,565/2,613 identical, rest JPEG-only and within libjpeg-turbo's output (M4 step 3) |
 | Host input path | `tools/host-event-probe.py` (synthetic NSEvents → host view → `events()` → guest UIView) | touches and presses delivered (M3 step 4) |
 | GL | `pear-gles --example pearangle-smoke`; EAGL GLES1/2/3 context test | pass on macOS |

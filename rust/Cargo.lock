@@ -71,6 +71,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pear-libobjc"
+version = "0.1.0"
+dependencies = [
+ "pear-dyld",
+]
+
+[[package]]
 name = "pear-macho"
 version = "0.1.0"
 
