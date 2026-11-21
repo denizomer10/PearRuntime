@@ -71,6 +71,12 @@ guest_class!(UIACCESSIBILITYELEMENT_CLASS, UIACCESSIBILITYELEMENT_META);
 guest_class!(UITEXTPOSITION_CLASS, UITEXTPOSITION_META);
 guest_class!(UITEXTRANGE_CLASS, UITEXTRANGE_META);
 guest_class!(UITEXTFIELD_CLASS, UITEXTFIELD_META);
+guest_class!(UITEXTVIEW_CLASS, UITEXTVIEW_META);
+guest_class!(UISCROLLVIEW_CLASS, UISCROLLVIEW_META);
+guest_class!(UINAVIGATIONCONTROLLER_CLASS, UINAVIGATIONCONTROLLER_META);
+guest_class!(UIALERTCONTROLLER_CLASS, UIALERTCONTROLLER_META);
+guest_class!(SKREQUEST_CLASS, SKREQUEST_META);
+guest_class!(SKPRODUCTSREQUEST_CLASS, SKPRODUCTSREQUEST_META);
 
 extern "C" fn shared_app_stub(_self: Id, _cmd: Sel) -> Id {
     static APP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -131,6 +137,12 @@ fn init_guest_frameworks() {
             (&UITEXTPOSITION_CLASS, &UITEXTPOSITION_META, "UITextPosition"),
             (&UITEXTRANGE_CLASS, &UITEXTRANGE_META, "UITextRange"),
             (&UITEXTFIELD_CLASS, &UITEXTFIELD_META, "UITextField"),
+            (&UITEXTVIEW_CLASS, &UITEXTVIEW_META, "UITextView"),
+            (&UISCROLLVIEW_CLASS, &UISCROLLVIEW_META, "UIScrollView"),
+            (&UINAVIGATIONCONTROLLER_CLASS, &UINAVIGATIONCONTROLLER_META, "UINavigationController"),
+            (&UIALERTCONTROLLER_CLASS, &UIALERTCONTROLLER_META, "UIAlertController"),
+            (&SKREQUEST_CLASS, &SKREQUEST_META, "SKRequest"),
+            (&SKPRODUCTSREQUEST_CLASS, &SKPRODUCTSREQUEST_META, "SKProductsRequest"),
         ] {
             objc_rt::register_builtin(cls.ptr(), meta.ptr(), name, 32, &[], &[]);
         }
@@ -407,6 +419,15 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_OBJC_CLASS_$_UITextPosition" => Some(UITEXTPOSITION_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UITextRange" => Some(UITEXTRANGE_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UITextField" => Some(UITEXTFIELD_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UITextView" => Some(UITEXTVIEW_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIScrollView" => Some(UISCROLLVIEW_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UINavigationController" => Some(UINAVIGATIONCONTROLLER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIAlertController" => Some(UIALERTCONTROLLER_CLASS.ptr() as usize),
+            _ => None,
+        },
+        Some(path) if path.contains("StoreKit") => match symbol {
+            "_OBJC_CLASS_$_SKRequest" => Some(SKREQUEST_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_SKProductsRequest" => Some(SKPRODUCTSREQUEST_CLASS.ptr() as usize),
             _ => None,
         },
         Some(path) if path.contains("GLKit") => match symbol {
