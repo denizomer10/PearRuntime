@@ -115,6 +115,16 @@ extern "C" fn device_system_name(_self: Id, _cmd: Sel) -> Id {
 
 extern "C" fn noop_method(_self: Id, _cmd: Sel) {}
 
+extern "C" fn ui_application_main(
+    _argc: i32,
+    _argv: *const *const c_char,
+    _principal: Id,
+    _delegate: Id,
+) -> i32 {
+    pear_host::host().run(Box::new(|| {}));
+    0
+}
+
 fn init_guest_frameworks() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
@@ -211,7 +221,47 @@ extern "C" {
     fn strcmp(a: *const c_char, b: *const c_char) -> i32;
     fn getenv(name: *const c_char) -> *const c_char;
     fn abort() -> !;
+    fn dlopen(filename: *const c_char, flags: i32) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+}
+
+fn gles_dlsym(macho_sym: &str) -> usize {
+    static HANDLE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let h = *HANDLE.get_or_init(|| unsafe {
+        let mut p = std::ptr::null_mut();
+        if let Ok(custom) = std::env::var("PEAR_GLES_LIB") {
+            if let Ok(c) = std::ffi::CString::new(custom) {
+                p = dlopen(c.as_ptr(), 1);
+            }
+        }
+        if p.is_null() {
+            #[cfg(target_os = "macos")]
+            let candidates = [
+                c"libGLESv2.dylib".as_ptr(),
+                c"build/host/PearANGLE/libGLESv2.dylib".as_ptr(),
+            ];
+            #[cfg(not(target_os = "macos"))]
+            let candidates = [c"libGLESv2.so.2".as_ptr(), c"libGLESv2.so".as_ptr()];
+            for &cand in &candidates {
+                p = dlopen(cand, 1);
+                if !p.is_null() {
+                    break;
+                }
+            }
+        }
+        p as usize
+    }) as *mut c_void;
+    if !h.is_null() {
+        if let Some(cname) = macho_sym.strip_prefix('_') {
+            if let Ok(cstr) = std::ffi::CString::new(cname) {
+                let sym = unsafe { dlsym(h, cstr.as_ptr()) };
+                if !sym.is_null() {
+                    return sym as usize;
+                }
+            }
+        }
+    }
+    status_ok_stub as *const () as usize
 }
 
 fn libc_dlsym(macho_sym: &str) -> Option<usize> {
@@ -644,6 +694,11 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_OBJC_CLASS_$_UIActivityViewController" => Some(UIACTIVITYVIEWCONTROLLER_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UIAlertView" => Some(UIALERTVIEW_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UIPasteboard" => Some(UIPASTEBOARD_CLASS.ptr() as usize),
+            "_OBJC_METACLASS_$_UIDocument" => Some(UIDOCUMENT_META.ptr() as usize),
+            "_OBJC_METACLASS_$_UIView" => Some(UIVIEW_META.ptr() as usize),
+            "_OBJC_METACLASS_$_UIViewController" => Some(UIVIEWCONTROLLER_META.ptr() as usize),
+            "_UIApplicationMain" => Some(ui_application_main as *const () as usize),
+            s if s.starts_with("_UI") => Some(framework_const(Box::leak(s.to_string().into_boxed_str()))),
             _ => None,
         },
         Some(path) if path.contains("StoreKit") => match symbol {
@@ -693,6 +748,7 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_kEAGLColorFormatRGBA8" => Some(framework_const("kEAGLColorFormatRGBA8")),
             "_kEAGLDrawablePropertyColorFormat" => Some(framework_const("kEAGLDrawablePropertyColorFormat")),
             "_kEAGLDrawablePropertyRetainedBacking" => Some(framework_const("kEAGLDrawablePropertyRetainedBacking")),
+            s if s.starts_with("_gl") => Some(gles_dlsym(s)),
             _ => None,
         },
         None => pear_libobjc::symbol(symbol)
