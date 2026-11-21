@@ -66,6 +66,11 @@ guest_class!(GLKVIEW_CLASS, GLKVIEW_META);
 guest_class!(GLKVIEWCONTROLLER_CLASS, GLKVIEWCONTROLLER_META);
 guest_class!(MTKVIEW_CLASS, MTKVIEW_META);
 guest_class!(EAGLCONTEXT_CLASS, EAGLCONTEXT_META);
+guest_class!(UIDOCUMENT_CLASS, UIDOCUMENT_META);
+guest_class!(UIACCESSIBILITYELEMENT_CLASS, UIACCESSIBILITYELEMENT_META);
+guest_class!(UITEXTPOSITION_CLASS, UITEXTPOSITION_META);
+guest_class!(UITEXTRANGE_CLASS, UITEXTRANGE_META);
+guest_class!(UITEXTFIELD_CLASS, UITEXTFIELD_META);
 
 extern "C" fn shared_app_stub(_self: Id, _cmd: Sel) -> Id {
     static APP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -121,6 +126,11 @@ fn init_guest_frameworks() {
             (&GLKVIEWCONTROLLER_CLASS, &GLKVIEWCONTROLLER_META, "GLKViewController"),
             (&MTKVIEW_CLASS, &MTKVIEW_META, "MTKView"),
             (&EAGLCONTEXT_CLASS, &EAGLCONTEXT_META, "EAGLContext"),
+            (&UIDOCUMENT_CLASS, &UIDOCUMENT_META, "UIDocument"),
+            (&UIACCESSIBILITYELEMENT_CLASS, &UIACCESSIBILITYELEMENT_META, "UIAccessibilityElement"),
+            (&UITEXTPOSITION_CLASS, &UITEXTPOSITION_META, "UITextPosition"),
+            (&UITEXTRANGE_CLASS, &UITEXTRANGE_META, "UITextRange"),
+            (&UITEXTFIELD_CLASS, &UITEXTFIELD_META, "UITextField"),
         ] {
             objc_rt::register_builtin(cls.ptr(), meta.ptr(), name, 32, &[], &[]);
         }
@@ -392,6 +402,11 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_OBJC_CLASS_$_UIStoryboard" => Some(UISTORYBOARD_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UIControl" => Some(UICONTROL_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UIButton" => Some(UIBUTTON_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIDocument" => Some(UIDOCUMENT_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIAccessibilityElement" => Some(UIACCESSIBILITYELEMENT_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UITextPosition" => Some(UITEXTPOSITION_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UITextRange" => Some(UITEXTRANGE_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UITextField" => Some(UITEXTFIELD_CLASS.ptr() as usize),
             _ => None,
         },
         Some(path) if path.contains("GLKit") => match symbol {

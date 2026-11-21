@@ -13,6 +13,7 @@ fn main() {
     }
     let path = &args[0];
     let inspect_only = args.iter().any(|a| a == "--inspect-only");
+    let check_load = args.iter().any(|a| a == "--check-load");
 
     let bytes = match fs::read(path) {
         Ok(b) => b,
@@ -43,6 +44,29 @@ fn main() {
     let opts = pear_dyld::Options {
         allow_missing: true,
     };
+    if check_load {
+        pear_runtime::init();
+        match pear_dyld::load(&bytes, &pear_runtime::resolve_symbol, opts) {
+            Ok(img) => {
+                let report = unsafe { pear_libobjc::register_image(&img) };
+                println!(
+                    "pear-run --check-load: {path} classes={} unrealized={} categories={} selectors={}",
+                    report.classes,
+                    report.unrealized.len(),
+                    report.categories,
+                    report.selectors,
+                );
+                if !report.unrealized.is_empty() {
+                    println!("unrealized: {:?}", report.unrealized);
+                }
+                return;
+            }
+            Err(e) => {
+                eprintln!("pear-run: load failed: {e:?}");
+                process::exit(1);
+            }
+        }
+    }
     match pear_runtime::load_and_boot(&bytes, opts) {
         Ok((img, report)) => {
             println!(
