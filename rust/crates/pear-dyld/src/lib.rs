@@ -1,3 +1,7 @@
+//! Clean-room: behaviour from Apple's open-source dyld (APSL 2.0, reference
+//! only, nothing copied) and the public Mach-O headers; thread-local
+//! variables from the TLV descriptor layout in those headers.
+//!
 //! PearRuntime's own loader for 64-bit (arm64) Mach-O images: what dyld does
 //! for an iOS image, without dyld, on any arm64 host.
 //!

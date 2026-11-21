@@ -25,6 +25,29 @@ and exactly where to pick up.
   (`tools/host-winid.swift`).
 - The user writes Turkish; replies so far were in English.
 
+## Clean-room rules (binding)
+
+`docs/independent-runtime.md` §2–3 (Turkish) governs all code:
+- **Allowed sources:** public SDK headers and `.tbd` stubs (interface only,
+  never copied into the repo), Apple's public documentation, Apple's open
+  source (`apple-oss-distributions/*`: objc4, dyld, xnu, CF…; APSL 2.0 — if
+  code is ever copied it lives under `third_party/<project>` with its
+  license), the analysed apps' own binaries (imports, selectors, observed
+  calls), black-box observation, and public specs.
+- **Forbidden:** disassembling/decompiling Apple binaries (iOSSupport, the
+  dyld shared cache), class-dump output, leaked source, notes derived from
+  them.
+- **Every file's header names its source** ("Clean-room: from …"). The
+  crates added in this work carry such lines (ABI layouts from objc4/dyld
+  open source and public headers, formats from their public specs).
+
+Scope note: `independent-runtime.md` (2026-11-14) declared Linux/Vulkan
+out of scope; the user later asked for full independence (macOS, Linux,
+Windows), which `independence-plan.md` follows. The previous handoff is
+kept as `docs/HANDOFF-2026-11-14.md` (PearHost history: GTA VC DE reaching
+gameplay, Minecraft world loading, input/keyboard notes, missing-call
+report format); its ObjC `host/` layout no longer exists (ported to Rust).
+
 ## Repository map (runtime/)
 
 | Path | What |

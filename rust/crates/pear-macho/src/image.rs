@@ -1,3 +1,7 @@
+//! Clean-room: from Apple's open-source dyld and xnu headers (mach-o/loader.h,
+//! mach-o/fixup-chains.h; APSL 2.0, used as reference only, nothing copied)
+//! and the analysed apps' own binaries; checked against `dyld_info`.
+//!
 //! A 64-bit arm64 Mach-O image as a loader sees it: segments, sections,
 //! linked dylibs, the entry point, fixups (rebases and binds, from either
 //! dyld-info opcodes or chained fixups), exports and initializers.

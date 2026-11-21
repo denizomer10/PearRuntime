@@ -1,3 +1,8 @@
+//! Clean-room: from the public specifications (RFC 1950/1951, PNG ISO/IEC
+//! 15948, JPEG ITU T.81 with JFIF/Adobe markers); Apple's CgBI PNG variant
+//! from its observed file structure in app bundles. Pixel output compared
+//! with ImageIO and Chromium as black boxes.
+//!
 //! PearRuntime's own image decoders, in portable Rust with no dependencies:
 //! what UIImage needs from ImageIO, decoded the same way on every host.
 //!

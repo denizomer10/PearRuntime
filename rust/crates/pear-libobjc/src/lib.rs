@@ -1,3 +1,8 @@
+//! Clean-room: ABI layouts and semantics from Apple's open-source objc4
+//! (APSL 2.0, reference only, nothing copied), the public objc headers and
+//! documentation, and what clang emits for the analysed apps; libobjc
+//! imports chosen from the apps' census (docs/census).
+//!
 //! PearRuntime's own Objective-C runtime: Apple's 64-bit ABI, in Rust, for
 //! images loaded by pear-dyld, on any arm64 host.
 //!
