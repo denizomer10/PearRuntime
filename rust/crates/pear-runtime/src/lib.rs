@@ -897,5 +897,11 @@ mod tests {
             let name = f3(d3.receiver, sel_sys);
             assert_eq!(pear_foundation::rust_str_from_nsstring(name).as_deref(), Some("iOS"));
         }
+
+        let app_bin = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/fixture-ios-app")).unwrap();
+        let (app_img, _) = load_and_boot(&app_bin, pear_dyld::Options::default()).unwrap();
+        let app_main: extern "C" fn(i32, *const *const c_char) -> i32 =
+            unsafe { std::mem::transmute(app_img.symbol("_main").unwrap()) };
+        assert_eq!(app_main(0, std::ptr::null()), 63);
     }
 }

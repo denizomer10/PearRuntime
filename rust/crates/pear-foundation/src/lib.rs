@@ -161,7 +161,7 @@ unsafe fn send_str(obj: Id, s: &str) -> Option<String> {
     }
 }
 
-pub fn rust_str_from_nsstring(obj: Id) -> Option<String> {
+fn backing_or_cfstring(obj: Id) -> Option<String> {
     if obj.is_null() {
         return None;
     }
@@ -181,8 +181,18 @@ pub fn rust_str_from_nsstring(obj: Id) -> Option<String> {
                 }
             }
         }
-        send_str(obj, "UTF8String")
     }
+    None
+}
+
+pub fn rust_str_from_nsstring(obj: Id) -> Option<String> {
+    if obj.is_null() {
+        return None;
+    }
+    if let Some(s) = backing_or_cfstring(obj) {
+        return Some(s);
+    }
+    unsafe { send_str(obj, "UTF8String") }
 }
 
 pub fn nsstring_from_rust(s: &str) -> Id {
@@ -202,17 +212,14 @@ extern "C" fn str_with_utf8(cls: Id, _: Sel, cstr: *const c_char) -> Id {
 }
 
 extern "C" fn str_utf8(this: Id, _: Sel) -> *const c_char {
-    let s = store()
-        .lock()
-        .unwrap()
-        .get(&(this as usize))
-        .and_then(|b| match b {
-            Backing::Str(s) => Some(s.clone()),
-            _ => None,
-        })
-        .unwrap_or_default();
+    let s = backing_or_cfstring(this).unwrap_or_default();
     let boxed = CString::new(s).unwrap_or_default().into_boxed_c_str();
     Box::leak(boxed).as_ptr()
+}
+
+extern "C" fn str_data_using_encoding(this: Id, _: Sel, _encoding: usize) -> Id {
+    let s = backing_or_cfstring(this).unwrap_or_default();
+    unsafe { alloc_with_backing(NSDATA_CLASS.ptr(), Backing::Bytes(s.into_bytes())) }
 }
 
 extern "C" fn str_length(this: Id, _: Sel) -> usize {
@@ -581,6 +588,7 @@ pub fn init_foundation() {
             16,
             &[
                 ("UTF8String", i(str_utf8 as *const ())),
+                ("dataUsingEncoding:", i(str_data_using_encoding as *const ())),
                 ("length", i(str_length as *const ())),
                 ("isEqualToString:", i(str_is_equal as *const ())),
                 ("stringByAppendingPathComponent:", i(str_append_path as *const ())),
@@ -598,6 +606,7 @@ pub fn init_foundation() {
             16,
             &[
                 ("UTF8String", i(str_utf8 as *const ())),
+                ("dataUsingEncoding:", i(str_data_using_encoding as *const ())),
                 ("length", i(str_length as *const ())),
                 ("appendString:", i(str_append as *const ())),
                 ("dealloc", i(f_dealloc as *const ())),
