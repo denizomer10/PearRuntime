@@ -57,6 +57,7 @@ foundation_class!(NSURLREQUEST_CLASS, NSURLREQUEST_META);
 foundation_class!(NSMUTABLEURLREQUEST_CLASS, NSMUTABLEURLREQUEST_META);
 foundation_class!(NSUUID_CLASS, NSUUID_META);
 foundation_class!(NSPROCESSINFO_CLASS, NSPROCESSINFO_META);
+foundation_class!(NSTIMER_CLASS, NSTIMER_META);
 
 static K_CF_ALLOCATOR_DEFAULT: usize = 0;
 
@@ -857,8 +858,29 @@ pub fn init_foundation() {
             ],
             &[("processInfo", i(pi_shared as *const ()))],
         );
+        runtime::register_builtin(
+            NSTIMER_CLASS.ptr(),
+            NSTIMER_META.ptr(),
+            "NSTimer",
+            16,
+            &[("invalidate", i(timer_invalidate as *const ())), ("dealloc", i(f_dealloc as *const ()))],
+            &[("scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:", i(timer_sched as *const ()))],
+        );
     });
 }
+
+extern "C" fn timer_sched(
+    _self: Id,
+    _cmd: Sel,
+    _ti: f64,
+    _target: Id,
+    _sel: Sel,
+    _user_info: Id,
+    _repeats: bool,
+) -> Id {
+    unsafe { alloc_with_backing(NSTIMER_CLASS.ptr(), Backing::Arr(Vec::new())) }
+}
+extern "C" fn timer_invalidate(_self: Id, _cmd: Sel) {}
 
 extern "C" fn fm_default(_self: Id, _cmd: Sel) -> Id {
     static S: OnceLock<usize> = OnceLock::new();
@@ -998,10 +1020,33 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_OBJC_CLASS_$_NSMutableURLRequest" => Some(NSMUTABLEURLREQUEST_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSUUID" => Some(NSUUID_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSProcessInfo" => Some(NSPROCESSINFO_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSTimer" => Some(NSTIMER_CLASS.ptr() as usize),
+        "___NSDictionary0__" => Some(empty_dict_singleton() as usize),
+        "_kCFBooleanTrue" => Some(cf_bool_true_ptr() as usize),
+        "_kCFBooleanFalse" => Some(cf_bool_false_ptr() as usize),
+        "_NSDefaultRunLoopMode" => Some(const_nsstr("kCFRunLoopDefaultMode") as usize),
+        "_NSLocaleCountryCode" => Some(const_nsstr("NSLocaleCountryCode") as usize),
+        "_NSURLContentModificationDateKey" => Some(const_nsstr("NSURLContentModificationDateKey") as usize),
         "_CFRetain" => f(cf_retain as *const ()),
         "_CFRelease" => f(cf_release as *const ()),
         "_CFStringCreateWithCString" => f(cf_string_create_with_cstring as *const ()),
         "_CFStringGetCStringPtr" => f(cf_string_get_cstring_ptr as *const ()),
+        "_CFStringGetCString" => f(cf_string_get_cstring as *const ()),
+        "_CFStringGetLength" => f(cf_string_get_length as *const ()),
+        "_CFStringGetMaximumSizeForEncoding" => f(cf_string_get_max_size as *const ()),
+        "_CFStringCreateWithFormat" => f(cf_string_create_with_format as *const ()),
+        "_CFRunLoopGetMain" => f(cf_runloop_get_main as *const ()),
+        "_CFReadStreamOpen" => f(cf_read_stream_open as *const ()),
+        "_CFReadStreamClose" => f(cf_read_stream_close as *const ()),
+        "_CFReadStreamGetStatus" => f(cf_read_stream_get_status as *const ()),
+        "_CFReadStreamHasBytesAvailable" => f(cf_read_stream_has_bytes as *const ()),
+        "_CFReadStreamRead" => f(cf_read_stream_read as *const ()),
+        "_CFReadStreamCopyProperty" => f(cf_read_stream_copy_prop as *const ()),
+        "_CFReadStreamSetProperty" => f(cf_read_stream_set_prop as *const ()),
+        "_CFReadStreamScheduleWithRunLoop" => f(cf_read_stream_sched as *const ()),
+        "_CFURLCreateWithBytes" => f(cf_url_create_with_bytes as *const ()),
+        "_CFURLCopyUserName" => f(cf_url_copy_null as *const ()),
+        "_CFURLCopyPassword" => f(cf_url_copy_null as *const ()),
         "_CFDataCreate" => f(cf_data_create as *const ()),
         "_CFDataGetBytePtr" => f(cf_data_get_byte_ptr as *const ()),
         "_CFDataGetLength" => f(cf_data_get_length as *const ()),
@@ -1419,6 +1464,87 @@ pub unsafe extern "C" fn cf_number_get_value(
     }
     true
 }
+
+fn const_nsstr(s: &'static str) -> usize {
+    static MAP: OnceLock<Mutex<HashMap<&'static str, usize>>> = OnceLock::new();
+    let m = MAP.get_or_init(Default::default);
+    let mut g = m.lock().unwrap();
+    *g.entry(s).or_insert_with(|| nsstring_from_rust(s) as usize)
+}
+
+fn empty_dict_singleton() -> usize {
+    static D: OnceLock<usize> = OnceLock::new();
+    *D.get_or_init(|| unsafe { alloc_with_backing(NSDICTIONARY_CLASS.ptr(), Backing::Dict(HashMap::new())) } as usize)
+}
+
+fn cf_bool_true_ptr() -> usize {
+    static B: OnceLock<usize> = OnceLock::new();
+    *B.get_or_init(|| unsafe { alloc_with_backing(NSNUMBER_CLASS.ptr(), Backing::NumBool(true)) } as usize)
+}
+
+fn cf_bool_false_ptr() -> usize {
+    static B: OnceLock<usize> = OnceLock::new();
+    *B.get_or_init(|| unsafe { alloc_with_backing(NSNUMBER_CLASS.ptr(), Backing::NumBool(false)) } as usize)
+}
+
+pub extern "C" fn cf_string_get_length(s: Id) -> isize {
+    rust_str_from_nsstring(s).map(|x| x.encode_utf16().count() as isize).unwrap_or(0)
+}
+
+pub unsafe extern "C" fn cf_string_get_cstring(s: Id, buf: *mut c_char, buf_size: isize, _enc: u32) -> bool {
+    if buf.is_null() || buf_size <= 0 {
+        return false;
+    }
+    let Some(text) = rust_str_from_nsstring(s) else {
+        return false;
+    };
+    let bytes = text.as_bytes();
+    if bytes.len() + 1 > buf_size as usize {
+        return false;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, bytes.len());
+    *buf.add(bytes.len()) = 0;
+    true
+}
+
+pub extern "C" fn cf_string_get_max_size(len: isize, _enc: u32) -> isize {
+    len.max(0) * 4 + 1
+}
+
+pub extern "C" fn cf_string_create_with_format(_alloc: *const c_void, _opts: *const c_void, fmt: Id) -> Id {
+    let s = rust_str_from_nsstring(fmt).unwrap_or_default();
+    nsstring_from_rust(&s)
+}
+
+pub extern "C" fn cf_runloop_get_main() -> Id {
+    rl_main(NSRUNLOOP_CLASS.ptr() as Id, sel("mainRunLoop"))
+}
+
+pub extern "C" fn cf_read_stream_open(_s: *const c_void) -> bool { false }
+pub extern "C" fn cf_read_stream_close(_s: *const c_void) {}
+pub extern "C" fn cf_read_stream_get_status(_s: *const c_void) -> isize { 6 }
+pub extern "C" fn cf_read_stream_has_bytes(_s: *const c_void) -> bool { false }
+pub extern "C" fn cf_read_stream_read(_s: *const c_void, _buf: *mut u8, _len: isize) -> isize { 0 }
+pub extern "C" fn cf_read_stream_copy_prop(_s: *const c_void, _name: Id) -> *const c_void { std::ptr::null() }
+pub extern "C" fn cf_read_stream_set_prop(_s: *const c_void, _name: Id, _val: *const c_void) -> bool { false }
+pub extern "C" fn cf_read_stream_sched(_s: *const c_void, _rl: *const c_void, _mode: Id) {}
+
+pub unsafe extern "C" fn cf_url_create_with_bytes(
+    _alloc: *const c_void,
+    bytes: *const u8,
+    len: isize,
+    _enc: u32,
+    _base: Id,
+) -> Id {
+    let s = if bytes.is_null() || len <= 0 {
+        String::new()
+    } else {
+        String::from_utf8_lossy(std::slice::from_raw_parts(bytes, len as usize)).into_owned()
+    };
+    alloc_with_backing(NSURL_CLASS.ptr(), Backing::Str(s))
+}
+
+pub extern "C" fn cf_url_copy_null(_url: Id) -> Id { std::ptr::null_mut() }
 
 #[cfg(test)]
 mod tests {
