@@ -330,5 +330,24 @@ mod tests {
         assert!(resolve_symbol(Some("/System/Library/Frameworks/QuartzCore.framework/QuartzCore"), "_OBJC_CLASS_$_CAMetalLayer").is_some());
         assert!(resolve_symbol(Some("/System/Library/Frameworks/UIKit.framework/UIKit"), "_OBJC_CLASS_$_UIApplication").is_some());
         assert!(resolve_symbol(Some("/System/Library/Frameworks/UIKit.framework/UIKit"), "_OBJC_CLASS_$_UIScreen").is_some());
+
+        unsafe {
+            let app_cls = resolve_symbol(Some("/System/Library/Frameworks/UIKit.framework/UIKit"), "_OBJC_CLASS_$_UIApplication").unwrap() as Id;
+            let sel_shared = objc_rt::sel("sharedApplication");
+            let d1 = pear_libobjc::message::lookup_for_send(app_cls, sel_shared);
+            let f1: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d1.imp);
+            assert!(!f1(d1.receiver, sel_shared).is_null());
+
+            let dev_cls = resolve_symbol(Some("/System/Library/Frameworks/UIKit.framework/UIKit"), "_OBJC_CLASS_$_UIDevice").unwrap() as Id;
+            let sel_cur = objc_rt::sel("currentDevice");
+            let d2 = pear_libobjc::message::lookup_for_send(dev_cls, sel_cur);
+            let f2: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d2.imp);
+            let dev = f2(d2.receiver, sel_cur);
+            let sel_sys = objc_rt::sel("systemName");
+            let d3 = pear_libobjc::message::lookup_for_send(dev, sel_sys);
+            let f3: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d3.imp);
+            let name = f3(d3.receiver, sel_sys);
+            assert_eq!(pear_foundation::rust_str_from_nsstring(name).as_deref(), Some("iOS"));
+        }
     }
 }
