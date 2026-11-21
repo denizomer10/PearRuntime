@@ -50,15 +50,95 @@ const INIT_NONE: u8 = 0;
 const INIT_RUNNING: u8 = 1;
 const INIT_DONE: u8 = 2;
 
+/// A method as `Method` handles see it: stable for the life of the process,
+/// its IMP replaceable (method_setImplementation, swizzling).
+pub struct MethodEntry {
+    pub name: Sel,
+    pub types: *const c_char,
+    pub imp: std::sync::atomic::AtomicUsize,
+}
+unsafe impl Send for MethodEntry {}
+unsafe impl Sync for MethodEntry {}
+
+impl MethodEntry {
+    pub fn new(name: Sel, types: *const c_char, imp: Imp) -> &'static MethodEntry {
+        Box::leak(Box::new(MethodEntry { name, types, imp: std::sync::atomic::AtomicUsize::new(imp as usize) }))
+    }
+    pub fn imp(&self) -> Imp {
+        self.imp.load(Ordering::Acquire) as Imp
+    }
+}
+
+/// An instance variable as `Ivar` handles see it.
+pub struct IvarEntry {
+    pub name: *const c_char,
+    pub types: *const c_char,
+    /// The offset variable compiled code reads (image ivars), or None for an
+    /// ivar added at run time (offset stored here).
+    pub offset_var: *mut i32,
+    pub offset: i32,
+    pub size: u32,
+}
+unsafe impl Send for IvarEntry {}
+unsafe impl Sync for IvarEntry {}
+
+impl IvarEntry {
+    pub fn offset(&self) -> isize {
+        if self.offset_var.is_null() { self.offset as isize } else { unsafe { *self.offset_var as isize } }
+    }
+}
+
 pub struct Class {
     pub ptr: *const ClassT,
     pub name: String,
     pub meta: bool,
-    pub instance_size: usize,
-    pub methods: RwLock<HashMap<usize, usize>>,
+    pub instance_size: std::sync::atomic::AtomicUsize,
+    pub methods: RwLock<HashMap<usize, &'static MethodEntry>>,
+    /// Methods in definition order, categories' after the class's own.
+    pub method_list: RwLock<Vec<&'static MethodEntry>>,
     pub protocols: RwLock<Vec<*const ProtocolT>>,
+    pub ivars: RwLock<Vec<&'static IvarEntry>>,
+    pub properties: RwLock<Vec<(*const c_char, *const c_char)>>,
+    /// The install name of the image that defined it (class_getImageName).
+    pub image: Option<CString>,
+    /// Created by objc_allocateClassPair and not yet registered.
+    pub building: std::sync::atomic::AtomicBool,
     init: AtomicU8,
     init_thread: Mutex<Option<std::thread::ThreadId>>,
+}
+
+impl Class {
+    fn new(ptr: *const ClassT, name: &str, meta: bool, size: usize, image: Option<CString>) -> Class {
+        Class {
+            ptr,
+            name: name.to_string(),
+            meta,
+            instance_size: std::sync::atomic::AtomicUsize::new(size),
+            methods: RwLock::new(HashMap::new()),
+            method_list: RwLock::new(Vec::new()),
+            protocols: RwLock::new(Vec::new()),
+            ivars: RwLock::new(Vec::new()),
+            properties: RwLock::new(Vec::new()),
+            image,
+            building: std::sync::atomic::AtomicBool::new(false),
+            init: AtomicU8::new(INIT_NONE),
+            init_thread: Mutex::new(None),
+        }
+    }
+
+    pub fn size(&self) -> usize {
+        self.instance_size.load(Ordering::Acquire)
+    }
+
+    /// Adds methods; a later method for the same selector wins.
+    pub fn add(&self, list: impl IntoIterator<Item = &'static MethodEntry>) {
+        let mut map = self.methods.write().unwrap();
+        let mut order = self.method_list.write().unwrap();
+        for m in list {
+            map.insert(m.name as usize, m);
+            order.push(m);
+        }
+    }
 }
 
 unsafe impl Send for Class {}
@@ -107,16 +187,10 @@ pub fn register_builtin(
     class_methods: &[(&str, Imp)],
 ) {
     let make = |ptr, meta, size, list: &[(&str, Imp)]| {
-        Arc::new(Class {
-            ptr,
-            name: name.to_string(),
-            meta,
-            instance_size: size,
-            methods: RwLock::new(list.iter().map(|(n, imp)| (sel(n) as usize, *imp as usize)).collect()),
-            protocols: RwLock::new(Vec::new()),
-            init: AtomicU8::new(INIT_NONE),
-            init_thread: Mutex::new(None),
-        })
+        let c = Class::new(ptr, name, meta, size, None);
+        // Builtin methods: object-returning by default, as most are.
+        c.add(list.iter().map(|(n, imp)| MethodEntry::new(sel(n), c"@16@0:8".as_ptr(), *imp)));
+        Arc::new(c)
     };
     let mut r = registry().write().unwrap();
     r.classes.insert(cls as usize, make(cls, false, instance_size, instance_methods));
@@ -150,7 +224,7 @@ pub unsafe fn realize(cls: *const ClassT) -> bool {
     // ivars start, slide them (and the offset variables code reads).
     let mut size = (*r).instance_size as usize;
     if !sup.is_null() {
-        let sup_size = class(sup).map_or(0, |c| c.instance_size);
+        let sup_size = class(sup).map_or(0, |c| c.size());
         let start = (*r).instance_start as usize;
         if sup_size > start {
             let delta = (sup_size - start + 7) & !7;
@@ -162,18 +236,28 @@ pub unsafe fn realize(cls: *const ClassT) -> bool {
             size += delta;
         }
     }
+    let image_name = CURRENT_IMAGE.with(|i| i.borrow().clone());
     let make = |ptr: *const ClassT, meta: bool, size: usize| -> Arc<Class> {
         let r = ro(ptr);
-        Arc::new(Class {
-            ptr,
-            name: name.clone(),
-            meta,
-            instance_size: size,
-            methods: RwLock::new(methods((*r).base_methods).into_iter().map(|(s, i)| (s as usize, i as usize)).collect()),
-            protocols: RwLock::new(protocols((*r).base_protocols)),
-            init: AtomicU8::new(INIT_NONE),
-            init_thread: Mutex::new(None),
-        })
+        let c = Class::new(ptr, &name, meta, size, image_name.clone());
+        c.add(methods((*r).base_methods).into_iter().map(|m| MethodEntry::new(m.name, m.types, m.imp)));
+        *c.protocols.write().unwrap() = protocols((*r).base_protocols);
+        *c.properties.write().unwrap() = properties((*r).base_properties);
+        if !meta {
+            *c.ivars.write().unwrap() = ivars((*r).ivars)
+                .into_iter()
+                .map(|iv| {
+                    &*Box::leak(Box::new(IvarEntry {
+                        name: (*iv).name,
+                        types: (*iv).kind,
+                        offset_var: (*iv).offset,
+                        offset: 0,
+                        size: (*iv).size,
+                    }))
+                })
+                .collect();
+        }
+        Arc::new(c)
     };
     let meta = (*cls).isa;
     let info = make(cls, false, size);
@@ -187,14 +271,64 @@ pub unsafe fn realize(cls: *const ClassT) -> bool {
 
 /// Adds methods to a class (categories, class_addMethod): later additions
 /// win, as category methods override the class's own.
-pub fn add_methods(cls: *const ClassT, list: &[(Sel, Imp)]) {
+pub fn add_methods(cls: *const ClassT, list: &[MethodDesc]) {
     if let Some(c) = class(cls) {
-        let mut m = c.methods.write().unwrap();
-        for (s, i) in list {
-            m.insert(*s as usize, *i as usize);
-        }
+        c.add(list.iter().map(|m| MethodEntry::new(m.name, m.types, m.imp)));
     }
     flush_cache();
+}
+
+/// The method entry for `sel`, searching superclasses.
+pub fn lookup_method(cls: *const ClassT, s: Sel) -> Option<&'static MethodEntry> {
+    let mut c = cls;
+    while !c.is_null() {
+        let info = class(c)?;
+        if let Some(&m) = info.methods.read().unwrap().get(&(s as usize)) {
+            return Some(m);
+        }
+        c = unsafe { (*c).superclass };
+    }
+    None
+}
+
+/// The class's own method entry (no superclasses).
+pub fn own_method_entry(cls: *const ClassT, s: Sel) -> Option<&'static MethodEntry> {
+    class(cls)?.methods.read().unwrap().get(&(s as usize)).copied()
+}
+
+/// Registers a class built at run time (objc_allocateClassPair).
+pub fn register_dynamic(cls: *const ClassT, meta: *const ClassT, name: &str, size: usize) {
+    let c = Class::new(cls, name, false, size, None);
+    c.building.store(true, Ordering::Release);
+    let m = Class::new(meta, name, true, std::mem::size_of::<ClassT>(), None);
+    let mut r = registry().write().unwrap();
+    r.classes.insert(cls as usize, Arc::new(c));
+    r.classes.insert(meta as usize, Arc::new(m));
+}
+
+/// Makes a class built at run time findable by name (objc_registerClassPair).
+pub fn publish(cls: *const ClassT) {
+    if let Some(c) = class(cls) {
+        c.building.store(false, Ordering::Release);
+        registry().write().unwrap().by_name.entry(c.name.clone()).or_insert(cls as usize);
+    }
+}
+
+/// Every registered class (not metaclasses), in no particular order.
+pub fn all_classes() -> Vec<Arc<Class>> {
+    let r = registry().read().unwrap();
+    r.by_name.values().filter_map(|p| r.classes.get(p).cloned()).collect()
+}
+
+thread_local! {
+    /// The image whose classes are being realized (class_getImageName).
+    static CURRENT_IMAGE: std::cell::RefCell<Option<CString>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Install names of registered images, in registration order.
+pub fn image_names() -> &'static Mutex<Vec<CString>> {
+    static N: OnceLock<Mutex<Vec<CString>>> = OnceLock::new();
+    N.get_or_init(Default::default)
 }
 
 /// The IMP for `sel` on instances of `cls`, searching superclasses.
@@ -203,21 +337,14 @@ pub fn lookup(cls: *const ClassT, s: Sel) -> Option<Imp> {
     if let Some(&imp) = cache().read().unwrap().get(&key) {
         return Some(imp as Imp);
     }
-    let mut c = cls;
-    while !c.is_null() {
-        let info = class(c)?;
-        if let Some(&imp) = info.methods.read().unwrap().get(&(s as usize)) {
-            cache().write().unwrap().insert(key, imp);
-            return Some(imp as Imp);
-        }
-        c = unsafe { (*c).superclass };
-    }
-    None
+    let imp = lookup_method(cls, s)?.imp();
+    cache().write().unwrap().insert(key, imp as usize);
+    Some(imp)
 }
 
 /// The class's own method (no superclasses).
 pub fn own_method(cls: *const ClassT, s: Sel) -> Option<Imp> {
-    class(cls)?.methods.read().unwrap().get(&(s as usize)).map(|&i| i as Imp)
+    own_method_entry(cls, s).map(|m| m.imp())
 }
 
 pub fn superclass(cls: *const ClassT) -> *const ClassT {
@@ -331,6 +458,9 @@ unsafe fn slots(image: &pear_dyld::LoadedImage, name: &str) -> Vec<*mut usize> {
 pub unsafe fn register_image(image: &pear_dyld::LoadedImage) -> ImageReport {
     crate::object::init_runtime();
     let mut report = ImageReport::default();
+    let install = CString::new(image.install_name.clone().unwrap_or_default()).unwrap_or_default();
+    image_names().lock().unwrap().push(install.clone());
+    CURRENT_IMAGE.with(|i| *i.borrow_mut() = Some(install));
     for slot in slots(image, "__objc_selrefs") {
         *slot = intern_c(*slot as *const c_char) as usize;
         report.selectors += 1;
@@ -362,9 +492,11 @@ pub unsafe fn register_image(image: &pear_dyld::LoadedImage) -> ImageReport {
         add_methods((*cls).isa, &methods((*cat).class_methods));
         if let Some(info) = class(cls) {
             info.protocols.write().unwrap().extend(protocols((*cat).protocols));
+            info.properties.write().unwrap().extend(properties((*cat).instance_properties));
         }
         report.categories += 1;
     }
+    CURRENT_IMAGE.with(|i| *i.borrow_mut() = None);
     flush_cache();
     report
 }
@@ -390,8 +522,8 @@ pub unsafe fn call_load_methods(image: &pear_dyld::LoadedImage) {
         if meta_ro.is_null() {
             return;
         }
-        let own = methods((*meta_ro).base_methods).into_iter().find(|(s, _)| *s == load);
-        if let Some((_, imp)) = own {
+        let own = methods((*meta_ro).base_methods).into_iter().find(|m| m.name == load);
+        if let Some(MethodDesc { imp, .. }) = own {
             let f: extern "C" fn(*const ClassT, Sel) = std::mem::transmute(imp);
             f(cls, load);
         }
@@ -408,7 +540,7 @@ pub unsafe fn call_load_methods(image: &pear_dyld::LoadedImage) {
             continue;
         }
         seen.push(cat as usize);
-        if let Some((_, imp)) = methods((*cat).class_methods).into_iter().find(|(s, _)| *s == load) {
+        if let Some(MethodDesc { imp, .. }) = methods((*cat).class_methods).into_iter().find(|m| m.name == load) {
             let f: extern "C" fn(*const ClassT, Sel) = std::mem::transmute(imp);
             f((*cat).cls, load);
         }

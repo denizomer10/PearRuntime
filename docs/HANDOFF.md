@@ -1,201 +1,224 @@
-# PearHost devir notları
+# PearRuntime — handoff for the next agent
 
-Bir sonraki ajan veya geliştirici buradan başlasın. Mimari ve temiz oda
-kuralları: [independent-runtime.md](independent-runtime.md). Bu dosya her
-oturum sonunda güncellenir.
+Last updated 2026-11-21. Read this first, then `docs/independence-plan.md`
+(the full plan: inventory, research, host boundary, milestones M1–M10,
+validation matrix, baseline). This file says what is done, what is half-done,
+and exactly where to pick up.
 
-- Dal: `independent-runtime` (PearRuntime), `apple-silicon` (PearANGLE, `third_party/angle`)
-- Son güncelleme: 2026-11-14
+## Goal and ground rules
 
-## Durum
+- **Goal:** PearRuntime becomes an independent iOS compatibility runtime:
+  32- and 64-bit iOS apps and games on macOS, later Linux and Windows,
+  without Mac Catalyst, without `/System/iOSSupport`, eventually without
+  dyld/libobjc/Apple frameworks. 32-bit is handled by PearLegacyEngine
+  (touchHLE fork, separate repo); this work is the 64-bit path.
+- **Rust first.** No game-specific hacks. Never claim independence without
+  evidence (a test, a probe, a comparison).
+- **No external crates.** The user chose to write our own (image decoders,
+  loader, ObjC runtime). The workspace has zero crates.io dependencies; keep
+  it that way unless the user says otherwise.
+- **Git:** branch `pearhost-rust-completion` in both repos. Never commit to
+  `main`, **never push** without asking. Commit the runtime submodule
+  first (`runtime/`), then the parent (`git add runtime`). Commit messages
+  end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- **The user's screen:** never capture the whole screen; game windows only
+  (`tools/host-winid.swift`).
+- The user writes Turkish; replies so far were in English.
 
-GTA: Vice City – Definitive Edition 1.84 (UE4, Metal), iOSSupport **ve Mac
-Catalyst olmadan**:
+## Repository map (runtime/)
 
-- Orijinal IPA'dan (iOS platformlu, şifresiz ikili) doğrudan hazırlanıyor;
-  PearSilicon'un Catalyst dönüşümüne gerek yok. 95 saniyelik çalışmada oyun
-  HUD, mini harita ve araçla oynanış sahnesine ulaştı (otomatik devam eden
-  sahne; girdi verilmedi).
+| Path | What |
+|---|---|
+| `rust/crates/pear-host` | Host OS boundary: `HostPlatform` trait (windows, screen, display link, pasteboard, pickers, share, alerts, run loop, `surface()` → `NativeSurface`), `GuestEvents` sink (input, lifecycle), `NullHost`. No Apple deps; tested on Linux. |
+| `rust/crates/pear-host-macos` | The only AppKit user: `MacHost`, `PearBackend*` C exports, `PearHostView`, delegates. |
+| `rust/crates/pear-uikit` | PearRuntime's UIKit (built into `build/host/UIKit.framework`). `events.rs` (sink), `image_decode.rs` (UIImage via pear-image), `graphics.rs` (UIFont on CoreText, UILabel, UIImage). |
+| `rust/crates/pear-gles`, `pear-opengles` | OpenGLES.framework on PearANGLE; forwarders are aarch64 asm (Mach-O and ELF relocations). |
+| `rust/crates/pear-image` | Own decoders: inflate, PNG (+CgBI, Adam7, gAMA), JPEG (baseline/progressive, fancy upsampling). |
+| `rust/crates/pear-macho` | Mach-O parser: segments/sections, dylibs, fixups (dyld-info opcodes + chained), exports trie, initializers. |
+| `rust/crates/pear-dyld` | Own loader: maps an image below 2^47, applies fixups via a `Resolver`, TLV (`tlv_get_addr` thunk), initializers, exports. Fixtures in `fixtures/`. |
+| `rust/crates/pear-libobjc` | Own Objective-C runtime (Apple 64-bit ABI). Fixture in `fixtures/fixture.m`. |
+| `host/build-host.sh` | Builds `build/host/*.framework` (UIKit, OpenGLES, MetalKit, stubs). `host/UIFoundation.tbd`: UIKit re-exports UIFoundation (not AppKit). |
+| `tools/` | Probes and comparisons, listed below. |
+| `docs/independence-plan.md` | The plan; every finished step is recorded under its milestone with its evidence. |
 
-- dyld bağlanıyor; 40 saniyelik bir çalışmada 1.298 imaj yüklendi, hiçbiri
-  `/System/iOSSupport` altından değil (`DYLD_PRINT_LIBRARIES=1` ile doğrulandı).
-  Not: `vmmap` iOSSupport yollarını gösterir, ama bunlar her süreçte eşlenen
-  shared cache bölgeleridir; yükleme kanıtı değildir.
-- `UIApplicationMain` → `IOSAppDelegate` → pencere ve Metal view → pak
-  dosyaları yükleniyor → Rockstar intro → 3B sahne üzerinde CONTROLS menüsü.
-- Girdi (fare/klavye/gamepad ile menüde ilerleme ve oynanış) **henüz
-  denenmedi**.
-- Ses, oyun içi oynanış, kayıt/yükleme **doğrulanmadı**.
+PearSilicon (parent) launches 64-bit apps through PearHost
+(`PearHostPreparer.swift`, `AppLauncher.swift` — note the transitional
+`if true` there, M2 work).
 
-Minecraft (Bedrock) 1.26.60, orijinal IPA'dan, iOSSupport ve Catalyst olmadan:
+## Status by milestone
 
-- `MainWindow.nib` (NIBArchive) bizim UINib yükleyicimizle açılıyor; uygulama
-  delegesi, pencere ve view controller nib bağlantılarıyla kuruluyor.
-- MTKView (bizim UIView tabanlı MetalKit'imiz) ile Metal çizimi: ana ekran
-  ve "Loading.. / Survive" dünya yükleme ekranı görüldü, log'da dünya açılıyor
-  ("Opening level ..."). Oynanış ve girdi denenmedi.
-- Keychain, Catalyst ile ortak Rust deposu `rust/crates/pear-keychain` ile
-  (aynı crate host'a da bağlanıyor).
+| Milestone | State |
+|---|---|
+| M1 inventory/plan/baseline | Done (`docs/independence-plan.md`, `docs/runs/baseline-2026-11-21.md`). |
+| M2 retire Catalyst | **Not started.** Launcher still has the `if true` hack; Catalyst code still present. |
+| M3 host trait | **Done** (steps 1–5): trait, AppKit moved to pear-host-macos, pasteboard/picker/share/a11y, `GuestEvents` sink, `NativeSurface`. |
+| M4 text/images | Steps 1–3 done: UIFont on CoreText only (no AppKit in pear-uikit); UIKit re-exports UIFoundation instead of AppKit; own image decoders behind UIImage. **Open:** ICC colour management (ImageIO fallback for ICC/gAMA/16-bit/CMYK on macOS), decoder speed (1.5× ImageIO), own CoreGraphics/CoreText for non-macOS (big). |
+| M5 GLES on Vulkan | Not started (PearANGLE Linux/Vulkan build). Only prerequisite done: forwarders build on arm64 Linux. |
+| M6 own Mach-O loader | Step 1 done. **Open:** re-exported symbols, arm64e, thread-local *initializer* sections (refused), resolving a real app against PearRuntime frameworks. |
+| M7 own ObjC runtime | Step 1 done, **step 2 in progress** (below). |
+| M8 Foundation/CF | Not started. |
+| M9 Linux host backend, M10 | Not started. |
 
-## Dosya düzeni
+## In progress: M7 step 2 (uncommitted work becomes committed with this file)
 
-| Yol | İçerik |
-| --- | --- |
-| `host/core/` | `PearHostLog`, eksik çağrı raporlayıcısı (`PearMissing.m`), `pear_missing_zero` |
-| `host/uikit/include/PearUIKit.h` | kendi UIKit bildirimlerimiz (ABI değerleri genel başlıklarla aynı) |
-| `host/uikit/src/` | elle yazılmış sınıflar: UIApplication, UIView/UIWindow/UIViewController, UIScreen, UIDevice, UIResponder, UITouch/UIEvent, UIColor, UITraitCollection, UIAlertController |
-| `host/uikit/backend/appkit/` | macOS arka ucu: NSWindow, layer hosting, display link, fare → dokunma, NSAlert |
-| `host/uikit/src/UINib.m` | NIBArchive nib yükleyici: UINib, outlet bağlantıları, NSMainNibFile, NSBundle loadNibNamed:owner:options:, NSCoder geometri kategorisi |
-| `host/metalkit/MTKView.m` | MetalKit.framework: UIView tabanlı MTKView (macOS'unki NSView olduğu için) |
-| `host/opengles/EAGL.m` | OpenGLES.framework: GL'yi ANGLE'dan yeniden dışa aktarır; EAGL sabitleri; EAGLContext şimdilik nil döndürür |
-| `host/core/PearCatalystCompat.h` | UIKit'e bağlı olmayan Catalyst modüllerini host'a derlemek için (şu an KeychainShim) |
-| `tools/nibdump.py` | derlenmiş nib (NIBArchive) döküm aracı; biçim notları dosyanın başında |
-| `host/uikit/generated/` | `tools/gen-uikit-stubs.py` çıktısı; elle düzenlenmez |
-| `host/build-host.sh` | `build/host/UIKit.framework`, `iAd.framework` üretir |
-| `tools/ios-import-census.py` | bir uygulamanın hangi API'leri kullandığını çıkarır |
-| `tools/gen-uikit-stubs.py` | sayımdaki her UIKit adı için yer tutucu üretir |
-| `tools/host-prepare.sh` | yüklü bir uygulamanın iOSSupport'suz kopyasını hazırlar |
-| `tools/host-run.sh` | kopyayı kendi container'ında çalıştırır, rapor klasörü üretir |
-| `docs/census/` | uygulama başına sayım JSON'ları (stub üretiminin girdisi) |
-| `docs/runs/` | saklanan eksik çağrı raporları |
-
-## PearANGLE (OpenGL ES)
-
-- `third_party/angle`, PearANGLE'ın `apple-silicon` dalında: yalnızca Metal
-  arka ucu, yalnızca arm64 Apple hedefleri (`gni/angle.gni` bunu assert eder).
-  D3D, GL, Vulkan, WebGPU, null, OpenCL, HLSL/WGSL/SPIR-V çevirmenleri ve
-  Windows/Android/Linux/Fuchsia kodu silindi; DEPS yalnızca Metal derlemesinin
-  ihtiyaçlarını çeker (checkout ~1,6 GB).
-- Derleme: `host/build-pearangle.sh --sync` (ilk sefer) / `host/build-pearangle.sh`
-  → `build/host/PearANGLE-src`; `host/build-host.sh` OpenGLES.framework'ü
-  buna bağlar. Başka bir ANGLE derlemesi kullanılmaz.
-- Doğrulama: `rust/crates/pear-gles/examples/pearangle-smoke.rs` (EGL pbuffer, GLES 3.0, Metal
-  renderer, temizle/geri oku) geçiyor.
-- PearANGLE'ın Catalyst derlemesi (şu an dağıtılan Catalyst yolu) bu dalda
-  henüz yeniden derlenmedi; iOS/Catalyst kodu korunuyor.
-
-## Çalıştırma
+Census-driven: `docs/census/*.json` lists every libobjc symbol the 23 apps
+import. Step 1 provided 39 of 158. The script used (rerun it after each
+change; it reads `pub fn symbol` in `pear-libobjc/src/lib.rs`):
 
 ```bash
-host/build-host.sh
+cd runtime && python3 - <<'EOF'
+import json, glob, re, collections
+have=set(re.findall(r'"(_[A-Za-z_$0-9]+)"', open('rust/crates/pear-libobjc/src/lib.rs').read().split('pub fn symbol')[1]))
+apps=collections.defaultdict(set)
+for f in glob.glob('docs/census/*.json'):
+    d=json.load(open(f)); lib=d.get('libraries',{}).get('libobjc')
+    if not lib: continue
+    app=f.split('/')[-1].rsplit('-',1)[0]
+    for s in lib.get('symbols',[]): apps[s].add(app)
+    for c in lib.get('classes',[]): apps['_OBJC_CLASS_$_'+c].add(app)
+for n,k in sorted(((len(v),k) for k,v in apps.items() if k not in have), reverse=True): print(n,k)
+EOF
 ```
+
+(Register variants `_objc_retain_xN`/`_objc_release_xN` are matched in
+`message::register_variant`, so the script still lists them; they are done.)
+
+**Done in step 2 so far (builds; all tests pass on macOS and Linux):**
+- Methods are stable `MethodEntry { name, types, imp: AtomicUsize }`
+  (what a `Method` handle will point to); classes record `method_list`
+  (definition order), `ivars` (`IvarEntry`), `properties`, `image` name,
+  `building` flag. `runtime::lookup_method`, `own_method_entry`,
+  `register_dynamic`, `publish`, `all_classes`, `image_names` exist.
+- Pointer-format method lists now unique their selector names (bug fix:
+  older binaries' lookups would have missed).
+- `message.rs`: lookups return `Dispatch { imp, receiver }`; forwarding via
+  `+resolveInstanceMethod:`/`+resolveClassMethod:` then
+  `forwardingTargetForSelector:`; `objc_msgSendSuper`, `_objc_msgForward`;
+  `objc_retain_xN`/`objc_release_xN` (x1–x15, x19–x28).
+
+**To do in step 2, in this order (each with a fixture check):**
+1. **Custom retain/release:** `objc_retain`/`objc_release`/`objc_autorelease`
+   bypass messages today; classes that override `-retain`/`-release`
+   (global blocks, singletons) must get the message. Compute "has custom RR"
+   per class (lookup of retain/release ≠ NSObject's) and send when true.
+2. **Blocks (libclosure, in a new `blocks.rs`):** `_Block_copy`,
+   `_Block_release`, `_Block_object_assign`, `_Block_object_dispose`,
+   byref copy/release, `_NSConcreteStackBlock/MallocBlock/GlobalBlock` as
+   real class objects (`__NSStackBlock__` etc. under `NSBlock` → NSObject,
+   with retain/release/copy methods), `objc_retainBlock`. These are
+   *libSystem* imports: resolvers must map them to pear-libobjc too.
+   `imp_implementationWithBlock` (+`imp_getBlock`/`imp_removeBlock`):
+   trampoline per block on a fresh RX page:
+   `mov x1, x0 (0xAA0003E1); ldr x0, +12 (0x58000060); ldr x16, [x0, #16] (0xF9400810); br x16 (0xD61F0200); .quad block`.
+3. **Properties / sync / associated objects (`props.rs`):**
+   `objc_getProperty`, `objc_setProperty` and its `_atomic`, `_nonatomic`,
+   `_atomic_copy`, `_nonatomic_copy` variants (striped locks), `objc_copyStruct`,
+   `objc_copyCppObjectAtomic`; `objc_sync_enter/exit` (recursive lock per
+   object); `objc_enumerationMutation` (abort with message);
+   `objc_set/get/removeAssociatedObjects` (policies 0, 1, 3, 01401, 01403;
+   released on dealloc — hook into `object::dispose`). NSObject also needs
+   `copy`/`mutableCopy` (→ `copyWithZone:`), `methodForSelector:`,
+   `doesNotRecognizeSelector:`, `forwardingTargetForSelector:` (nil),
+   `+resolveInstanceMethod:` (NO).
+4. **Reflection & runtime classes (`reflection.rs`):** `class_getName`,
+   `class_getInstanceMethod/ClassMethod`, `class_copyMethodList`,
+   `method_getName/getImplementation/setImplementation/getTypeEncoding/
+   getNumberOfArguments/copyArgumentType/copyReturnType/getArgumentType/
+   getReturnType/getDescription`, `method_exchangeImplementations`,
+   `class_getMethodImplementation`, `class_replaceMethod`,
+   `class_getInstanceVariable`, `ivar_getName/Offset/TypeEncoding`,
+   `class_copyIvarList`, `class_getInstanceSize`, `class_isMetaClass`,
+   `class_conformsToProtocol`, `class_addProtocol`, `class_copyProtocolList`,
+   `class_copyPropertyList`, `class_getProperty`, `property_getName/
+   getAttributes/copyAttributeList/copyAttributeValue`, `class_getImageName`,
+   `objc_copyClassNamesForImage`, `objc_copyImageNames`,
+   `objc_copyClassList`, `objc_getClassList`, `objc_getMetaClass`,
+   `objc_getRequiredClass`, `objc_getProtocol` (needs a protocol registry
+   filled from `__objc_protolist` in `register_image`), `protocol_getName`,
+   `protocol_getMethodDescription` (returns a 16-byte struct in x0/x1),
+   `protocol_copyMethodDescriptionList`, `protocol_conformsToProtocol`,
+   `sel_isEqual`, `object_getClassName`, `object_isClass`,
+   `object_getIvar/setIvar`, `object_getIndexedIvars`, `object_setClass`,
+   `class_createInstance`, `objc_constructInstance`,
+   `objc_destructInstance`, `objc_allocWithZone`, `_objc_rootAutorelease`,
+   `objc_allocateClassPair`/`class_addIvar`/`objc_registerClassPair`
+   (use `runtime::register_dynamic` + `publish`; such classes have no
+   `class_ro_t`, `bits = 0` — code that calls `runtime::ro()` must check for
+   null, as `call_load_methods` already does). Type encodings need a small
+   parser (qualifiers `rnNoORV`, `{}`, `()`, `[]`, `^`, `b<n>`, `@"Class"`,
+   `@?`, offset digits).
+5. **Exceptions:** for now `objc_exception_throw`/`rethrow`,
+   `objc_begin_catch/end_catch`, `objc_terminate` log and abort;
+   `_OBJC_EHTYPE_id`, `_objc_ehtype_vtable`, `__objc_empty_vtable` as
+   statics; `objc_setExceptionPreprocessor` stores and returns. Real
+   exceptions are a separate step: a real `__objc_personality_v0` (LSDA
+   parsing) plus an unwinder that knows the loaded images' unwind info
+   (`__unwind_info`/`__eh_frame` of pear-dyld images are invisible to
+   libgcc/libunwind on Linux).
+6. Extend the fixture: a second ObjC fixture (`fixtures/fixture2.m`,
+   rebuild with `build-fixtures.sh`) covering properties (atomic/nonatomic,
+   copy), `@synchronized`, associated objects, blocks (stack→heap, `__block`
+   captures, block properties), `imp_implementationWithBlock` +
+   `class_addMethod`, swizzling, reflection counts/offsets, a class made at
+   run time. Run on macOS **and** Linux.
+7. Then step 3: per-class message cache in assembly (every send currently
+   takes the Rust lookup with a global `RwLock<HashMap>` — correct but slow),
+   real exceptions, tagged pointers, Swift classes (`bits & 3`).
+
+## How to build and verify
 
 ```bash
-tools/host-prepare.sh ~/Downloads/GTA-Vice-City-Definitive-v1-84.ipa build/host-apps/gtavc-ipa.app
+# Rust workspace (macOS)
+cd runtime/rust && cargo build && cargo test -p pear-macho -p pear-dyld -p pear-libobjc -p pear-image -p pear-host
+
+# Same on arm64 Linux (Apple `container`; if it says "XPC connection error":
+#   container system start --enable-kernel-install)
+container run --rm -v "$PWD":/src -w /src rust:1-bookworm bash -c \
+  'CARGO_TARGET_DIR=/tmp/t cargo test -q -p pear-macho -p pear-dyld -p pear-libobjc -p pear-image -p pear-host'
+
+# PearHost frameworks + probes (macOS)
+cd runtime && bash host/build-host.sh
+python3 tools/host-behavior-probe.py build/host --compare <earlier output>   # 51 facts (fonts, label pixels, EAGL, pasteboard…)
+python3 tools/host-event-probe.py build/host                                  # AppKit input → events() → UIView
+python3 tools/host-abi-census.py build/host --compare <earlier json>           # ObjC/C ABI parity
+find <app> -name '*.png' -o -name '*.jpg' | python3 tools/host-image-probe.py build/host   # UIImage vs ImageIO
+
+# Games (needs the external disk)
+tools/host-baseline.sh 25 burgershop     # one game; omit the filter for all 22
 ```
 
-```bash
-PEAR_HOST_SEED="$HOME/Library/Application Support/PearSilicon/Games/com.rockstargames.gtavc.de" tools/host-run.sh build/host-apps/gtavc-ipa.app build/host-apps/runs/latest 90
-```
+Comparison tools for the loader/runtime/decoders (need the external disk):
+`tools/macho-fixups-compare.py` (pear-macho vs `dyld_info -fixups`),
+`pear-dyld --example load-check`, `pear-libobjc --example objc-register`,
+`pear-image --example imageio-compare | bench | decode-hash`.
+Write long outputs to files: zsh's multios makes `2>&1 >/dev/null | …`
+pipe stdout too.
 
-IPA, hedefin yanına `<ad>.payload/` olarak açılır (bir kez); kopyadaki
-kaynaklar oraya mutlak symlink'tir. FairPlay ile şifreli ikililer (cryptid ≠ 0)
-reddedilir. PearSilicon'un Catalyst'e hazırladığı `.app` de girdi olarak
-kabul edilir.
+## Test data
 
-`PEAR_HOST_SEED`, gerçek container'ı ilk seferde APFS klonu olarak kopyalar
-(ek yer kaplamaz, asıl kayıtlara yazılmaz). GTA VC, 1,2 GB'lık indirilmiş pak
-dosyalarını bu container'da arar; klon olmadan "Download Required" uyarısı
-verir.
+External disk `/Volumes/Untitled/PearSilicon`: `ios-apps/` (22 decrypted
+apps), `Games/` (their data containers), `Work/host-apps/` (prepared copies
+and run logs). It **disconnects at times** — check `ls /Volumes` first; the
+last M7 check (objc-register on Linux) was skipped because of that.
 
-Ortam değişkenleri: `PEAR_MISSING_REPORT` (JSONL), `PEAR_MISSING_FATAL=1`
-(ilk eksik çağrıda abort, yığın izi için), `PEAR_LOG_FILE`,
-`PEAR_HOST_SCREEN=1280x720`, `PEAR_HOST_IOS_VERSION`.
+Known baseline (2026-11-21, unchanged through all steps): Burger Shop 2 and
+GTA VC render; GTA LCS stays alive with no window (since before M3 step 4;
+also with older builds — probably game state); Gutterball alive, window
+detection varies; 14 others reach launch and crash or miss symbols
+(YouTube: Swift UIKit symbol; Angry Birds Transformers:
+`UISceneWillDeactivateNotification`); Miku Flick is 32-bit (legacy engine).
 
-## Eksik çağrı raporu nasıl okunur
+## Lessons that cost time
 
-Her satır bir API'nin **ilk** çağrısıdır (`event: first`); çıkışta (SIGTERM
-dahil) `event: summary` satırları sayılarla yazılır. `caller`, çağıran
-imaj+ofsettir (ör. `Gameface+0x9f3f8c`). Tür:
-
-- `objc-instance` / `objc-class`: bizde olmayan selector; sıfır/nil döndü.
-- `c-function`: üretilmiş C stub'ı; sıfır döndü.
-- `behavior`: metot var ama istenen davranış eksik (ör. gesture recognizer'lar,
-  nib yükleme, KVC ile istenen bilinmeyen anahtar).
-
-Yeni bir eksik çağrı uygulanırken: davranışı genel belgeden yaz, dosya
-başlığına kaynağı ekle, `host/build-host.sh` stub'ı otomatik düşürür.
-
-## GTA VC'nin son çalışmadaki eksikleri (`docs/runs/gtavc-1.84-ipa-2026-11-14-missing.jsonl`)
-
-| API | Sayı | Etki / yapılacak |
-| --- | --- | --- |
-| `+[UIStoryboard storyboardWithName:bundle:]` | 1 | açılış ekranı storyboard'u; nil yeterli görünüyor. Derlenmiş storyboard (`.storyboardc`) okuma ileride. |
-| `UIAccessibilityIsVoiceOverRunning()` | 2 | NO doğru cevap; elle uygulanmalı. |
-| `-[UITraitCollection displayGamut]` | 1 | P3 (1) döndürülmeli. |
-| `-[UIImpactFeedbackGenerator initWithStyle:]` | 1 | nil döndü; haptik yok, ama nesne döndürmeli (sonraki `impactOccurred` nil'e gider, zararsız). |
-
-Önceki çalışmalarda çözülenler: `UIDevice` KVC `_feedbackSupportLevel`
-(çökme → 0 döndürülüyor), `UIAlertController` (NSAlert ile gösteriliyor ve
-loglanıyor), `+[CADisplayLink displayLinkWithTarget:selector:]` (macOS'ta yok,
-NSView display link'ine bağlandı), Backtrace'in MobileCoreServices sembolleri
-(CoreServices'e yönlendirildi), Swift çalışma zamanı rpath'i.
-
-### Klavye ve metin girişi
-
-- Donanım tuşları `UIPress`/`UIKey` (HID usage kodlarıyla) olarak ilk
-  yanıtlayıcıya, yoksa key window'un root view'una gider (`host/uikit/src/UIKeyInput.m`).
-  Minecraft oyun içi tuşları ayrıca macOS GameController'ın `GCKeyboard`'undan
-  okur; o yol sistemin kendisidir.
-- Bir metin yanıtlayıcısı (UIKeyInput, ör. UITextView) ilk yanıtlayıcıyken
-  tuşlar AppKit'in `interpretKeyEvents` sistemiyle metne ve düzenleme
-  komutlarına çevrilir; UITextView delegesi iOS'taki sırayla çağrılır
-  (`shouldChangeTextInRange` → değişiklik → `textViewDidChange`). Klavye
-  bildirimleri sıfır yükseklikte bir klavyeyle gönderilir.
-- Minecraft: karakterleri `shouldChangeTextInRange` içinde kendisi işler (NO
-  döndürür, iOS'ta da böyle). Kullanıcı gerçek klavyeyle yazmayı doğruladı
-  (2026-11-14).
-- Test: `PEAR_HOST_INPUT_SCRIPT` (wait/tap/key/hold/type/call/log) ve
-  `PEAR_HOST_TRACE_INPUT=1` (tuşun gittiği responder zinciri, metin
-  değişiklikleri, AppKit komutları). Betikli tuşlar NSEvent seviyesindedir;
-  GCKeyboard'a ulaşmaz (o yol için gerçek klavye ya da Accessibility izni
-  gerekir). Örnek: `call rootvc showKeyboard:startingText:characterLimit:isMultiline: "" 20 NO`.
-
-## Minecraft'ın son çalışmadaki eksikleri (`docs/runs/minecraft-1.26.60-2026-11-14-missing.jsonl`)
-
-| API | Etki / yapılacak |
-| --- | --- |
-| ~~UITextView~~ | uygulandı (yukarıda). IME/marked text (Çince/Japonca giriş) henüz yok. |
-| `UIAccessibilityIsVoiceOverRunning()` | NO döndürmeli. |
-
-## Bilinen sorunlar
-
-1. `UIFont` sınıfı macOS'un `UIFoundation` özel çerçevesinde de var; objc iki
-   kopya uyarısı veriyor. Uygulamanın doğrudan referansları bizimkine bağlanır,
-   ama `NSClassFromString(@"UIFont")` hangisini döndüreceği belirsiz. UIFont'u
-   elle uygularken bunu ele al.
-2. `PLCrash*` sınıfları hem Gameface'te hem Backtrace_PLCrashReporter'da
-   (uygulamanın kendi sorunu; Catalyst'te de var).
-3. İlk çalışmada pencere bir kez büyüyüp küçülüyor (resize animasyonu); kaynağı
-   bulunmadı.
-4. Çoklu dokunma yok (tek fare = tek dokunma). Catalyst `input` modülündeki
-   keymapper/sanal gamepad henüz host'a taşınmadı.
-5. Ses yolu (AVAudioSession macOS'ta) doğrulanmadı.
-6. Host OpenGLES yalnızca PearANGLE kullanır (`host/build-pearangle.sh`,
-   macOS arm64, yalnızca Metal; çıktı `build/host/PearANGLE-src`). PearANGLE
-   eksikleri PearANGLE'da uygulanır. EAGLContext henüz yok (nil döner); GLES oyunları için Catalyst'in Rust
-   EAGL-on-EGL kodu (`rust/crates/pear-catalyst/src/graphics_gl`) host'a taşınmalı.
-7. macOS display link'i `setFrameInterval:` vb. için istisna fırlatıyor; host,
-   kurulumda bu selector'ları deneyip fırlatanları değiştiriyor (log: "provided by
-   the host").
-8. Launch bloğundaki istisnalar artık yığın izi ile loglanıp abort ediliyor
-   (AppKit bunları sessizce yutuyordu).
-
-## Sıradaki işler (öncelik sırasıyla)
-
-1. **Girdi:** GTA VC'de klavye/fare ve gamepad ile menü + oynanış testi.
-   macOS GameController (GCKeyboard/GCMouse/GCController) doğal olarak
-   çalışmalı; çalışmazsa Catalyst'in Rust `input` modülü
-   (`rust/crates/pear-catalyst/src/input`) `host/` altına taşınır.
-2. Yukarıdaki dört eksik çağrıyı elle uygula.
-3. Ses ve kayıt/yüklemeyi doğrula; `missing.jsonl` sıfıra inene kadar devam.
-4. PearSilicon'a "PearHost modu" seçeneği (IPA'dan doğrudan; Catalyst dönüşümü atlanır): `host-prepare.sh` adımlarını
-   kurulum hattına taşı, uygulama başına mod seçimi.
-5. Minecraft: fare ile bakış/pointer lock ve dokunma; IME (marked text).
-   Diğer oyunlarla sayım (`docs/census/`): Asphalt 6 (32-bit, PearLegacyEngine),
-   Miku Flick. Her yeni oyun yeni sınıflar getirir;
-   üretici stub'ları otomatik ekler.
-6. EAGL (OpenGL ES) host'a: Catalyst'in Rust EAGL-on-EGL kodu
-   (`pear-catalyst/src/graphics_gl`) PearANGLE üzerine taşınacak; GLES oyunlarıyla sınanacak.
-7. Kapsam: yalnızca macOS, Apple silicon, Metal. Linux/Vulkan/x86 kapsam dışı
-   (2026-11-14). PearLegacyJIT 32-bit yolunda (ARMv7 → arm64) kalır.
+- Linux arm64 user space is 48-bit and maps high; Darwin code assumes
+  < 2^47 (objc4 masks). pear-dyld places images low; keep it.
+- `dyld_info` mislabels weak-coalescing binds and crashes on 4 big game
+  binaries; compare weak entries by address only.
+- clang folds constant `__attribute__((constructor))` bodies away: fixture
+  initializers must call an import.
+- macOS lets unhardened processes turn anonymous RW pages RX (no MAP_JIT
+  needed); hardened apps would need the dyld approach (map signed file).
+- ImageIO's JPEG decoder deviates from libjpeg-turbo by up to ~80 levels on
+  edges; pear-image matches libjpeg-turbo (checked against Chromium).
+- The in-app browser pane can serve as an independent reference decoder
+  (canvas `getImageData`).

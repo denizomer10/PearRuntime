@@ -36,6 +36,13 @@ extern "C" fn objc_retain(obj: Id) -> Id {
 extern "C" fn objc_release(obj: Id) {
     object::release(obj)
 }
+/// Targets of the objc_retain_xN / objc_release_xN register variants.
+pub(crate) extern "C" fn objc_retain_entry(obj: Id) -> Id {
+    object::retain(obj)
+}
+pub(crate) extern "C" fn objc_release_entry(obj: Id) {
+    object::release(obj)
+}
 extern "C" fn objc_autorelease(obj: Id) -> Id {
     object::autorelease(obj)
 }
@@ -103,8 +110,9 @@ unsafe fn send(obj: Id, name: &str) -> Id {
         return obj;
     }
     let s = runtime::sel(name);
-    let f: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(message::lookup_for_send(obj, s));
-    f(obj, s)
+    let d = message::lookup_for_send(obj, s);
+    let f: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d.imp);
+    f(d.receiver, s)
 }
 unsafe extern "C" fn objc_alloc(cls: Id) -> Id {
     send(cls, "alloc")
@@ -126,16 +134,18 @@ unsafe extern "C" fn objc_opt_is_kind_of_class(obj: Id, cls: *const ClassT) -> b
         return false;
     }
     let s = runtime::sel("isKindOfClass:");
-    let f: extern "C" fn(Id, Sel, *const ClassT) -> bool = std::mem::transmute(message::lookup_for_send(obj, s));
-    f(obj, s, cls)
+    let d = message::lookup_for_send(obj, s);
+    let f: extern "C" fn(Id, Sel, *const ClassT) -> bool = std::mem::transmute(d.imp);
+    f(d.receiver, s, cls)
 }
 unsafe extern "C" fn objc_opt_responds_to_selector(obj: Id, sel: Sel) -> bool {
     if obj.is_null() {
         return false;
     }
     let s = runtime::sel("respondsToSelector:");
-    let f: extern "C" fn(Id, Sel, Sel) -> bool = std::mem::transmute(message::lookup_for_send(obj, s));
-    f(obj, s, sel)
+    let d = message::lookup_for_send(obj, s);
+    let f: extern "C" fn(Id, Sel, Sel) -> bool = std::mem::transmute(d.imp);
+    f(d.receiver, s, sel)
 }
 
 // The reflection basics.
@@ -162,7 +172,7 @@ unsafe extern "C" fn class_add_method(cls: *const ClassT, s: Sel, imp: Imp, _typ
     if cls.is_null() || runtime::own_method(cls, s).is_some() {
         return false;
     }
-    runtime::add_methods(cls, &[(s, imp)]);
+    runtime::add_methods(cls, &[MethodDesc { name: s, types: _types, imp }]);
     true
 }
 
@@ -180,6 +190,8 @@ pub fn symbol(name: &str) -> Option<usize> {
     match name {
         "_objc_msgSend" => f(message::objc_msg_send as *const ()),
         "_objc_msgSendSuper2" => f(message::objc_msg_send_super2 as *const ()),
+        "_objc_msgSendSuper" => f(message::objc_msg_send_super as *const ()),
+        "__objc_msgForward" => f(message::objc_msg_forward as *const ()),
         "_OBJC_CLASS_$_NSObject" => Some(object::NSOBJECT_CLASS.ptr() as usize),
         "_OBJC_METACLASS_$_NSObject" => Some(object::NSOBJECT_META.ptr() as usize),
         "__objc_empty_cache" => Some(&object::EMPTY_CACHE as *const _ as usize),
@@ -217,6 +229,6 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_class_respondsToSelector" => f(class_respond_to_selector as *const ()),
         "_class_addMethod" => f(class_add_method as *const ()),
         "___objc_personality_v0" => f(objc_personality_v0 as *const ()),
-        _ => None,
+        _ => message::register_variant(name),
     }
 }

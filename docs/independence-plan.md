@@ -1,5 +1,7 @@
 # PearRuntime independence plan
 
+> Picking this work up? Start with `docs/HANDOFF.md` (state, open work, how to verify).
+
 Goal: PearRuntime as an independent, Rust-first iOS compatibility runtime that
 runs 32-bit and 64-bit ARM iOS apps and games on macOS, Linux and Windows,
 with no `/System/iOSSupport`, no Mac Catalyst and no macOS framework behind the
@@ -373,6 +375,10 @@ Each milestone is small, testable alone, and keeps working paths working.
    today), forwarding and exceptions, associated objects, blocks,
    properties/reflection API, tagged pointers and Swift classes, then
    Foundation (M8) on top.
+   *Step 2 in progress:* census-driven libobjc surface (119 of 158 imported
+   symbols missing after step 1); method entries, forwarding,
+   `objc_msgSendSuper`, `_objc_msgForward` and the `objc_retain_xN`
+   variants are in; the remaining list and order are in `docs/HANDOFF.md`.
 8. **M8 — Foundation/CoreFoundation for the guest.** Rust implementations of
    the classes apps actually use, census-driven (the census tools already
    record every imported class and selector).

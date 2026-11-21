@@ -101,8 +101,9 @@ unsafe fn send0(obj: Id, s: Sel) -> Id {
     if obj.is_null() {
         return std::ptr::null_mut();
     }
-    let f: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(crate::message::lookup_for_send(obj, s));
-    f(obj, s)
+    let d = crate::message::lookup_for_send(obj, s);
+    let f: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d.imp);
+    f(d.receiver, s)
 }
 
 // ---- NSObject methods ------------------------------------------------------
@@ -173,8 +174,9 @@ extern "C" fn m_perform(this: Id, _: Sel, s: Sel) -> Id {
 }
 extern "C" fn m_perform_with(this: Id, _: Sel, s: Sel, arg: Id) -> Id {
     unsafe {
-        let f: extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(crate::message::lookup_for_send(this, s));
-        f(this, s, arg)
+        let d = crate::message::lookup_for_send(this, s);
+        let f: extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(d.imp);
+        f(d.receiver, s, arg)
     }
 }
 
@@ -203,7 +205,7 @@ pub unsafe fn alloc(cls: *const ClassT) -> Id {
         return std::ptr::null_mut();
     }
     runtime::ensure_initialized(cls);
-    let size = runtime::class(cls).map_or(16, |c| c.instance_size.max(8));
+    let size = runtime::class(cls).map_or(16, |c| c.size().max(8));
     let obj = calloc(1, size);
     *(obj as *mut *const ClassT) = cls;
     obj

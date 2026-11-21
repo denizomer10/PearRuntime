@@ -115,10 +115,18 @@ pub struct ObjcSuper {
     pub current_class: *const ClassT,
 }
 
-/// Reads a method list as (selector string or SEL, IMP) pairs. Relative
-/// lists name their selector through a selref slot, which must already hold
-/// the uniqued selector.
-pub unsafe fn methods(list: *const MethodList) -> Vec<(Sel, Imp)> {
+/// One method of a method list.
+#[derive(Clone, Copy)]
+pub struct MethodDesc {
+    pub name: Sel,
+    pub types: *const c_char,
+    pub imp: Imp,
+}
+
+/// Reads a method list, with uniqued selectors. Relative lists name their
+/// selector through a selref slot, which must already hold the uniqued
+/// selector; pointer lists hold the name string itself.
+pub unsafe fn methods(list: *const MethodList) -> Vec<MethodDesc> {
     if list.is_null() {
         return Vec::new();
     }
@@ -138,13 +146,37 @@ pub unsafe fn methods(list: *const MethodList) -> Vec<(Sel, Imp)> {
             } else {
                 *(rel(0) as *const Sel)
             };
-            out.push((name, rel(2) as Imp));
+            out.push(MethodDesc { name, types: rel(1) as *const c_char, imp: rel(2) as Imp });
         } else {
+            // Pointer lists (older toolchains) name the method with the
+            // image's own string: unique it, so lookups by SEL match.
             let m = &*(entry as *const Method);
-            out.push((m.name, m.imp));
+            out.push(MethodDesc { name: crate::runtime::intern_c(m.name), types: m.types, imp: m.imp });
         }
     }
     out
+}
+
+#[repr(C)]
+pub struct PropertyList {
+    pub entsize: u32,
+    pub count: u32,
+}
+
+/// (name, attributes) of each property in a property list.
+pub unsafe fn properties(list: *const c_void) -> Vec<(*const c_char, *const c_char)> {
+    let list = list as *const PropertyList;
+    if list.is_null() {
+        return Vec::new();
+    }
+    let entsize = (*list).entsize as usize;
+    let first = (list as *const u8).add(8);
+    (0..(*list).count as usize)
+        .map(|i| {
+            let p = first.add(i * entsize) as *const *const c_char;
+            (*p, *p.add(1))
+        })
+        .collect()
 }
 
 pub unsafe fn protocols(list: *const ProtocolList) -> Vec<*const ProtocolT> {
