@@ -53,6 +53,19 @@ guest_class!(UIIMAGE_CLASS, UIIMAGE_META);
 guest_class!(UILABEL_CLASS, UILABEL_META);
 guest_class!(UIFONT_CLASS, UIFONT_META);
 guest_class!(UIDEVICE_CLASS, UIDEVICE_META);
+guest_class!(UIRESPONDER_CLASS, UIRESPONDER_META);
+guest_class!(UIVIEWCONTROLLER_CLASS, UIVIEWCONTROLLER_META);
+guest_class!(UIGESTURERECOGNIZER_CLASS, UIGESTURERECOGNIZER_META);
+guest_class!(UILONGPRESSGESTURERECOGNIZER_CLASS, UILONGPRESSGESTURERECOGNIZER_META);
+guest_class!(UITAPGESTURERECOGNIZER_CLASS, UITAPGESTURERECOGNIZER_META);
+guest_class!(UIPANGESTURERECOGNIZER_CLASS, UIPANGESTURERECOGNIZER_META);
+guest_class!(UISTORYBOARD_CLASS, UISTORYBOARD_META);
+guest_class!(UICONTROL_CLASS, UICONTROL_META);
+guest_class!(UIBUTTON_CLASS, UIBUTTON_META);
+guest_class!(GLKVIEW_CLASS, GLKVIEW_META);
+guest_class!(GLKVIEWCONTROLLER_CLASS, GLKVIEWCONTROLLER_META);
+guest_class!(MTKVIEW_CLASS, MTKVIEW_META);
+guest_class!(EAGLCONTEXT_CLASS, EAGLCONTEXT_META);
 
 extern "C" fn shared_app_stub(_self: Id, _cmd: Sel) -> Id {
     static APP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -95,6 +108,19 @@ fn init_guest_frameworks() {
             (&UIIMAGE_CLASS, &UIIMAGE_META, "UIImage"),
             (&UILABEL_CLASS, &UILABEL_META, "UILabel"),
             (&UIFONT_CLASS, &UIFONT_META, "UIFont"),
+            (&UIRESPONDER_CLASS, &UIRESPONDER_META, "UIResponder"),
+            (&UIVIEWCONTROLLER_CLASS, &UIVIEWCONTROLLER_META, "UIViewController"),
+            (&UIGESTURERECOGNIZER_CLASS, &UIGESTURERECOGNIZER_META, "UIGestureRecognizer"),
+            (&UILONGPRESSGESTURERECOGNIZER_CLASS, &UILONGPRESSGESTURERECOGNIZER_META, "UILongPressGestureRecognizer"),
+            (&UITAPGESTURERECOGNIZER_CLASS, &UITAPGESTURERECOGNIZER_META, "UITapGestureRecognizer"),
+            (&UIPANGESTURERECOGNIZER_CLASS, &UIPANGESTURERECOGNIZER_META, "UIPanGestureRecognizer"),
+            (&UISTORYBOARD_CLASS, &UISTORYBOARD_META, "UIStoryboard"),
+            (&UICONTROL_CLASS, &UICONTROL_META, "UIControl"),
+            (&UIBUTTON_CLASS, &UIBUTTON_META, "UIButton"),
+            (&GLKVIEW_CLASS, &GLKVIEW_META, "GLKView"),
+            (&GLKVIEWCONTROLLER_CLASS, &GLKVIEWCONTROLLER_META, "GLKViewController"),
+            (&MTKVIEW_CLASS, &MTKVIEW_META, "MTKView"),
+            (&EAGLCONTEXT_CLASS, &EAGLCONTEXT_META, "EAGLContext"),
         ] {
             objc_rt::register_builtin(cls.ptr(), meta.ptr(), name, 32, &[], &[]);
         }
@@ -357,6 +383,28 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_OBJC_CLASS_$_UILabel" => Some(UILABEL_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UIFont" => Some(UIFONT_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UIDevice" => Some(UIDEVICE_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIResponder" => Some(UIRESPONDER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIViewController" => Some(UIVIEWCONTROLLER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIGestureRecognizer" => Some(UIGESTURERECOGNIZER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UILongPressGestureRecognizer" => Some(UILONGPRESSGESTURERECOGNIZER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UITapGestureRecognizer" => Some(UITAPGESTURERECOGNIZER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIPanGestureRecognizer" => Some(UIPANGESTURERECOGNIZER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIStoryboard" => Some(UISTORYBOARD_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIControl" => Some(UICONTROL_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIButton" => Some(UIBUTTON_CLASS.ptr() as usize),
+            _ => None,
+        },
+        Some(path) if path.contains("GLKit") => match symbol {
+            "_OBJC_CLASS_$_GLKView" => Some(GLKVIEW_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_GLKViewController" => Some(GLKVIEWCONTROLLER_CLASS.ptr() as usize),
+            _ => None,
+        },
+        Some(path) if path.contains("MetalKit") => match symbol {
+            "_OBJC_CLASS_$_MTKView" => Some(MTKVIEW_CLASS.ptr() as usize),
+            _ => None,
+        },
+        Some(path) if path.contains("OpenGLES") => match symbol {
+            "_OBJC_CLASS_$_EAGLContext" => Some(EAGLCONTEXT_CLASS.ptr() as usize),
             _ => None,
         },
         None => pear_libobjc::symbol(symbol)
