@@ -14,6 +14,7 @@ fn main() {
     let path = &args[0];
     let inspect_only = args.iter().any(|a| a == "--inspect-only");
     let check_load = args.iter().any(|a| a == "--check-load");
+    let list_missing = args.iter().any(|a| a == "--list-missing");
 
     let bytes = match fs::read(path) {
         Ok(b) => b,
@@ -44,9 +45,17 @@ fn main() {
     let opts = pear_dyld::Options {
         allow_missing: true,
     };
-    if check_load {
+    if check_load || list_missing {
         pear_runtime::init();
-        match pear_dyld::load(&bytes, &pear_runtime::resolve_symbol, opts) {
+        let missing = std::sync::Mutex::new(std::collections::BTreeSet::<String>::new());
+        let resolver = |lib: Option<&str>, sym: &str| {
+            let r = pear_runtime::resolve_symbol(lib, sym);
+            if r.is_none() && list_missing {
+                missing.lock().unwrap().insert(format!("{} :: {}", lib.unwrap_or("<self>"), sym));
+            }
+            r
+        };
+        match pear_dyld::load(&bytes, &resolver, opts) {
             Ok(img) => {
                 let report = unsafe { pear_libobjc::register_image(&img) };
                 println!(
@@ -58,6 +67,13 @@ fn main() {
                 );
                 if !report.unrealized.is_empty() {
                     println!("unrealized: {:?}", report.unrealized);
+                }
+                if list_missing {
+                    let m = missing.lock().unwrap();
+                    println!("missing symbols ({}):", m.len());
+                    for entry in m.iter().take(60) {
+                        println!("  {entry}");
+                    }
                 }
                 return;
             }
