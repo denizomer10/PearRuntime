@@ -44,6 +44,22 @@ foundation_class!(NSBUNDLE_CLASS, NSBUNDLE_META);
 foundation_class!(NSNOTIFICATIONCENTER_CLASS, NSNOTIFICATIONCENTER_META);
 foundation_class!(NSRUNLOOP_CLASS, NSRUNLOOP_META);
 foundation_class!(NSDATE_CLASS, NSDATE_META);
+foundation_class!(NSERROR_CLASS, NSERROR_META);
+foundation_class!(NSFILEMANAGER_CLASS, NSFILEMANAGER_META);
+foundation_class!(NSURL_CLASS, NSURL_META);
+foundation_class!(NSSET_CLASS, NSSET_META);
+foundation_class!(NSMUTABLESET_CLASS, NSMUTABLESET_META);
+foundation_class!(NSUSERDEFAULTS_CLASS, NSUSERDEFAULTS_META);
+
+static K_CF_ALLOCATOR_DEFAULT: usize = 0;
+
+#[repr(C)]
+struct MachOCFString {
+    _isa: *const c_void,
+    info: usize,
+    data: *const u8,
+    length: usize,
+}
 
 // ---- Backing store ---------------------------------------------------------
 
@@ -113,7 +129,21 @@ pub fn rust_str_from_nsstring(obj: Id) -> Option<String> {
     if let Some(Backing::Str(s)) = store().lock().unwrap().get(&(obj as usize)) {
         return Some(s.clone());
     }
-    unsafe { send_str(obj, "UTF8String") }
+    unsafe {
+        if !is_tagged_pointer(obj) && *(obj as *const *const ClassT) == NSSTRING_CLASS.ptr() {
+            let cf = &*(obj as *const MachOCFString);
+            if !cf.data.is_null() {
+                if (cf.info & 0x10) == 0 {
+                    let bytes = std::slice::from_raw_parts(cf.data, cf.length);
+                    return Some(String::from_utf8_lossy(bytes).into_owned());
+                } else {
+                    let units = std::slice::from_raw_parts(cf.data as *const u16, cf.length);
+                    return Some(String::from_utf16_lossy(units));
+                }
+            }
+        }
+        send_str(obj, "UTF8String")
+    }
 }
 
 pub fn nsstring_from_rust(s: &str) -> Id {
@@ -681,13 +711,176 @@ pub fn init_foundation() {
             &[("dealloc", i(f_dealloc as *const ()))],
             &[("date", i(date_now as *const ()))],
         );
+        runtime::register_builtin(
+            NSERROR_CLASS.ptr(),
+            NSERROR_META.ptr(),
+            "NSError",
+            16,
+            &[("dealloc", i(f_dealloc as *const ()))],
+            &[],
+        );
+        runtime::register_builtin(
+            NSFILEMANAGER_CLASS.ptr(),
+            NSFILEMANAGER_META.ptr(),
+            "NSFileManager",
+            16,
+            &[],
+            &[("defaultManager", i(fm_default as *const ()))],
+        );
+        runtime::register_builtin(
+            NSURL_CLASS.ptr(),
+            NSURL_META.ptr(),
+            "NSURL",
+            16,
+            &[("path", i(url_path as *const ())), ("dealloc", i(f_dealloc as *const ()))],
+            &[("fileURLWithPath:", i(url_file_with_path as *const ()))],
+        );
+        runtime::register_builtin(
+            NSSET_CLASS.ptr(),
+            NSSET_META.ptr(),
+            "NSSet",
+            16,
+            &[("count", i(arr_count as *const ())), ("dealloc", i(f_dealloc as *const ()))],
+            &[("set", i(set_empty as *const ()))],
+        );
+        runtime::register_builtin(
+            NSMUTABLESET_CLASS.ptr(),
+            NSMUTABLESET_META.ptr(),
+            "NSMutableSet",
+            16,
+            &[
+                ("count", i(arr_count as *const ())),
+                ("addObject:", i(arr_add as *const ())),
+                ("dealloc", i(f_dealloc as *const ())),
+            ],
+            &[("set", i(mset_empty as *const ()))],
+        );
+        runtime::register_builtin(
+            NSUSERDEFAULTS_CLASS.ptr(),
+            NSUSERDEFAULTS_META.ptr(),
+            "NSUserDefaults",
+            16,
+            &[
+                ("objectForKey:", i(ud_obj_for_key as *const ())),
+                ("setObject:forKey:", i(ud_set_obj_for_key as *const ())),
+            ],
+            &[("standardUserDefaults", i(ud_standard as *const ()))],
+        );
     });
+}
+
+extern "C" fn fm_default(_self: Id, _cmd: Sel) -> Id {
+    static S: OnceLock<usize> = OnceLock::new();
+    *S.get_or_init(|| unsafe { alloc_with_backing(NSFILEMANAGER_CLASS.ptr(), Backing::Arr(Vec::new())) } as usize) as Id
+}
+
+extern "C" fn url_file_with_path(_self: Id, _cmd: Sel, path: Id) -> Id {
+    let s = rust_str_from_nsstring(path).unwrap_or_default();
+    unsafe { alloc_with_backing(NSURL_CLASS.ptr(), Backing::Str(s)) }
+}
+
+extern "C" fn url_path(self_: Id, _cmd: Sel) -> Id {
+    let s = rust_str_from_nsstring(self_).unwrap_or_default();
+    nsstring_from_rust(&s)
+}
+
+extern "C" fn set_empty(_self: Id, _cmd: Sel) -> Id {
+    unsafe { alloc_with_backing(NSSET_CLASS.ptr(), Backing::Arr(Vec::new())) }
+}
+
+extern "C" fn mset_empty(_self: Id, _cmd: Sel) -> Id {
+    unsafe { alloc_with_backing(NSMUTABLESET_CLASS.ptr(), Backing::Arr(Vec::new())) }
+}
+
+extern "C" fn ud_standard(_self: Id, _cmd: Sel) -> Id {
+    static S: OnceLock<usize> = OnceLock::new();
+    *S.get_or_init(|| unsafe { alloc_with_backing(NSUSERDEFAULTS_CLASS.ptr(), Backing::Dict(HashMap::new())) } as usize) as Id
+}
+
+extern "C" fn ud_obj_for_key(self_: Id, _cmd: Sel, key: Id) -> Id {
+    let k = rust_str_from_nsstring(key).unwrap_or_default();
+    let guard = store().lock().unwrap();
+    if let Some(Backing::Dict(d)) = guard.get(&(self_ as usize)) {
+        return d.get(&k).copied().unwrap_or(0) as Id;
+    }
+    std::ptr::null_mut()
+}
+
+extern "C" fn ud_set_obj_for_key(self_: Id, _cmd: Sel, val: Id, key: Id) {
+    let k = rust_str_from_nsstring(key).unwrap_or_default();
+    let mut guard = store().lock().unwrap();
+    if let Some(Backing::Dict(d)) = guard.get_mut(&(self_ as usize)) {
+        if val.is_null() {
+            d.remove(&k);
+        } else {
+            d.insert(k, retain(val) as usize);
+        }
+    }
+}
+
+pub extern "C" fn ns_home_directory() -> Id {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    nsstring_from_rust(&home)
+}
+
+pub extern "C" fn ns_temporary_directory() -> Id {
+    nsstring_from_rust(&std::env::temp_dir().to_string_lossy())
+}
+
+pub extern "C" fn ns_search_path_for_directories_in_domains(
+    _dir: usize,
+    _domain_mask: usize,
+    _expand_tilde: bool,
+) -> Id {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let s = nsstring_from_rust(&home);
+    unsafe { alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(vec![retain(s) as usize])) }
+}
+
+pub unsafe extern "C" fn ns_string_from_class(cls: *const ClassT) -> Id {
+    if cls.is_null() {
+        return nsstring_from_rust("");
+    }
+    let name = CStr::from_ptr(pear_libobjc::reflection::class_get_name(cls)).to_string_lossy();
+    nsstring_from_rust(&name)
+}
+
+pub unsafe extern "C" fn ns_string_from_selector(s: Sel) -> Id {
+    if s.is_null() {
+        return nsstring_from_rust("");
+    }
+    let name = CStr::from_ptr(s).to_string_lossy();
+    nsstring_from_rust(&name)
+}
+
+pub unsafe extern "C" fn ns_log(fmt: Id) {
+    if let Some(s) = rust_str_from_nsstring(fmt) {
+        eprintln!("[NSLog] {s}");
+    }
+}
+
+fn ns_localized_description_key_ptr() -> *const () {
+    static K: OnceLock<usize> = OnceLock::new();
+    let p = *K.get_or_init(|| {
+        init_foundation();
+        nsstring_from_rust("NSLocalizedDescription") as usize
+    });
+    p as *const ()
 }
 
 pub fn symbol(name: &str) -> Option<usize> {
     init_foundation();
     let f = |p: *const ()| Some(p as usize);
     match name {
+        "___CFConstantStringClassReference" => Some(NSSTRING_CLASS.ptr() as usize),
+        "_kCFAllocatorDefault" => Some(&raw const K_CF_ALLOCATOR_DEFAULT as usize),
+        "_NSLocalizedDescriptionKey" => Some(ns_localized_description_key_ptr() as usize),
+        "_NSHomeDirectory" => f(ns_home_directory as *const ()),
+        "_NSTemporaryDirectory" => f(ns_temporary_directory as *const ()),
+        "_NSSearchPathForDirectoriesInDomains" => f(ns_search_path_for_directories_in_domains as *const ()),
+        "_NSStringFromClass" => f(ns_string_from_class as *const ()),
+        "_NSStringFromSelector" => f(ns_string_from_selector as *const ()),
+        "_NSLog" => f(ns_log as *const ()),
         "_OBJC_CLASS_$_NSString" => Some(NSSTRING_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSMutableString" => Some(NSMUTABLESTRING_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSArray" => Some(NSARRAY_CLASS.ptr() as usize),
@@ -701,6 +894,12 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_OBJC_CLASS_$_NSNotificationCenter" => Some(NSNOTIFICATIONCENTER_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSRunLoop" => Some(NSRUNLOOP_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSDate" => Some(NSDATE_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSError" => Some(NSERROR_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSFileManager" => Some(NSFILEMANAGER_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSURL" => Some(NSURL_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSSet" => Some(NSSET_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSMutableSet" => Some(NSMUTABLESET_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSUserDefaults" => Some(NSUSERDEFAULTS_CLASS.ptr() as usize),
         "_CFRetain" => f(cf_retain as *const ()),
         "_CFRelease" => f(cf_release as *const ()),
         "_CFStringCreateWithCString" => f(cf_string_create_with_cstring as *const ()),

@@ -17,8 +17,20 @@ use std::ffi::{c_char, c_void};
 
 extern "C" {
     fn malloc(size: usize) -> *mut c_void;
+    fn calloc(count: usize, size: usize) -> *mut c_void;
+    fn realloc(p: *mut c_void, size: usize) -> *mut c_void;
     fn free(p: *mut c_void);
+    fn memcpy(dst: *mut c_void, src: *const c_void, n: usize) -> *mut c_void;
+    fn memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void;
+    fn strlen(s: *const c_char) -> usize;
     fn strcmp(a: *const c_char, b: *const c_char) -> i32;
+    fn getenv(name: *const c_char) -> *const c_char;
+    fn abort() -> !;
+}
+
+extern "C" fn ca_current_media_time() -> f64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()
 }
 
 extern "C" fn unwind_resume_trap() -> ! {
@@ -47,14 +59,25 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
         Some("/usr/lib/libSystem.B.dylib") => match symbol {
             "__Unwind_Resume" => Some(unwind_resume_trap as *const () as usize),
             "_malloc" => Some(malloc as *const () as usize),
+            "_calloc" => Some(calloc as *const () as usize),
+            "_realloc" => Some(realloc as *const () as usize),
             "_free" => Some(free as *const () as usize),
+            "_memcpy" => Some(memcpy as *const () as usize),
+            "_memset" => Some(memset as *const () as usize),
+            "_strlen" => Some(strlen as *const () as usize),
             "_strcmp" => Some(strcmp as *const () as usize),
+            "_getenv" => Some(getenv as *const () as usize),
+            "_abort" => Some(abort as *const () as usize),
             _ => pear_libobjc::symbol(symbol),
         },
         Some(path) if path.contains("CoreFoundation") || path.contains("Foundation") => {
             pear_foundation::symbol(symbol)
         }
         Some(path) if path.contains("CoreGraphics") => pear_graphics::symbol(symbol),
+        Some(path) if path.contains("QuartzCore") => match symbol {
+            "_CACurrentMediaTime" => Some(ca_current_media_time as *const () as usize),
+            _ => None,
+        },
         None => pear_libobjc::symbol(symbol)
             .or_else(|| pear_foundation::symbol(symbol))
             .or_else(|| pear_graphics::symbol(symbol)),
@@ -95,8 +118,11 @@ mod tests {
         let run2: extern "C" fn() -> i32 = unsafe { std::mem::transmute(img2.symbol("_fixture2_objc").unwrap()) };
         assert_eq!(run2(), 511);
 
-        // Verify Foundation symbol resolution + host boundary
+        // Verify Foundation, CoreGraphics, QuartzCore & CFConstantString resolution
         assert!(resolve_symbol(Some("/System/Library/Frameworks/Foundation.framework/Foundation"), "_OBJC_CLASS_$_NSString").is_some());
         assert!(resolve_symbol(Some("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"), "_CFStringCreateWithCString").is_some());
+        assert!(resolve_symbol(Some("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"), "___CFConstantStringClassReference").is_some());
+        assert!(resolve_symbol(Some("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"), "_CGRectInset").is_some());
+        assert!(resolve_symbol(Some("/System/Library/Frameworks/QuartzCore.framework/QuartzCore"), "_CACurrentMediaTime").is_some());
     }
 }
