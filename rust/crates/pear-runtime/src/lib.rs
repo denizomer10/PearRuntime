@@ -434,6 +434,82 @@ extern "C" fn sysctlbyname_impl(_n: *const c_char, _oldp: *mut c_void, _oldlenp:
 extern "C" fn task_info_impl(_task: u32, _flavor: u32, _info: *mut c_void, _count: *mut u32) -> i32 { -1 }
 extern "C" fn thread_policy_set_impl(_t: u32, _flavor: u32, _policy: *const c_void, _count: u32) -> i32 { 0 }
 
+#[repr(C)]
+struct SwiftOsVersion {
+    major: isize,
+    minor: isize,
+    patch: isize,
+}
+
+extern "C" fn swift_stdlib_os_version() -> SwiftOsVersion {
+    SwiftOsVersion { major: 17, minor: 0, patch: 0 }
+}
+
+extern "C" fn swift_once_impl(pred: *mut usize, f: extern "C" fn(*mut c_void), ctx: *mut c_void) {
+    dispatch_once_f_impl(pred, ctx, f);
+}
+
+extern "C" fn swift_retain_impl(obj: Id) -> Id {
+    let addr = obj as usize;
+    if addr != 0 && (addr & 0x8000_0000_0000_0001) == 0 {
+        pear_libobjc::object::retain(obj)
+    } else {
+        obj
+    }
+}
+
+extern "C" fn swift_release_impl(obj: Id) {
+    let addr = obj as usize;
+    if addr != 0 && (addr & 0x8000_0000_0000_0001) == 0 {
+        pear_libobjc::object::release(obj);
+    }
+}
+
+extern "C" fn swift_identity_ptr(p: *const c_void) -> *const c_void { p }
+
+extern "C" fn swift_alloc_object_impl(meta: *const ClassT, size: usize, _align_mask: usize) -> Id {
+    if meta.is_null() {
+        return std::ptr::null_mut();
+    }
+    let sz = size.max(16);
+    unsafe {
+        let p = malloc(sz) as Id;
+        if !p.is_null() {
+            std::ptr::write_bytes(p as *mut u8, 0, sz);
+            *(p as *mut *const ClassT) = meta;
+        }
+        p
+    }
+}
+
+extern "C" fn swift_dealloc_object_impl(obj: Id, _sz: usize, _align_mask: usize) {
+    if !obj.is_null() {
+        unsafe { free(obj as *mut c_void) };
+    }
+}
+
+fn swift_core_symbol(symbol: &str) -> Option<usize> {
+    let f = |p: *const ()| Some(p as usize);
+    match symbol {
+        "_swift_retain"
+        | "_swift_bridgeObjectRetain"
+        | "_swift_unknownObjectRetain"
+        | "_swift_errorRetain" => f(swift_retain_impl as *const ()),
+        "_swift_release"
+        | "_swift_bridgeObjectRelease"
+        | "_swift_unknownObjectRelease"
+        | "_swift_errorRelease" => f(swift_release_impl as *const ()),
+        "_swift_once" => f(swift_once_impl as *const ()),
+        "_swift_allocObject" => f(swift_alloc_object_impl as *const ()),
+        "_swift_deallocObject" | "_swift_deallocClassInstance" => f(swift_dealloc_object_impl as *const ()),
+        "_swift_getObjCClassMetadata"
+        | "_swift_getObjCClassFromMetadata"
+        | "_swift_getInitializedObjCClass" => f(swift_identity_ptr as *const ()),
+        "__swift_stdlib_operatingSystemVersion" => f(swift_stdlib_os_version as *const ()),
+        _ => None,
+    }
+}
+
 extern "C" fn exp10_impl(x: f64) -> f64 { 10.0f64.powf(x) }
 extern "C" fn acosf_impl(x: f32) -> f32 { x.acos() }
 extern "C" fn asinf_impl(x: f32) -> f32 { x.asin() }
@@ -820,6 +896,7 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_OBJC_CLASS_$_MTKView" => Some(MTKVIEW_CLASS.ptr() as usize),
             _ => None,
         },
+        Some(path) if path.contains("libswiftCore") => swift_core_symbol(symbol).or_else(|| libc_dlsym(symbol)),
         Some(path) if path.contains("OpenGLES") => match symbol {
             "_OBJC_CLASS_$_EAGLContext" => Some(EAGLCONTEXT_CLASS.ptr() as usize),
             "_kEAGLColorFormatRGBA8" => Some(framework_const("kEAGLColorFormatRGBA8")),
@@ -878,6 +955,8 @@ mod tests {
         assert!(resolve_symbol(Some("/System/Library/Frameworks/QuartzCore.framework/QuartzCore"), "_OBJC_CLASS_$_CAMetalLayer").is_some());
         assert!(resolve_symbol(Some("/System/Library/Frameworks/UIKit.framework/UIKit"), "_OBJC_CLASS_$_UIApplication").is_some());
         assert!(resolve_symbol(Some("/System/Library/Frameworks/UIKit.framework/UIKit"), "_OBJC_CLASS_$_UIScreen").is_some());
+        assert!(resolve_symbol(Some("/usr/lib/swift/libswiftCore.dylib"), "_swift_once").is_some());
+        assert!(resolve_symbol(Some("/usr/lib/swift/libswiftCore.dylib"), "_swift_bridgeObjectRetain").is_some());
 
         unsafe {
             let app_cls = resolve_symbol(Some("/System/Library/Frameworks/UIKit.framework/UIKit"), "_OBJC_CLASS_$_UIApplication").unwrap() as Id;
