@@ -4,6 +4,7 @@
 
 pub use pear_dyld;
 pub use pear_foundation;
+pub use pear_graphics;
 pub use pear_host;
 pub use pear_image;
 pub use pear_libobjc;
@@ -53,7 +54,10 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
         Some(path) if path.contains("CoreFoundation") || path.contains("Foundation") => {
             pear_foundation::symbol(symbol)
         }
-        None => pear_libobjc::symbol(symbol).or_else(|| pear_foundation::symbol(symbol)),
+        Some(path) if path.contains("CoreGraphics") => pear_graphics::symbol(symbol),
+        None => pear_libobjc::symbol(symbol)
+            .or_else(|| pear_foundation::symbol(symbol))
+            .or_else(|| pear_graphics::symbol(symbol)),
         _ => None,
     }
 }

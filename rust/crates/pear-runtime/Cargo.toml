@@ -10,6 +10,7 @@ pear-libobjc = { path = "../pear-libobjc" }
 pear-foundation = { path = "../pear-foundation" }
 pear-host = { path = "../pear-host" }
 pear-image = { path = "../pear-image" }
+pear-graphics = { path = "../pear-graphics" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 pear-host-linux = { path = "../pear-host-linux" }

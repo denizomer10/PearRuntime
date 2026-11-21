@@ -20,6 +20,7 @@ members = [
     "crates/pear-dyld",
     "crates/pear-libobjc",
     "crates/pear-foundation",
+    "crates/pear-graphics",
     "crates/pear-host-linux",
     "crates/pear-runtime",
 ]
@@ -43,6 +44,7 @@ default-members = [
     "crates/pear-dyld",
     "crates/pear-libobjc",
     "crates/pear-foundation",
+    "crates/pear-graphics",
     "crates/pear-host-linux",
     "crates/pear-runtime",
 ]
