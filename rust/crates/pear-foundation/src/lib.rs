@@ -68,6 +68,27 @@ foundation_class!(NSTHREAD_CLASS, NSTHREAD_META);
 foundation_class!(NSCALENDAR_CLASS, NSCALENDAR_META);
 foundation_class!(NSDATECOMPONENTS_CLASS, NSDATECOMPONENTS_META);
 foundation_class!(NSEXCEPTION_CLASS, NSEXCEPTION_META);
+foundation_class!(NSURLSESSION_CLASS, NSURLSESSION_META);
+foundation_class!(NSURLSESSIONCONFIGURATION_CLASS, NSURLSESSIONCONFIGURATION_META);
+foundation_class!(NSOPERATIONQUEUE_CLASS, NSOPERATIONQUEUE_META);
+foundation_class!(NSKEYEDUNARCHIVER_CLASS, NSKEYEDUNARCHIVER_META);
+foundation_class!(NSASSERTIONHANDLER_CLASS, NSASSERTIONHANDLER_META);
+foundation_class!(NSNULL_CLASS, NSNULL_META);
+
+#[repr(C)]
+struct ObjcEhType {
+    vtable: *const c_void,
+    name: *const c_char,
+    cls: *const ClassT,
+}
+
+unsafe impl Sync for ObjcEhType {}
+
+static OBJC_EHTYPE_NSEXCEPTION: ObjcEhType = ObjcEhType {
+    vtable: std::ptr::null(),
+    name: c"NSException".as_ptr(),
+    cls: &raw const NSEXCEPTION_CLASS as *const ClassT,
+};
 
 static K_CF_ALLOCATOR_DEFAULT: usize = 0;
 
@@ -901,10 +922,28 @@ pub fn init_foundation() {
             (&NSCALENDAR_CLASS, &NSCALENDAR_META, "NSCalendar"),
             (&NSDATECOMPONENTS_CLASS, &NSDATECOMPONENTS_META, "NSDateComponents"),
             (&NSEXCEPTION_CLASS, &NSEXCEPTION_META, "NSException"),
+            (&NSURLSESSION_CLASS, &NSURLSESSION_META, "NSURLSession"),
+            (&NSURLSESSIONCONFIGURATION_CLASS, &NSURLSESSIONCONFIGURATION_META, "NSURLSessionConfiguration"),
+            (&NSOPERATIONQUEUE_CLASS, &NSOPERATIONQUEUE_META, "NSOperationQueue"),
+            (&NSKEYEDUNARCHIVER_CLASS, &NSKEYEDUNARCHIVER_META, "NSKeyedUnarchiver"),
+            (&NSASSERTIONHANDLER_CLASS, &NSASSERTIONHANDLER_META, "NSAssertionHandler"),
         ] {
             runtime::register_builtin(cls.ptr(), meta.ptr(), name, 16, &[("dealloc", i(f_dealloc as *const ()))], &[]);
         }
+        runtime::register_builtin(
+            NSNULL_CLASS.ptr(),
+            NSNULL_META.ptr(),
+            "NSNull",
+            16,
+            &[],
+            &[("null", i(ns_null_singleton as *const ()))],
+        );
     });
+}
+
+extern "C" fn ns_null_singleton(_self: Id, _cmd: Sel) -> Id {
+    static N: OnceLock<usize> = OnceLock::new();
+    *N.get_or_init(|| unsafe { alloc_with_backing(NSNULL_CLASS.ptr(), Backing::Arr(Vec::new())) } as usize) as Id
 }
 
 extern "C" fn thread_is_main(_self: Id, _cmd: Sel) -> bool { true }
@@ -1073,6 +1112,15 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_OBJC_CLASS_$_NSException" => Some(NSEXCEPTION_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSConstantArray" => Some(NSARRAY_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSConstantDictionary" => Some(NSDICTIONARY_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSURLSession" => Some(NSURLSESSION_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSURLSessionConfiguration" => Some(NSURLSESSIONCONFIGURATION_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSOperationQueue" => Some(NSOPERATIONQUEUE_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSKeyedUnarchiver" => Some(NSKEYEDUNARCHIVER_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSAssertionHandler" => Some(NSASSERTIONHANDLER_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSNull" => Some(NSNULL_CLASS.ptr() as usize),
+        "_OBJC_EHTYPE_$_NSException" => Some(&raw const OBJC_EHTYPE_NSEXCEPTION as usize),
+        "_NSRunLoopCommonModes" => Some(const_nsstr("kCFRunLoopCommonModes") as usize),
+        "_CFGetTypeID" => f(cf_get_type_id as *const ()),
         "_NSClassFromString" => f(ns_class_from_string as *const ()),
         "_NSCalendarIdentifierISO8601" => Some(const_nsstr("iso8601") as usize),
         "_NSLocaleCurrencyCode" => Some(const_nsstr("NSLocaleCurrencyCode") as usize),
@@ -1724,6 +1772,20 @@ pub struct CFUUIDBytes {
 pub extern "C" fn cf_uuid_get_bytes(_u: Id) -> CFUUIDBytes {
     CFUUIDBytes {
         bytes: [0x50, 0x65, 0x61, 0x72, 0x53, 0x69, 0x6c, 0x69, 0x80, 0, 0, 0, 0, 0, 0, 1],
+    }
+}
+
+pub extern "C" fn cf_get_type_id(obj: Id) -> usize {
+    if obj.is_null() {
+        return 0;
+    }
+    match store().lock().unwrap().get(&(obj as usize)) {
+        Some(Backing::Str(_)) => 7,
+        Some(Backing::NumI64(_) | Backing::NumF64(_) | Backing::NumBool(_)) => 22,
+        Some(Backing::Arr(_)) => 19,
+        Some(Backing::Dict(_)) => 18,
+        Some(Backing::Bytes(_)) => 20,
+        _ => 1,
     }
 }
 

@@ -251,6 +251,14 @@ pub extern "C" fn cg_rect_is_empty(r: CGRect) -> bool {
     r.size.width <= 0.0 || r.size.height <= 0.0 || r.origin.x.is_infinite() || r.origin.y.is_infinite()
 }
 
+pub extern "C" fn cg_rect_is_null(r: CGRect) -> bool {
+    r.origin.x.is_infinite() && r.origin.y.is_infinite()
+}
+
+pub extern "C" fn cg_rect_is_infinite(r: CGRect) -> bool {
+    r == CG_RECT_INFINITE
+}
+
 pub extern "C" fn cg_rect_get_min_x(r: CGRect) -> f64 { cg_rect_standardize(r).origin.x }
 pub extern "C" fn cg_rect_get_min_y(r: CGRect) -> f64 { cg_rect_standardize(r).origin.y }
 pub extern "C" fn cg_rect_get_max_x(r: CGRect) -> f64 { let s = cg_rect_standardize(r); s.origin.x + s.size.width }
@@ -406,6 +414,8 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_CGRectInfinite" => Some(&raw const CG_RECT_INFINITE as usize),
         "_CGRectStandardize" => f(cg_rect_standardize as *const ()),
         "_CGRectIsEmpty" => f(cg_rect_is_empty as *const ()),
+        "_CGRectIsNull" => f(cg_rect_is_null as *const ()),
+        "_CGRectIsInfinite" => f(cg_rect_is_infinite as *const ()),
         "_CGRectGetMinX" => f(cg_rect_get_min_x as *const ()),
         "_CGRectGetMinY" => f(cg_rect_get_min_y as *const ()),
         "_CGRectGetMaxX" => f(cg_rect_get_max_x as *const ()),

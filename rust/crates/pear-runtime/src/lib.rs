@@ -84,6 +84,9 @@ guest_class!(UIACCELEROMETER_CLASS, UIACCELEROMETER_META);
 guest_class!(UIACTIVITYVIEWCONTROLLER_CLASS, UIACTIVITYVIEWCONTROLLER_META);
 guest_class!(UIALERTVIEW_CLASS, UIALERTVIEW_META);
 guest_class!(UIPASTEBOARD_CLASS, UIPASTEBOARD_META);
+guest_class!(UIWINDOWSCENE_CLASS, UIWINDOWSCENE_META);
+guest_class!(UITOUCH_CLASS, UITOUCH_META);
+guest_class!(UIEVENT_CLASS, UIEVENT_META);
 guest_class!(AVAUDIOSESSION_CLASS, AVAUDIOSESSION_META);
 guest_class!(AVAUDIOPLAYER_CLASS, AVAUDIOPLAYER_META);
 guest_class!(AVPLAYER_CLASS, AVPLAYER_META);
@@ -136,6 +139,21 @@ extern "C" fn ui_application_main(
     0
 }
 
+extern "C" fn ns_string_from_cgrect(r: pear_graphics::CGRect) -> Id {
+    pear_foundation::nsstring_from_rust(&format!(
+        "{{{{{}, {}}}, {{{}, {}}}}}",
+        r.origin.x, r.origin.y, r.size.width, r.size.height
+    ))
+}
+
+extern "C" fn ns_string_from_cgsize(s: pear_graphics::CGSize) -> Id {
+    pear_foundation::nsstring_from_rust(&format!("{{{}, {}}}", s.width, s.height))
+}
+
+extern "C" fn ns_string_from_cgpoint(p: pear_graphics::CGPoint) -> Id {
+    pear_foundation::nsstring_from_rust(&format!("{{{}, {}}}", p.x, p.y))
+}
+
 fn init_guest_frameworks() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
@@ -183,6 +201,9 @@ fn init_guest_frameworks() {
             (&UIACTIVITYVIEWCONTROLLER_CLASS, &UIACTIVITYVIEWCONTROLLER_META, "UIActivityViewController"),
             (&UIALERTVIEW_CLASS, &UIALERTVIEW_META, "UIAlertView"),
             (&UIPASTEBOARD_CLASS, &UIPASTEBOARD_META, "UIPasteboard"),
+            (&UIWINDOWSCENE_CLASS, &UIWINDOWSCENE_META, "UIWindowScene"),
+            (&UITOUCH_CLASS, &UITOUCH_META, "UITouch"),
+            (&UIEVENT_CLASS, &UIEVENT_META, "UIEvent"),
             (&AVAUDIOSESSION_CLASS, &AVAUDIOSESSION_META, "AVAudioSession"),
             (&AVAUDIOPLAYER_CLASS, &AVAUDIOPLAYER_META, "AVAudioPlayer"),
             (&AVPLAYER_CLASS, &AVPLAYER_META, "AVPlayer"),
@@ -753,6 +774,12 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_OBJC_CLASS_$_UIActivityViewController" => Some(UIACTIVITYVIEWCONTROLLER_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UIAlertView" => Some(UIALERTVIEW_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UIPasteboard" => Some(UIPASTEBOARD_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIWindowScene" => Some(UIWINDOWSCENE_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UITouch" => Some(UITOUCH_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIEvent" => Some(UIEVENT_CLASS.ptr() as usize),
+            "_NSStringFromCGRect" => Some(ns_string_from_cgrect as *const () as usize),
+            "_NSStringFromCGSize" => Some(ns_string_from_cgsize as *const () as usize),
+            "_NSStringFromCGPoint" => Some(ns_string_from_cgpoint as *const () as usize),
             "_OBJC_METACLASS_$_UIDocument" => Some(UIDOCUMENT_META.ptr() as usize),
             "_OBJC_METACLASS_$_UIView" => Some(UIVIEW_META.ptr() as usize),
             "_OBJC_METACLASS_$_UIViewController" => Some(UIVIEWCONTROLLER_META.ptr() as usize),
