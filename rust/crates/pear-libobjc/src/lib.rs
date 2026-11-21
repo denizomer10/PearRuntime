@@ -24,8 +24,11 @@
 //! exported under their C names, they are handed to the loader.
 
 pub mod abi;
+pub mod blocks;
 pub mod message;
 pub mod object;
+pub mod props;
+pub mod reflection;
 pub mod runtime;
 
 use abi::*;
@@ -187,10 +190,67 @@ extern "C" fn objc_personality_v0() -> i32 {
     8
 }
 
+// ---- Exceptions (step 2 placeholders; full LSDA unwinder in step 3) ------
+
+#[repr(C)]
+pub struct ObjcEhtype {
+    pub vtable: *const c_void,
+    pub name: *const c_char,
+    pub cls: *const ClassT,
+}
+unsafe impl Sync for ObjcEhtype {}
+
+#[repr(transparent)]
+pub struct StaticVtable(pub [usize; 4]);
+unsafe impl Sync for StaticVtable {}
+
+pub static OBJC_EMPTY_VTABLE: StaticVtable = StaticVtable([0; 4]);
+pub static OBJC_EHTYPE_VTABLE: StaticVtable = StaticVtable([0; 4]);
+pub static OBJC_EHTYPE_ID: ObjcEhtype = ObjcEhtype {
+    vtable: &raw const OBJC_EHTYPE_VTABLE as *const c_void,
+    name: c"id".as_ptr(),
+    cls: std::ptr::null(),
+};
+
+static EXCEPTION_PREPROCESSOR: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+extern "C" fn objc_set_exception_preprocessor(new_fn: *const c_void) -> *const c_void {
+    EXCEPTION_PREPROCESSOR.swap(new_fn as usize, std::sync::atomic::Ordering::AcqRel) as *const c_void
+}
+
+extern "C" fn objc_exception_throw(exception: Id) -> ! {
+    let cls_name = if exception.is_null() {
+        "nil".to_string()
+    } else {
+        let c = unsafe { runtime::object_class(exception) };
+        runtime::class(c).map_or_else(|| "?".to_string(), |ci| ci.name.clone())
+    };
+    eprintln!("[pear-libobjc] uncaught Objective-C exception <{cls_name} {:p}>", exception);
+    std::process::abort();
+}
+
+extern "C" fn objc_exception_rethrow() -> ! {
+    eprintln!("[pear-libobjc] objc_exception_rethrow");
+    std::process::abort();
+}
+
+extern "C" fn objc_begin_catch(exc_buf: *mut c_void) -> Id {
+    exc_buf as Id
+}
+
+extern "C" fn objc_end_catch() {}
+
+extern "C" fn objc_terminate() -> ! {
+    eprintln!("[pear-libobjc] objc_terminate");
+    std::process::abort();
+}
+
 /// The address of a libobjc symbol (Mach-O name, with its `_`), for a
-/// pear-dyld resolver.
+/// pear-dyld resolver (and libclosure symbols imported from libSystem).
 pub fn symbol(name: &str) -> Option<usize> {
     object::init_runtime();
+    blocks::init_blocks();
     let f = |p: *const ()| Some(p as usize);
     match name {
         "_objc_msgSend" => f(message::objc_msg_send as *const ()),
@@ -200,6 +260,9 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_OBJC_CLASS_$_NSObject" => Some(object::NSOBJECT_CLASS.ptr() as usize),
         "_OBJC_METACLASS_$_NSObject" => Some(object::NSOBJECT_META.ptr() as usize),
         "__objc_empty_cache" => Some(&object::EMPTY_CACHE as *const _ as usize),
+        "__objc_empty_vtable" => Some(&OBJC_EMPTY_VTABLE as *const _ as usize),
+        "_objc_ehtype_vtable" | "__objc_ehtype_vtable" => Some(&OBJC_EHTYPE_VTABLE as *const _ as usize),
+        "_OBJC_EHTYPE_id" => Some(&OBJC_EHTYPE_ID as *const _ as usize),
         "_objc_retain" => f(objc_retain as *const ()),
         "_objc_release" => f(objc_release as *const ()),
         "_objc_autorelease" => f(objc_autorelease as *const ()),
@@ -221,19 +284,117 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_objc_moveWeak" => f(objc_move_weak as *const ()),
         "_objc_alloc" => f(objc_alloc as *const ()),
         "_objc_alloc_init" => f(objc_alloc_init as *const ()),
+        "_objc_allocWithZone" => f(reflection::objc_alloc_with_zone as *const ()),
         "_objc_opt_new" => f(objc_opt_new as *const ()),
         "_objc_opt_class" => f(objc_opt_class as *const ()),
         "_objc_opt_self" => f(objc_opt_self as *const ()),
         "_objc_opt_isKindOfClass" => f(objc_opt_is_kind_of_class as *const ()),
         "_objc_opt_respondsToSelector" => f(objc_opt_responds_to_selector as *const ()),
+        "__objc_rootAutorelease" => f(reflection::objc_root_autorelease as *const ()),
         "_sel_registerName" | "_sel_getUid" => f(sel_register_name as *const ()),
         "_sel_getName" => f(sel_get_name as *const ()),
+        "_sel_isEqual" => f(reflection::sel_is_equal as *const ()),
         "_objc_getClass" | "_objc_lookUpClass" => f(objc_get_class as *const ()),
+        "_objc_getMetaClass" => f(reflection::objc_get_meta_class as *const ()),
+        "_objc_getRequiredClass" => f(reflection::objc_get_required_class as *const ()),
+        "_objc_copyClassList" => f(reflection::objc_copy_class_list as *const ()),
+        "_objc_getClassList" => f(reflection::objc_get_class_list as *const ()),
+        "_objc_copyImageNames" => f(reflection::objc_copy_image_names as *const ()),
+        "_objc_copyClassNamesForImage" => f(reflection::objc_copy_class_names_for_image as *const ()),
+        "_objc_allocateClassPair" => f(reflection::objc_allocate_class_pair as *const ()),
+        "_objc_registerClassPair" => f(reflection::objc_register_class_pair as *const ()),
         "_object_getClass" => f(object_get_class as *const ()),
+        "_object_setClass" => f(reflection::object_set_class as *const ()),
+        "_object_getClassName" => f(reflection::object_get_class_name as *const ()),
+        "_object_isClass" => f(reflection::object_is_class as *const ()),
+        "_object_getIvar" => f(reflection::object_get_ivar as *const ()),
+        "_object_setIvar" => f(reflection::object_set_ivar as *const ()),
+        "_object_getIndexedIvars" => f(reflection::object_get_indexed_ivars as *const ()),
+        "_object_dispose" => f(reflection::object_dispose_fn as *const ()),
+        "_objc_constructInstance" => f(reflection::objc_construct_instance as *const ()),
+        "_objc_destructInstance" => f(reflection::objc_destruct_instance as *const ()),
+        "_class_getName" => f(reflection::class_get_name as *const ()),
         "_class_getSuperclass" => f(class_get_superclass as *const ()),
+        "_class_isMetaClass" => f(reflection::class_is_meta_class as *const ()),
+        "_class_getInstanceSize" => f(reflection::class_get_instance_size as *const ()),
+        "_class_getImageName" => f(reflection::class_get_image_name as *const ()),
         "_class_respondsToSelector" => f(class_respond_to_selector as *const ()),
         "_class_addMethod" => f(class_add_method as *const ()),
+        "_class_replaceMethod" => f(reflection::class_replace_method as *const ()),
+        "_class_getInstanceMethod" => f(reflection::class_get_instance_method as *const ()),
+        "_class_getClassMethod" => f(reflection::class_get_class_method as *const ()),
+        "_class_copyMethodList" => f(reflection::class_copy_method_list as *const ()),
+        "_class_getMethodImplementation" => f(reflection::class_get_method_implementation as *const ()),
+        "_class_getInstanceVariable" => f(reflection::class_get_instance_variable as *const ()),
+        "_class_copyIvarList" => f(reflection::class_copy_ivar_list as *const ()),
+        "_class_addIvar" => f(reflection::class_add_ivar as *const ()),
+        "_class_conformsToProtocol" => f(reflection::class_conforms_to_protocol as *const ()),
+        "_class_addProtocol" => f(reflection::class_add_protocol as *const ()),
+        "_class_copyProtocolList" => f(reflection::class_copy_protocol_list as *const ()),
+        "_class_copyPropertyList" => f(reflection::class_copy_property_list as *const ()),
+        "_class_getProperty" => f(reflection::class_get_property as *const ()),
+        "_class_addProperty" => f(reflection::class_add_property as *const ()),
+        "_class_createInstance" => f(reflection::class_create_instance as *const ()),
+        "_method_getName" => f(reflection::method_get_name as *const ()),
+        "_method_getImplementation" => f(reflection::method_get_implementation as *const ()),
+        "_method_setImplementation" => f(reflection::method_set_implementation as *const ()),
+        "_method_getTypeEncoding" => f(reflection::method_get_type_encoding as *const ()),
+        "_method_getNumberOfArguments" => f(reflection::method_get_number_of_arguments as *const ()),
+        "_method_copyReturnType" => f(reflection::method_copy_return_type as *const ()),
+        "_method_copyArgumentType" => f(reflection::method_copy_argument_type as *const ()),
+        "_method_getReturnType" => f(reflection::method_get_return_type as *const ()),
+        "_method_getArgumentType" => f(reflection::method_get_argument_type as *const ()),
+        "_method_getDescription" => f(reflection::method_get_description as *const ()),
+        "_method_exchangeImplementations" => f(reflection::method_exchange_implementations as *const ()),
+        "_ivar_getName" => f(reflection::ivar_get_name as *const ()),
+        "_ivar_getOffset" => f(reflection::ivar_get_offset as *const ()),
+        "_ivar_getTypeEncoding" => f(reflection::ivar_get_type_encoding as *const ()),
+        "_objc_getProtocol" => f(reflection::objc_get_protocol as *const ()),
+        "_protocol_getName" => f(reflection::protocol_get_name as *const ()),
+        "_protocol_isEqual" => f(reflection::protocol_is_equal as *const ()),
+        "_protocol_copyProtocolList" => f(reflection::protocol_copy_protocol_list as *const ()),
+        "_protocol_getMethodDescription" => f(reflection::protocol_get_method_description as *const ()),
+        "_protocol_copyMethodDescriptionList" => f(reflection::protocol_copy_method_description_list as *const ()),
+        "_protocol_conformsToProtocol" => f(reflection::protocol_conforms_to_protocol as *const ()),
+        "_property_getName" => f(reflection::property_get_name as *const ()),
+        "_property_getAttributes" => f(reflection::property_get_attributes as *const ()),
+        "_property_copyAttributeList" => f(reflection::property_copy_attribute_list as *const ()),
+        "_property_copyAttributeValue" => f(reflection::property_copy_attribute_value as *const ()),
+        // Properties / sync / associated objects
+        "_objc_getProperty" => f(props::objc_get_property as *const ()),
+        "_objc_setProperty" => f(props::objc_set_property as *const ()),
+        "_objc_setProperty_atomic" => f(props::objc_set_property_atomic as *const ()),
+        "_objc_setProperty_nonatomic" => f(props::objc_set_property_nonatomic as *const ()),
+        "_objc_setProperty_atomic_copy" => f(props::objc_set_property_atomic_copy as *const ()),
+        "_objc_setProperty_nonatomic_copy" => f(props::objc_set_property_nonatomic_copy as *const ()),
+        "_objc_copyStruct" => f(props::objc_copy_struct as *const ()),
+        "_objc_copyCppObjectAtomic" => f(props::objc_copy_cpp_object_atomic as *const ()),
+        "_objc_sync_enter" => f(props::objc_sync_enter as *const ()),
+        "_objc_sync_exit" => f(props::objc_sync_exit as *const ()),
+        "_objc_enumerationMutation" => f(props::objc_enumeration_mutation as *const ()),
+        "_objc_setAssociatedObject" => f(props::objc_set_associated_object as *const ()),
+        "_objc_getAssociatedObject" => f(props::objc_get_associated_object as *const ()),
+        "_objc_removeAssociatedObjects" => f(props::objc_remove_associated_objects as *const ()),
+        // Blocks (libclosure + libobjc block helpers)
+        "__Block_copy" => f(blocks::block_copy as *const ()),
+        "__Block_release" => f(blocks::block_release as *const ()),
+        "__Block_object_assign" => f(blocks::block_object_assign as *const ()),
+        "__Block_object_dispose" => f(blocks::block_object_dispose as *const ()),
+        "__NSConcreteStackBlock" => Some(blocks::NSSTACKBLOCK_CLASS.ptr() as usize),
+        "__NSConcreteMallocBlock" => Some(blocks::NSMALLOCBLOCK_CLASS.ptr() as usize),
+        "__NSConcreteGlobalBlock" => Some(blocks::NSGLOBALBLOCK_CLASS.ptr() as usize),
+        "_objc_retainBlock" => f(blocks::objc_retain_block as *const ()),
+        "_imp_implementationWithBlock" => f(blocks::imp_implementation_with_block as *const ()),
+        "_imp_getBlock" => f(blocks::imp_get_block as *const ()),
+        "_imp_removeBlock" => f(blocks::imp_remove_block as *const ()),
+        // Exceptions
         "___objc_personality_v0" => f(objc_personality_v0 as *const ()),
+        "_objc_exception_throw" => f(objc_exception_throw as *const ()),
+        "_objc_exception_rethrow" => f(objc_exception_rethrow as *const ()),
+        "_objc_begin_catch" => f(objc_begin_catch as *const ()),
+        "_objc_end_catch" => f(objc_end_catch as *const ()),
+        "_objc_terminate" => f(objc_terminate as *const ()),
+        "_objc_setExceptionPreprocessor" => f(objc_set_exception_preprocessor as *const ()),
         _ => message::register_variant(name),
     }
 }

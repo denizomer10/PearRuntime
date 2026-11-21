@@ -88,6 +88,14 @@ impl IvarEntry {
     }
 }
 
+/// A property as `objc_property_t` handles see it.
+pub struct PropertyEntry {
+    pub name: *const c_char,
+    pub attributes: *const c_char,
+}
+unsafe impl Send for PropertyEntry {}
+unsafe impl Sync for PropertyEntry {}
+
 pub struct Class {
     pub ptr: *const ClassT,
     pub name: String,
@@ -98,11 +106,13 @@ pub struct Class {
     pub method_list: RwLock<Vec<&'static MethodEntry>>,
     pub protocols: RwLock<Vec<*const ProtocolT>>,
     pub ivars: RwLock<Vec<&'static IvarEntry>>,
-    pub properties: RwLock<Vec<(*const c_char, *const c_char)>>,
+    pub properties: RwLock<Vec<&'static PropertyEntry>>,
     /// The install name of the image that defined it (class_getImageName).
     pub image: Option<CString>,
     /// Created by objc_allocateClassPair and not yet registered.
     pub building: std::sync::atomic::AtomicBool,
+    /// Cached custom retain/release/autorelease check (0=unknown, 1=default, 2=custom).
+    custom_rr: AtomicU8,
     init: AtomicU8,
     init_thread: Mutex<Option<std::thread::ThreadId>>,
 }
@@ -121,6 +131,7 @@ impl Class {
             properties: RwLock::new(Vec::new()),
             image,
             building: std::sync::atomic::AtomicBool::new(false),
+            custom_rr: AtomicU8::new(0),
             init: AtomicU8::new(INIT_NONE),
             init_thread: Mutex::new(None),
         }
@@ -164,8 +175,56 @@ fn cache() -> &'static RwLock<HashMap<(usize, usize), usize>> {
     C.get_or_init(Default::default)
 }
 
+fn protocols_map() -> &'static RwLock<HashMap<String, usize>> {
+    static P: OnceLock<RwLock<HashMap<String, usize>>> = OnceLock::new();
+    P.get_or_init(Default::default)
+}
+
+pub unsafe fn register_protocol(p: *const ProtocolT) {
+    if p.is_null() || (*p).mangled_name.is_null() {
+        return;
+    }
+    let name = CStr::from_ptr((*p).mangled_name).to_string_lossy().into_owned();
+    {
+        let mut map = protocols_map().write().unwrap();
+        map.entry(name).or_insert(p as usize);
+    }
+    for sub in protocols((*p).protocols) {
+        register_protocol(sub);
+    }
+}
+
+pub fn protocol_named(name: &str) -> Option<*const ProtocolT> {
+    protocols_map().read().unwrap().get(name).map(|&p| p as *const ProtocolT)
+}
+
 pub fn flush_cache() {
     cache().write().unwrap().clear();
+    let r = registry().read().unwrap();
+    for c in r.classes.values() {
+        c.custom_rr.store(0, Ordering::Release);
+    }
+}
+
+/// True if `cls` overrides retain, release, or autorelease from NSObject's defaults.
+pub fn has_custom_rr(cls: *const ClassT) -> bool {
+    if cls.is_null() {
+        return false;
+    }
+    let Some(c) = class(cls) else {
+        return false;
+    };
+    match c.custom_rr.load(Ordering::Acquire) {
+        1 => return false,
+        2 => return true,
+        _ => {}
+    }
+    let (dr, dl, da) = crate::object::default_rr_imps();
+    let custom = lookup(cls, sel("retain")).is_some_and(|p| p != dr)
+        || lookup(cls, sel("release")).is_some_and(|p| p != dl)
+        || lookup(cls, sel("autorelease")).is_some_and(|p| p != da);
+    c.custom_rr.store(if custom { 2 } else { 1 }, Ordering::Release);
+    custom
 }
 
 pub fn class(ptr: *const ClassT) -> Option<Arc<Class>> {
@@ -241,8 +300,15 @@ pub unsafe fn realize(cls: *const ClassT) -> bool {
         let r = ro(ptr);
         let c = Class::new(ptr, &name, meta, size, image_name.clone());
         c.add(methods((*r).base_methods).into_iter().map(|m| MethodEntry::new(m.name, m.types, m.imp)));
-        *c.protocols.write().unwrap() = protocols((*r).base_protocols);
-        *c.properties.write().unwrap() = properties((*r).base_properties);
+        let protos = protocols((*r).base_protocols);
+        for &p in &protos {
+            register_protocol(p);
+        }
+        *c.protocols.write().unwrap() = protos;
+        *c.properties.write().unwrap() = properties((*r).base_properties)
+            .into_iter()
+            .map(|(n, a)| &*Box::leak(Box::new(PropertyEntry { name: n, attributes: a })))
+            .collect();
         if !meta {
             *c.ivars.write().unwrap() = ivars((*r).ivars)
                 .into_iter()
@@ -482,6 +548,9 @@ pub unsafe fn register_image(image: &pear_dyld::LoadedImage) -> ImageReport {
             report.unrealized.push(CStr::from_ptr((*ro(cls)).name).to_string_lossy().into_owned());
         }
     }
+    for slot in slots(image, "__objc_protolist") {
+        register_protocol(*slot as *const ProtocolT);
+    }
     for slot in slots(image, "__objc_catlist").into_iter().chain(slots(image, "__objc_catlist2")) {
         let cat = *slot as *const CategoryT;
         let cls = (*cat).cls;
@@ -491,8 +560,16 @@ pub unsafe fn register_image(image: &pear_dyld::LoadedImage) -> ImageReport {
         add_methods(cls, &methods((*cat).instance_methods));
         add_methods((*cls).isa, &methods((*cat).class_methods));
         if let Some(info) = class(cls) {
-            info.protocols.write().unwrap().extend(protocols((*cat).protocols));
-            info.properties.write().unwrap().extend(properties((*cat).instance_properties));
+            let protos = protocols((*cat).protocols);
+            for &p in &protos {
+                register_protocol(p);
+            }
+            info.protocols.write().unwrap().extend(protos);
+            let props: Vec<&'static PropertyEntry> = properties((*cat).instance_properties)
+                .into_iter()
+                .map(|(n, a)| &*Box::leak(Box::new(PropertyEntry { name: n, attributes: a })))
+                .collect();
+            info.properties.write().unwrap().extend(props);
         }
         report.categories += 1;
     }

@@ -78,6 +78,11 @@ pub fn init_runtime() {
                 ("zone", i(m_null as *const ())),
                 ("performSelector:", i(m_perform as *const ())),
                 ("performSelector:withObject:", i(m_perform_with as *const ())),
+                ("copy", i(m_copy as *const ())),
+                ("mutableCopy", i(m_mutable_copy as *const ())),
+                ("methodForSelector:", i(m_method_for as *const ())),
+                ("doesNotRecognizeSelector:", i(m_does_not_recognize as *const ())),
+                ("forwardingTargetForSelector:", i(m_forwarding_target as *const ())),
             ],
             &[
                 ("alloc", i(c_alloc as *const ())),
@@ -90,6 +95,8 @@ pub fn init_runtime() {
                 ("instancesRespondToSelector:", i(c_instances_respond as *const ())),
                 ("conformsToProtocol:", i(c_conforms as *const ())),
                 ("isSubclassOfClass:", i(c_is_subclass as *const ())),
+                ("resolveInstanceMethod:", i(c_resolve as *const ())),
+                ("resolveClassMethod:", i(c_resolve as *const ())),
             ],
         );
     });
@@ -128,13 +135,21 @@ extern "C" fn c_superclass(this: Id, _: Sel) -> Id {
     runtime::superclass(this as *const ClassT) as Id
 }
 extern "C" fn m_retain(this: Id, _: Sel) -> Id {
-    retain(this)
+    retain_default(this)
 }
 extern "C" fn m_release(this: Id, _: Sel) {
-    release(this)
+    release_default(this)
 }
 extern "C" fn m_autorelease(this: Id, _: Sel) -> Id {
-    autorelease(this)
+    autorelease_default(this)
+}
+
+pub(crate) fn default_rr_imps() -> (Imp, Imp, Imp) {
+    (
+        m_retain as *const () as Imp,
+        m_release as *const () as Imp,
+        m_autorelease as *const () as Imp,
+    )
 }
 extern "C" fn m_retain_count(this: Id, _: Sel) -> usize {
     state().lock().unwrap().extra.get(&(this as usize)).copied().unwrap_or(0) + 1
@@ -178,6 +193,39 @@ extern "C" fn m_perform_with(this: Id, _: Sel, s: Sel, arg: Id) -> Id {
         let f: extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(d.imp);
         f(d.receiver, s, arg)
     }
+}
+extern "C" fn m_copy(this: Id, _: Sel) -> Id {
+    unsafe {
+        let s = sel("copyWithZone:");
+        let d = crate::message::lookup_for_send(this, s);
+        let f: extern "C" fn(Id, Sel, *mut c_void) -> Id = std::mem::transmute(d.imp);
+        f(d.receiver, s, std::ptr::null_mut())
+    }
+}
+extern "C" fn m_mutable_copy(this: Id, _: Sel) -> Id {
+    unsafe {
+        let s = sel("mutableCopyWithZone:");
+        let d = crate::message::lookup_for_send(this, s);
+        let f: extern "C" fn(Id, Sel, *mut c_void) -> Id = std::mem::transmute(d.imp);
+        f(d.receiver, s, std::ptr::null_mut())
+    }
+}
+extern "C" fn m_method_for(this: Id, _: Sel, s: Sel) -> Imp {
+    let cls = unsafe { runtime::object_class(this) };
+    runtime::lookup(cls, s).unwrap_or(std::ptr::null())
+}
+extern "C" fn m_does_not_recognize(this: Id, _: Sel, s: Sel) -> ! {
+    let cls = unsafe { runtime::object_class(this) };
+    let cname = runtime::class(cls).map_or_else(|| "?".to_string(), |c| c.name.clone());
+    let sname = runtime::sel_name(s);
+    eprintln!("[pear-libobjc] -[{cname} {sname}]: unrecognized selector sent to instance {this:p}");
+    std::process::abort();
+}
+extern "C" fn m_forwarding_target(_: Id, _: Sel, _: Sel) -> Id {
+    std::ptr::null_mut()
+}
+extern "C" fn c_resolve(_: Id, _: Sel, _: Sel) -> bool {
+    false
 }
 
 unsafe fn conforms_to(cls: *const ClassT, proto: *const ProtocolT) -> bool {
@@ -232,14 +280,25 @@ fn state() -> &'static Mutex<State> {
     S.get_or_init(Default::default)
 }
 
-pub fn retain(obj: Id) -> Id {
+pub fn retain_default(obj: Id) -> Id {
     if !obj.is_null() {
         *state().lock().unwrap().extra.entry(obj as usize).or_insert(0) += 1;
     }
     obj
 }
 
-pub fn release(obj: Id) {
+pub fn retain(obj: Id) -> Id {
+    if obj.is_null() {
+        return obj;
+    }
+    let cls = unsafe { runtime::object_class(obj) };
+    if runtime::has_custom_rr(cls) {
+        return unsafe { send0(obj, sel("retain")) };
+    }
+    retain_default(obj)
+}
+
+pub fn release_default(obj: Id) {
     if obj.is_null() {
         return;
     }
@@ -263,6 +322,20 @@ pub fn release(obj: Id) {
     }
 }
 
+pub fn release(obj: Id) {
+    if obj.is_null() {
+        return;
+    }
+    let cls = unsafe { runtime::object_class(obj) };
+    if runtime::has_custom_rr(cls) {
+        unsafe {
+            send0(obj, sel("release"));
+        }
+        return;
+    }
+    release_default(obj);
+}
+
 /// NSObject's dealloc: C++/ARC ivar destructors from the object's class up,
 /// then weak references are zeroed and the memory freed.
 pub unsafe fn dispose(obj: Id) {
@@ -275,6 +348,7 @@ pub unsafe fn dispose(obj: Id) {
         }
         c = runtime::superclass(c);
     }
+    crate::props::objc_remove_associated_objects(obj);
     {
         let mut st = state().lock().unwrap();
         for location in st.weak.remove(&(obj as usize)).unwrap_or_default() {
@@ -323,11 +397,22 @@ thread_local! {
 
 const POOL_BOUNDARY: usize = 0;
 
-pub fn autorelease(obj: Id) -> Id {
+pub fn autorelease_default(obj: Id) -> Id {
     if !obj.is_null() {
         POOL.with(|p| p.borrow_mut().push(obj as usize));
     }
     obj
+}
+
+pub fn autorelease(obj: Id) -> Id {
+    if obj.is_null() {
+        return obj;
+    }
+    let cls = unsafe { runtime::object_class(obj) };
+    if runtime::has_custom_rr(cls) {
+        return unsafe { send0(obj, sel("autorelease")) };
+    }
+    autorelease_default(obj)
 }
 
 pub fn pool_push() -> *mut c_void {
