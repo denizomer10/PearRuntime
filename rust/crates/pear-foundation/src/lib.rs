@@ -65,6 +65,9 @@ foundation_class!(NSMETADATAQUERY_CLASS, NSMETADATAQUERY_META);
 foundation_class!(NSNUMBERFORMATTER_CLASS, NSNUMBERFORMATTER_META);
 foundation_class!(NSPREDICATE_CLASS, NSPREDICATE_META);
 foundation_class!(NSTHREAD_CLASS, NSTHREAD_META);
+foundation_class!(NSCALENDAR_CLASS, NSCALENDAR_META);
+foundation_class!(NSDATECOMPONENTS_CLASS, NSDATECOMPONENTS_META);
+foundation_class!(NSEXCEPTION_CLASS, NSEXCEPTION_META);
 
 static K_CF_ALLOCATOR_DEFAULT: usize = 0;
 
@@ -895,6 +898,9 @@ pub fn init_foundation() {
             (&NSMETADATAQUERY_CLASS, &NSMETADATAQUERY_META, "NSMetadataQuery"),
             (&NSNUMBERFORMATTER_CLASS, &NSNUMBERFORMATTER_META, "NSNumberFormatter"),
             (&NSPREDICATE_CLASS, &NSPREDICATE_META, "NSPredicate"),
+            (&NSCALENDAR_CLASS, &NSCALENDAR_META, "NSCalendar"),
+            (&NSDATECOMPONENTS_CLASS, &NSDATECOMPONENTS_META, "NSDateComponents"),
+            (&NSEXCEPTION_CLASS, &NSEXCEPTION_META, "NSException"),
         ] {
             runtime::register_builtin(cls.ptr(), meta.ptr(), name, 16, &[("dealloc", i(f_dealloc as *const ()))], &[]);
         }
@@ -1062,7 +1068,32 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_OBJC_CLASS_$_NSNumberFormatter" => Some(NSNUMBERFORMATTER_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSPredicate" => Some(NSPREDICATE_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSThread" => Some(NSTHREAD_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSCalendar" => Some(NSCALENDAR_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSDateComponents" => Some(NSDATECOMPONENTS_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSException" => Some(NSEXCEPTION_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSConstantArray" => Some(NSARRAY_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSConstantDictionary" => Some(NSDICTIONARY_CLASS.ptr() as usize),
         "_NSClassFromString" => f(ns_class_from_string as *const ()),
+        "_NSCalendarIdentifierISO8601" => Some(const_nsstr("iso8601") as usize),
+        "_NSLocaleCurrencyCode" => Some(const_nsstr("NSLocaleCurrencyCode") as usize),
+        "_NSLocaleCurrencySymbol" => Some(const_nsstr("NSLocaleCurrencySymbol") as usize),
+        "_NSLocaleDecimalSeparator" => Some(const_nsstr("NSLocaleDecimalSeparator") as usize),
+        "_NSLocaleGroupingSeparator" => Some(const_nsstr("NSLocaleGroupingSeparator") as usize),
+        "_NSURLIsExcludedFromBackupKey" => Some(const_nsstr("NSURLIsExcludedFromBackupKey") as usize),
+        "_NSURLVolumeAvailableCapacityForImportantUsageKey" => Some(const_nsstr("NSURLVolumeAvailableCapacityForImportantUsageKey") as usize),
+        "_NSURLVolumeTotalCapacityKey" => Some(const_nsstr("NSURLVolumeTotalCapacityKey") as usize),
+        "_CFArrayCreate" => f(cf_array_create as *const ()),
+        "_CFBooleanGetValue" => f(cf_boolean_get_value as *const ()),
+        "_CFDataCreateWithBytesNoCopy" => f(cf_data_create as *const ()),
+        "_CFLocaleCopyCurrent" => f(cf_locale_copy_current as *const ()),
+        "_CFLocaleCopyPreferredLanguages" => f(cf_locale_copy_preferred_langs as *const ()),
+        "_CFLocaleGetValue" => f(cf_locale_get_value as *const ()),
+        "_CFStringCreateWithBytes" => f(cf_string_create_with_bytes as *const ()),
+        "_CFStringGetBytes" => f(cf_string_get_bytes as *const ()),
+        "_CFUUIDCreate" => f(cf_uuid_create as *const ()),
+        "_CFUUIDCreateFromUUIDBytes" => f(cf_uuid_create as *const ()),
+        "_CFUUIDCreateString" => f(cf_uuid_create_string as *const ()),
+        "_CFUUIDGetUUIDBytes" => f(cf_uuid_get_bytes as *const ()),
         "_kCFRunLoopCommonModes" => Some(const_nsstr("kCFRunLoopCommonModes") as usize),
         "_kCFStreamPropertySocketNativeHandle" => Some(const_nsstr("kCFStreamPropertySocketNativeHandle") as usize),
         "_NSMetadataItemFSNameKey" => Some(const_nsstr("NSMetadataItemFSNameKey") as usize),
@@ -1603,6 +1634,97 @@ pub extern "C" fn ns_class_from_string(name: Id) -> *const ClassT {
         return std::ptr::null();
     };
     runtime::class_named(&s).unwrap_or(std::ptr::null())
+}
+
+pub unsafe extern "C" fn cf_array_create(
+    _alloc: *const c_void,
+    values: *const Id,
+    num_values: isize,
+    _cb: *const c_void,
+) -> Id {
+    let mut vec = Vec::new();
+    if !values.is_null() && num_values > 0 {
+        for idx in 0..num_values as usize {
+            vec.push(retain(*values.add(idx)) as usize);
+        }
+    }
+    alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(vec))
+}
+
+pub extern "C" fn cf_boolean_get_value(b: Id) -> bool {
+    if let Some(Backing::NumBool(v)) = store().lock().unwrap().get(&(b as usize)) {
+        return *v;
+    }
+    false
+}
+
+pub extern "C" fn cf_locale_copy_current() -> Id {
+    locale_current(NSLOCALE_CLASS.ptr() as Id, sel("currentLocale"))
+}
+pub extern "C" fn cf_locale_copy_preferred_langs() -> Id {
+    locale_langs(NSLOCALE_CLASS.ptr() as Id, sel("preferredLanguages"))
+}
+pub extern "C" fn cf_locale_get_value(_loc: Id, _key: Id) -> Id {
+    nsstring_from_rust("US")
+}
+
+pub unsafe extern "C" fn cf_string_create_with_bytes(
+    _alloc: *const c_void,
+    bytes: *const u8,
+    num_bytes: isize,
+    _enc: u32,
+    _is_external: bool,
+) -> Id {
+    let s = if bytes.is_null() || num_bytes <= 0 {
+        String::new()
+    } else {
+        String::from_utf8_lossy(std::slice::from_raw_parts(bytes, num_bytes as usize)).into_owned()
+    };
+    nsstring_from_rust(&s)
+}
+
+pub unsafe extern "C" fn cf_string_get_bytes(
+    s: Id,
+    loc: isize,
+    len: isize,
+    _enc: u32,
+    _loss_byte: u8,
+    _is_ext: bool,
+    buf: *mut u8,
+    max_buf_len: isize,
+    used_buf_len: *mut isize,
+) -> isize {
+    let text = rust_str_from_nsstring(s).unwrap_or_default();
+    let bytes = text.as_bytes();
+    let start = (loc.max(0) as usize).min(bytes.len());
+    let take = (len.max(0) as usize).min(bytes.len() - start);
+    if !buf.is_null() && max_buf_len > 0 {
+        let copy_n = take.min(max_buf_len as usize);
+        std::ptr::copy_nonoverlapping(bytes[start..].as_ptr(), buf, copy_n);
+        if !used_buf_len.is_null() {
+            *used_buf_len = copy_n as isize;
+        }
+    } else if !used_buf_len.is_null() {
+        *used_buf_len = take as isize;
+    }
+    take as isize
+}
+
+pub extern "C" fn cf_uuid_create(_alloc: *const c_void) -> Id {
+    uuid_new(NSUUID_CLASS.ptr() as Id, sel("UUID"))
+}
+pub extern "C" fn cf_uuid_create_string(_alloc: *const c_void, u: Id) -> Id {
+    uuid_string(u, sel("UUIDString"))
+}
+#[repr(C)]
+pub struct CFUUIDBytes {
+    pub bytes: [u8; 16],
+}
+
+pub extern "C" fn cf_uuid_get_bytes(_u: Id) -> CFUUIDBytes {
+    CFUUIDBytes {
+        bytes: [0x50, 0x65, 0x61, 0x72, 0x53, 0x69, 0x6c, 0x69, 0x80, 0, 0, 0, 0, 0, 0, 1],
+    }
 }
 
 #[cfg(test)]

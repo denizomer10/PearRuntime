@@ -89,6 +89,17 @@ guest_class!(AVAUDIOPLAYER_CLASS, AVAUDIOPLAYER_META);
 guest_class!(AVPLAYER_CLASS, AVPLAYER_META);
 guest_class!(AVPLAYERITEM_CLASS, AVPLAYERITEM_META);
 guest_class!(AVURLASSET_CLASS, AVURLASSET_META);
+guest_class!(AVASSETREADER_CLASS, AVASSETREADER_META);
+guest_class!(AVASSETREADERTRACKOUTPUT_CLASS, AVASSETREADERTRACKOUTPUT_META);
+guest_class!(AVPLAYERITEMLEGIBLEOUTPUT_CLASS, AVPLAYERITEMLEGIBLEOUTPUT_META);
+guest_class!(AVPLAYERITEMVIDEOOUTPUT_CLASS, AVPLAYERITEMVIDEOOUTPUT_META);
+guest_class!(CKCONTAINER_CLASS, CKCONTAINER_META);
+guest_class!(CKDATABASE_CLASS, CKDATABASE_META);
+guest_class!(CKMODIFYRECORDSOPERATION_CLASS, CKMODIFYRECORDSOPERATION_META);
+guest_class!(CKQUERY_CLASS, CKQUERY_META);
+guest_class!(CKQUERYOPERATION_CLASS, CKQUERYOPERATION_META);
+guest_class!(CKRECORD_CLASS, CKRECORD_META);
+guest_class!(CKRECORDID_CLASS, CKRECORDID_META);
 
 extern "C" fn shared_app_stub(_self: Id, _cmd: Sel) -> Id {
     static APP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -177,6 +188,17 @@ fn init_guest_frameworks() {
             (&AVPLAYER_CLASS, &AVPLAYER_META, "AVPlayer"),
             (&AVPLAYERITEM_CLASS, &AVPLAYERITEM_META, "AVPlayerItem"),
             (&AVURLASSET_CLASS, &AVURLASSET_META, "AVURLAsset"),
+            (&AVASSETREADER_CLASS, &AVASSETREADER_META, "AVAssetReader"),
+            (&AVASSETREADERTRACKOUTPUT_CLASS, &AVASSETREADERTRACKOUTPUT_META, "AVAssetReaderTrackOutput"),
+            (&AVPLAYERITEMLEGIBLEOUTPUT_CLASS, &AVPLAYERITEMLEGIBLEOUTPUT_META, "AVPlayerItemLegibleOutput"),
+            (&AVPLAYERITEMVIDEOOUTPUT_CLASS, &AVPLAYERITEMVIDEOOUTPUT_META, "AVPlayerItemVideoOutput"),
+            (&CKCONTAINER_CLASS, &CKCONTAINER_META, "CKContainer"),
+            (&CKDATABASE_CLASS, &CKDATABASE_META, "CKDatabase"),
+            (&CKMODIFYRECORDSOPERATION_CLASS, &CKMODIFYRECORDSOPERATION_META, "CKModifyRecordsOperation"),
+            (&CKQUERY_CLASS, &CKQUERY_META, "CKQuery"),
+            (&CKQUERYOPERATION_CLASS, &CKQUERYOPERATION_META, "CKQueryOperation"),
+            (&CKRECORD_CLASS, &CKRECORD_META, "CKRecord"),
+            (&CKRECORDID_CLASS, &CKRECORDID_META, "CKRecordID"),
         ] {
             objc_rt::register_builtin(cls.ptr(), meta.ptr(), name, 32, &[], &[]);
         }
@@ -514,7 +536,20 @@ fn audiotoolbox_symbol(symbol: &str) -> Option<usize> {
         | "_ExtAudioFileGetProperty"
         | "_ExtAudioFileSetProperty"
         | "_ExtAudioFileRead"
-        | "_ExtAudioFileSeek" => Some(ok),
+        | "_ExtAudioFileSeek"
+        | "_NewAUGraph"
+        | "_DisposeAUGraph"
+        | "_AUGraphAddNode"
+        | "_AUGraphConnectNodeInput"
+        | "_AUGraphInitialize"
+        | "_AUGraphNodeInfo"
+        | "_AUGraphOpen"
+        | "_AUGraphSetNodeInputCallback"
+        | "_AUGraphStart"
+        | "_AUGraphStop"
+        | "_AudioServicesPlaySystemSound"
+        | "_AudioUnitSetParameter"
+        | "_CAShow" => Some(ok),
         _ => None,
     }
 }
@@ -643,6 +678,30 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_abort" => Some(abort as *const () as usize),
             _ => pear_libobjc::symbol(symbol).or_else(|| libc_dlsym(symbol)),
         },
+        Some(path) if path.contains("AVFAudio") || path.contains("AVFoundation") => match symbol {
+            "_OBJC_CLASS_$_AVAudioSession" => Some(AVAUDIOSESSION_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_AVAudioPlayer" => Some(AVAUDIOPLAYER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_AVPlayer" => Some(AVPLAYER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_AVPlayerItem" => Some(AVPLAYERITEM_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_AVURLAsset" => Some(AVURLASSET_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_AVAssetReader" => Some(AVASSETREADER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_AVAssetReaderTrackOutput" => Some(AVASSETREADERTRACKOUTPUT_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_AVPlayerItemLegibleOutput" => Some(AVPLAYERITEMLEGIBLEOUTPUT_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_AVPlayerItemVideoOutput" => Some(AVPLAYERITEMVIDEOOUTPUT_CLASS.ptr() as usize),
+            s if s.starts_with("_AV") => Some(framework_const(Box::leak(s.to_string().into_boxed_str()))),
+            _ => None,
+        },
+        Some(path) if path.contains("CloudKit") => match symbol {
+            "_OBJC_CLASS_$_CKContainer" => Some(CKCONTAINER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_CKDatabase" => Some(CKDATABASE_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_CKModifyRecordsOperation" => Some(CKMODIFYRECORDSOPERATION_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_CKQuery" => Some(CKQUERY_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_CKQueryOperation" => Some(CKQUERYOPERATION_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_CKRecord" => Some(CKRECORD_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_CKRecordID" => Some(CKRECORDID_CLASS.ptr() as usize),
+            "_CKQueryOperationMaximumResults" => Some(framework_const("CKQueryOperationMaximumResults")),
+            _ => None,
+        },
         Some(path) if path.contains("CoreFoundation") || path.contains("Foundation") => {
             pear_foundation::symbol(symbol)
         }
@@ -708,15 +767,6 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_OBJC_CLASS_$_SKPaymentQueue" => Some(SKPAYMENTQUEUE_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_SKStoreReviewController" => Some(SKSTOREREVIEWCONTROLLER_CLASS.ptr() as usize),
             "_SKErrorDomain" => Some(framework_const("SKErrorDomain")),
-            _ => None,
-        },
-        Some(path) if path.contains("AVFAudio") || path.contains("AVFoundation") => match symbol {
-            "_OBJC_CLASS_$_AVAudioSession" => Some(AVAUDIOSESSION_CLASS.ptr() as usize),
-            "_OBJC_CLASS_$_AVAudioPlayer" => Some(AVAUDIOPLAYER_CLASS.ptr() as usize),
-            "_OBJC_CLASS_$_AVPlayer" => Some(AVPLAYER_CLASS.ptr() as usize),
-            "_OBJC_CLASS_$_AVPlayerItem" => Some(AVPLAYERITEM_CLASS.ptr() as usize),
-            "_OBJC_CLASS_$_AVURLAsset" => Some(AVURLASSET_CLASS.ptr() as usize),
-            s if s.starts_with("_AV") => Some(framework_const(Box::leak(s.to_string().into_boxed_str()))),
             _ => None,
         },
         Some(path) if path.contains("AudioToolbox") => audiotoolbox_symbol(symbol),
