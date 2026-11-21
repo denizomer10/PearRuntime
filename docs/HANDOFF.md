@@ -73,7 +73,7 @@ PearSilicon (parent) launches 64-bit apps through PearHost
 | Milestone | State |
 |---|---|
 | M1 inventory/plan/baseline | Done (`docs/independence-plan.md`, `docs/runs/baseline-2026-11-21.md`). |
-| M2 retire Catalyst | **Not started.** Launcher still has the `if true` hack; Catalyst code still present. |
+| M2 retire Catalyst | **Done:** `AppLauncher` drops `if true` & Catalyst launch paths; `PackageInstaller` installs 64-bit apps straight into PearHost form; `AppDetailView` drops the Catalyst/PearHost toggle. |
 | M3 host trait | **Done** (steps 1–5): trait, AppKit moved to pear-host-macos, pasteboard/picker/share/a11y, `GuestEvents` sink, `NativeSurface`. |
 | M4 text/images | Steps 1–3 done: UIFont on CoreText only (no AppKit in pear-uikit); UIKit re-exports UIFoundation instead of AppKit; own image decoders behind UIImage. **Open:** ICC colour management (ImageIO fallback for ICC/gAMA/16-bit/CMYK on macOS), decoder speed (1.5× ImageIO), own CoreGraphics/CoreText for non-macOS (big). |
 | M5 GLES on Vulkan | Not started (PearANGLE Linux/Vulkan build). Only prerequisite done: forwarders build on arm64 Linux. |
