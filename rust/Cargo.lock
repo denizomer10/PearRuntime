@@ -33,6 +33,13 @@ name = "pear-empty-framework"
 version = "0.1.0"
 
 [[package]]
+name = "pear-foundation"
+version = "0.1.0"
+dependencies = [
+ "pear-libobjc",
+]
+
+[[package]]
 name = "pear-gles"
 version = "0.1.0"
 dependencies = [
@@ -49,6 +56,13 @@ name = "pear-host-frameworks"
 version = "0.1.0"
 dependencies = [
  "pear-objc",
+]
+
+[[package]]
+name = "pear-host-linux"
+version = "0.1.0"
+dependencies = [
+ "pear-host",
 ]
 
 [[package]]
@@ -99,6 +113,19 @@ version = "0.1.0"
 [[package]]
 name = "pear-opengles"
 version = "0.1.0"
+
+[[package]]
+name = "pear-runtime"
+version = "0.1.0"
+dependencies = [
+ "pear-dyld",
+ "pear-foundation",
+ "pear-host",
+ "pear-host-linux",
+ "pear-image",
+ "pear-libobjc",
+ "pear-macho",
+]
 
 [[package]]
 name = "pear-swift-support"

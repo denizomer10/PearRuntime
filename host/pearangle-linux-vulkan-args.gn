@@ -1,0 +1,11 @@
+target_os = "linux"
+target_cpu = "arm64"
+is_debug = false
+is_component_build = false
+is_clang = true
+angle_enable_vulkan = true
+angle_enable_gl = false
+angle_enable_null = false
+angle_enable_swiftshader = false
+angle_use_wayland = true
+angle_use_x11 = true

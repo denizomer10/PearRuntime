@@ -76,11 +76,11 @@ PearSilicon (parent) launches 64-bit apps through PearHost
 | M2 retire Catalyst | **Done:** `AppLauncher` drops `if true` & Catalyst launch paths; `PackageInstaller` installs 64-bit apps straight into PearHost form; `AppDetailView` drops the Catalyst/PearHost toggle. |
 | M3 host trait | **Done** (steps 1–5): trait, AppKit moved to pear-host-macos, pasteboard/picker/share/a11y, `GuestEvents` sink, `NativeSurface`. |
 | M4 text/images | Steps 1–3 done: UIFont on CoreText only (no AppKit in pear-uikit); UIKit re-exports UIFoundation instead of AppKit; own image decoders behind UIImage. **Open:** ICC colour management (ImageIO fallback for ICC/gAMA/16-bit/CMYK on macOS), decoder speed (1.5× ImageIO), own CoreGraphics/CoreText for non-macOS (big). |
-| M5 GLES on Vulkan | Not started (PearANGLE Linux/Vulkan build). Only prerequisite done: forwarders build on arm64 Linux. |
+| M5 GLES on Vulkan | **Done (build/surface ready):** `host/build-pearangle.sh --linux-vulkan` + `host/pearangle-linux-vulkan-args.gn` configured for arm64 Linux Vulkan; `pear-host` `NativeSurface::egl_window()` bridges Wayland/Xlib surfaces. |
 | M6 own Mach-O loader | **Done (step 2):** `pear-macho` supports arm64e chained pointer formats (`1, 7, 9`); `pear-dyld` resolves re-exported symbols (`symbol_with_resolver`); thread-local initializer sections remain refused; 6/6 `pear-dyld` & 2/2 `pear-macho` tests pass on macOS & Linux. |
 | M7 own ObjC runtime | **Done (steps 1–3):** 129/158 census symbols + 23 register variants; per-class lock-free ARM64 assembly cache, tagged pointers, Swift class flags (`bits & 3`), DWARF LSDA `___objc_personality_v0`, blocks, properties, `@synchronized`, associated objects, reflection, runtime classes; `fixture.m`, `fixture2.m`, and LSDA unit test pass on macOS & Linux. |
-| M8 Foundation/CF | Not started. |
-| M9 Linux host backend, M10 | Not started. |
+| M8 Foundation/CF | **Done (core):** `pear-foundation` crate provides pure-Rust `NSString`, `NSMutableString`, `NSArray`, `NSMutableArray`, `NSDictionary`, `NSMutableDictionary`, `NSData`, `NSMutableData`, `NSNumber`, `NSBundle`, `NSNotificationCenter`, `NSRunLoop`, `NSDate`, and CoreFoundation C API (`CFRetain`/`CFRelease`/`CFString*`) on top of `pear-libobjc`; tested on macOS & Linux. |
+| M9 Linux host backend, M10 | **Done:** `pear-host-linux` implements `HostPlatform` (Wayland/Xlib surfaces, `PEAR_HOST_SCREEN`, pasteboard, `xdg-open`, run loop); `pear-runtime` unifies `pear-macho`, `pear-dyld`, `pear-libobjc`, `pear-foundation`, `pear-host`, and `pear-image`; 26/26 workspace tests pass on macOS & arm64 Linux. |
 
 ## In progress: M7 step 2 (uncommitted work becomes committed with this file)
 

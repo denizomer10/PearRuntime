@@ -1,0 +1,15 @@
+[package]
+name = "pear-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pear-macho = { path = "../pear-macho" }
+pear-dyld = { path = "../pear-dyld" }
+pear-libobjc = { path = "../pear-libobjc" }
+pear-foundation = { path = "../pear-foundation" }
+pear-host = { path = "../pear-host" }
+pear-image = { path = "../pear-image" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+pear-host-linux = { path = "../pear-host-linux" }
