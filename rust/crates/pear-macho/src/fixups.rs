@@ -172,8 +172,11 @@ fn binds(m: &MachO, ops: &[u8], stream: Stream, imports: &mut Imports, out: &mut
     Ok(())
 }
 
+const DYLD_CHAINED_PTR_ARM64E: u16 = 1;
 const DYLD_CHAINED_PTR_64: u16 = 2;
 const DYLD_CHAINED_PTR_64_OFFSET: u16 = 6;
+const DYLD_CHAINED_PTR_ARM64E_USERLAND: u16 = 7;
+const DYLD_CHAINED_PTR_ARM64E_USERLAND24: u16 = 9;
 const DYLD_CHAINED_PTR_START_NONE: u16 = 0xffff;
 
 /// Chained fixups: `blob` is the LC_DYLD_CHAINED_FIXUPS payload.
@@ -238,9 +241,14 @@ pub(crate) fn chained(m: &MachO, blob: &[u8]) -> Result<Fixups, Error> {
         let pointer_format = u16_at(blob, at + 6)?;
         let segment_offset = u64_at(blob, at + 8)?;
         let page_count = u16_at(blob, at + 20)? as u64;
-        if pointer_format != DYLD_CHAINED_PTR_64 && pointer_format != DYLD_CHAINED_PTR_64_OFFSET {
-            return Err(Error::Unsupported("chained pointer format (arm64e or 32-bit)"));
+        let is_arm64e = matches!(
+            pointer_format,
+            DYLD_CHAINED_PTR_ARM64E | DYLD_CHAINED_PTR_ARM64E_USERLAND | DYLD_CHAINED_PTR_ARM64E_USERLAND24
+        );
+        if !is_arm64e && pointer_format != DYLD_CHAINED_PTR_64 && pointer_format != DYLD_CHAINED_PTR_64_OFFSET {
+            return Err(Error::Unsupported("chained pointer format (32-bit or unknown)"));
         }
+        let stride = if is_arm64e { 8 } else { 4 };
         for page in 0..page_count {
             let start = u16_at(blob, at + 22 + page as usize * 2)?;
             if start == DYLD_CHAINED_PTR_START_NONE {
@@ -253,23 +261,57 @@ pub(crate) fn chained(m: &MachO, blob: &[u8]) -> Result<Fixups, Error> {
             let mut steps = 0;
             loop {
                 let raw = m.read_u64_at_address(address)?;
-                let next = (raw >> 51) & 0xfff;
-                let kind = if raw >> 63 == 1 {
-                    let import = (raw & 0xff_ffff) as usize;
-                    let inline = ((raw >> 24) & 0xff) as i64;
-                    let extra = *addends.get(import).ok_or(Error::Malformed("chained bind ordinal"))?;
-                    FixupKind::Bind { import, addend: inline + extra }
+                let (next, kind) = if is_arm64e {
+                    let auth = (raw >> 63) & 1 == 1;
+                    let bind = (raw >> 62) & 1 == 1;
+                    let next = (raw >> 51) & 0x7ff;
+                    let kind = match (auth, bind) {
+                        (true, true) => {
+                            let mask = if pointer_format == DYLD_CHAINED_PTR_ARM64E_USERLAND24 { 0xff_ffff } else { 0xffff };
+                            let import = (raw & mask) as usize;
+                            let extra = *addends.get(import).ok_or(Error::Malformed("chained bind ordinal"))?;
+                            FixupKind::Bind { import, addend: extra }
+                        }
+                        (false, true) => {
+                            let mask = if pointer_format == DYLD_CHAINED_PTR_ARM64E_USERLAND24 { 0xff_ffff } else { 0xffff };
+                            let import = (raw & mask) as usize;
+                            let inline = ((raw >> 32) & 0x7_ffff) as i64;
+                            let signed = if (inline & 0x4_0000) != 0 { inline | !0x7_ffff } else { inline };
+                            let extra = *addends.get(import).ok_or(Error::Malformed("chained bind ordinal"))?;
+                            FixupKind::Bind { import, addend: signed + extra }
+                        }
+                        (true, false) => {
+                            let target = base + (raw & 0xffff_ffff);
+                            FixupKind::Rebase { target, high8: 0 }
+                        }
+                        (false, false) => {
+                            let target = raw & 0x7ff_ffff_ffff;
+                            let high8 = ((raw >> 43) & 0xff) as u8;
+                            let target = if pointer_format == DYLD_CHAINED_PTR_ARM64E { target } else { base + target };
+                            FixupKind::Rebase { target, high8 }
+                        }
+                    };
+                    (next, kind)
                 } else {
-                    let target = raw & 0xf_ffff_ffff;
-                    let high8 = ((raw >> 36) & 0xff) as u8;
-                    let target = if pointer_format == DYLD_CHAINED_PTR_64_OFFSET { base + target } else { target };
-                    FixupKind::Rebase { target, high8 }
+                    let next = (raw >> 51) & 0xfff;
+                    let kind = if raw >> 63 == 1 {
+                        let import = (raw & 0xff_ffff) as usize;
+                        let inline = ((raw >> 24) & 0xff) as i64;
+                        let extra = *addends.get(import).ok_or(Error::Malformed("chained bind ordinal"))?;
+                        FixupKind::Bind { import, addend: inline + extra }
+                    } else {
+                        let target = raw & 0xf_ffff_ffff;
+                        let high8 = ((raw >> 36) & 0xff) as u8;
+                        let target = if pointer_format == DYLD_CHAINED_PTR_64_OFFSET { base + target } else { target };
+                        FixupKind::Rebase { target, high8 }
+                    };
+                    (next, kind)
                 };
                 fixups.push(Fixup { address, kind, lazy: false });
                 if next == 0 {
                     break;
                 }
-                address += next * 4;
+                address += next * stride;
                 steps += 1;
                 if steps > page_size {
                     return Err(Error::Malformed("chain does not end in its page"));

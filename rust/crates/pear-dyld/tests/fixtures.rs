@@ -102,3 +102,20 @@ fn thread_locals_dyld_info() {
 fn thread_locals_chained() {
     thread_locals(concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/fixture-chained.dylib"));
 }
+
+#[test]
+fn reexported_symbol_resolves_through_resolver() {
+    let data = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/fixture-chained.dylib")).unwrap();
+    let mut image = load(&data, &resolver, Options::default()).unwrap();
+    let expected = image.dylibs.first().cloned().unwrap_or_default();
+    image.inject_reexport_for_test("_reexported_puts", 0, "_puts");
+    let res = |lib: Option<&str>, sym: &str| -> Option<usize> {
+        if lib == Some(expected.as_str()) && sym == "_puts" {
+            Some(0xDEAD_BEEF)
+        } else {
+            None
+        }
+    };
+    let ptr = image.symbol_with_resolver("_reexported_puts", Some(&res));
+    assert_eq!(ptr.map(|p| p as usize), Some(0xDEAD_BEEF));
+}

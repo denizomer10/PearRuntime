@@ -105,6 +105,7 @@ pub struct LoadedImage {
     /// Imports bound to [`missing_symbol_called`].
     pub missing: Vec<String>,
     pub install_name: Option<String>,
+    pub dylibs: Vec<String>,
     /// The image's sections (unslid addresses; see [`LoadedImage::address`]).
     pub sections: Vec<pear_macho::Section>,
 }
@@ -136,19 +137,39 @@ impl LoadedImage {
         (self.region.start as u64).wrapping_sub(self.low) as i64
     }
 
-    /// An exported symbol's address (Mach-O name, with its `_`).
-    pub fn symbol(&self, name: &str) -> Option<*const c_void> {
+    /// An exported symbol's address (Mach-O name, with its `_`), resolving
+    /// re-exports through `resolver` when present.
+    pub fn symbol_with_resolver(&self, name: &str, resolver: Option<&dyn Resolver>) -> Option<*const c_void> {
         match self.exports.get(name)? {
             ExportKind::Regular { offset, thread_local: false, .. } => {
                 Some(self.address(self.header + offset) as *const c_void)
             }
             ExportKind::Absolute { value } => Some(*value as *const c_void),
-            ExportKind::Resolver { resolver, .. } => {
-                let f: extern "C" fn() -> usize = unsafe { std::mem::transmute(self.address(self.header + resolver)) };
+            ExportKind::Resolver { resolver: res, .. } => {
+                let f: extern "C" fn() -> usize = unsafe { std::mem::transmute(self.address(self.header + res)) };
                 Some(f() as *const c_void)
+            }
+            ExportKind::Reexport { dylib, name: target_name } => {
+                let res = resolver?;
+                let dylib_path = self.dylibs.get(*dylib).map(String::as_str);
+                let sym = if target_name.is_empty() { name } else { target_name.as_str() };
+                res.resolve(dylib_path, sym).map(|a| a as *const c_void)
             }
             _ => None,
         }
+    }
+
+    /// An exported symbol's address (Mach-O name, with its `_`).
+    pub fn symbol(&self, name: &str) -> Option<*const c_void> {
+        self.symbol_with_resolver(name, None)
+    }
+
+    #[doc(hidden)]
+    pub fn inject_reexport_for_test(&mut self, name: &str, dylib: usize, target: &str) {
+        self.exports.insert(
+            name.to_string(),
+            ExportKind::Reexport { dylib, name: target.to_string() },
+        );
     }
 
     /// Runs the image's initializers in order, with dyld's arguments
@@ -201,6 +222,7 @@ pub fn load(data: &[u8], resolver: &dyn Resolver, options: Options) -> Result<Lo
         initializers: m.initializers()?,
         missing: Vec::new(),
         install_name: m.install_name.clone(),
+        dylibs: m.dylibs.iter().map(|d| d.path.clone()).collect(),
         sections: m.sections.clone(),
     };
 
@@ -308,7 +330,7 @@ fn resolve(m: &MachO, image: &LoadedImage, import: &Import, resolver: &dyn Resol
     if import.name == "__tlv_bootstrap" {
         return Some(stub_binder_called as *const () as usize);
     }
-    let own = || image.symbol(&import.name).map(|p| p as usize);
+    let own = || image.symbol_with_resolver(&import.name, Some(resolver)).map(|p| p as usize);
     match import.ordinal {
         Ordinal::Dylib(i) => resolver.resolve(Some(&m.dylibs[i].path), &import.name),
         Ordinal::SelfImage => own(),
