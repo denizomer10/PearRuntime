@@ -13,11 +13,11 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 #[derive(Clone)]
 struct LinuxWindow {
-    id: u64,
+    _id: u64,
     _owner: usize,
     frame: Rect,
     root_layer: usize,
@@ -108,7 +108,7 @@ impl HostPlatform for LinuxHost {
     fn create_window(&self, owner: GuestObject, frame: Rect) -> WindowHandle {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let win = LinuxWindow {
-            id,
+            _id: id,
             _owner: owner.0 as usize,
             frame,
             root_layer: 0,

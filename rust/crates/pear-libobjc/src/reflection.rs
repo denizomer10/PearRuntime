@@ -535,6 +535,44 @@ pub unsafe extern "C" fn protocol_copy_method_description_list(
     buf
 }
 
+pub unsafe extern "C" fn protocol_copy_property_list(
+    p: *const ProtocolT,
+    out_count: *mut u32,
+) -> *mut PropertyHandle {
+    if p.is_null() {
+        return alloc_null_terminated::<PropertyHandle>(&[], out_count);
+    }
+    let props: Vec<PropertyHandle> = properties((*p).instance_properties)
+        .into_iter()
+        .map(|(name, attributes)| Box::leak(Box::new(PropertyEntry { name, attributes })) as PropertyHandle)
+        .collect();
+    alloc_null_terminated(&props, out_count)
+}
+
+pub unsafe extern "C" fn protocol_get_property(
+    p: *const ProtocolT,
+    name: *const c_char,
+    _is_required_property: bool,
+    is_instance_property: bool,
+) -> PropertyHandle {
+    if p.is_null() || name.is_null() || !is_instance_property {
+        return std::ptr::null();
+    }
+    let target = CStr::from_ptr(name).to_bytes();
+    for (pname, attributes) in properties((*p).instance_properties) {
+        if !pname.is_null() && CStr::from_ptr(pname).to_bytes() == target {
+            return Box::leak(Box::new(PropertyEntry { name: pname, attributes })) as PropertyHandle;
+        }
+    }
+    for sub in protocols((*p).protocols) {
+        let found = protocol_get_property(sub, name, _is_required_property, is_instance_property);
+        if !found.is_null() {
+            return found;
+        }
+    }
+    std::ptr::null()
+}
+
 pub unsafe extern "C" fn class_copy_property_list(
     cls: *const ClassT,
     out_count: *mut u32,
@@ -779,6 +817,26 @@ pub unsafe extern "C" fn object_set_ivar(obj: Id, iv: IvarHandle, val: Id) {
     *((obj as *mut u8).offset((*iv).offset()) as *mut Id) = val;
 }
 
+pub unsafe extern "C" fn object_get_instance_variable(
+    obj: Id,
+    name: *const c_char,
+    out_value: *mut *mut c_void,
+) -> IvarHandle {
+    if obj.is_null() || name.is_null() {
+        if !out_value.is_null() {
+            *out_value = std::ptr::null_mut();
+        }
+        return std::ptr::null();
+    }
+    let iv = class_get_instance_variable(object_class(obj), name);
+    if !iv.is_null() && !out_value.is_null() {
+        *out_value = object_get_ivar(obj, iv) as *mut c_void;
+    } else if !out_value.is_null() {
+        *out_value = std::ptr::null_mut();
+    }
+    iv
+}
+
 pub unsafe extern "C" fn object_get_indexed_ivars(obj: Id) -> *mut c_void {
     if obj.is_null() {
         return std::ptr::null_mut();
@@ -921,5 +979,52 @@ pub unsafe extern "C" fn objc_register_class_pair(cls: *const ClassT) {
     if !cls.is_null() {
         runtime::publish(cls);
         flush_cache();
+    }
+}
+
+pub unsafe extern "C" fn objc_initialize_class_pair(
+    sup: *const ClassT,
+    name: *const c_char,
+    cls: *mut ClassT,
+    meta: *mut ClassT,
+) -> *const ClassT {
+    if name.is_null() || cls.is_null() || meta.is_null() {
+        return std::ptr::null();
+    }
+    let n = CStr::from_ptr(name).to_string_lossy();
+    if class_named(&n).is_some() {
+        return std::ptr::null();
+    }
+    let sup_meta = if sup.is_null() { NSOBJECT_META.ptr() } else { (*sup).isa };
+    let sup_size = if sup.is_null() { 8 } else { class_get_instance_size(sup).max(8) };
+    (*meta).isa = NSOBJECT_META.ptr();
+    (*meta).superclass = sup_meta;
+    (*meta).cache = &raw const EMPTY_CACHE as *const c_void;
+    (*cls).isa = meta;
+    (*cls).superclass = sup;
+    (*cls).cache = &raw const EMPTY_CACHE as *const c_void;
+    runtime::register_dynamic(cls, meta, &n, sup_size);
+    cls
+}
+
+pub unsafe extern "C" fn class_set_superclass(
+    cls: *mut ClassT,
+    new_super: *const ClassT,
+) -> *const ClassT {
+    if cls.is_null() {
+        return std::ptr::null();
+    }
+    let old = (*cls).superclass;
+    (*cls).superclass = new_super;
+    flush_cache();
+    old
+}
+
+pub unsafe extern "C" fn class_get_ivar_layout(cls: *const ClassT) -> *const u8 {
+    let ro_ptr = runtime::ro(cls);
+    if ro_ptr.is_null() {
+        std::ptr::null()
+    } else {
+        (*ro_ptr).ivar_layout
     }
 }

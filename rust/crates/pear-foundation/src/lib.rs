@@ -56,6 +56,7 @@ enum Backing {
     NumI64(i64),
     NumF64(f64),
     NumBool(bool),
+    #[allow(dead_code)]
     Date(f64),
 }
 
