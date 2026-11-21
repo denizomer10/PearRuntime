@@ -325,6 +325,28 @@ Each milestone is small, testable alone, and keeps working paths working.
 6. **M6 — Own Mach-O loader for 64-bit.** Load and bind an iOS image with
    pear-macho (segments, chained fixups, initializers) without dyld; start with
    a tiny test binary, then a real app on macOS behind a flag.
+   *Step 1 done (2026-11-21):* `pear-macho` parses load commands, segments
+   and sections, dylibs, exports tries, initializers and fixups from both
+   formats (dyld-info rebase/bind/lazy/weak opcodes: 14 of the 22 game
+   executables; chained fixups `PTR_64`/`PTR_64_OFFSET`, import formats
+   1–3: 7). Its fixups equal `dyld_info -fixups` for all 228 game Mach-Os
+   dyld_info can read (11.96 M fixups; weak-coalescing entries matched by
+   address, since dyld_info mislabels them; it crashes on 4 others). New
+   crate `pear-dyld` (no dependencies): maps an image, applies rebases and
+   binds through a caller's `Resolver` (lazy pointers bound eagerly, missing
+   weak imports NULL, missing strong ones refused or trapped), sets
+   protections, flushes the instruction cache, runs `__mod_init_func` and
+   `__init_offsets` initializers, resolves exports, and implements Darwin
+   thread-local variables (own `tlv_get_addr` thunk preserving all registers
+   but x0/x16/x17, per-thread blocks from the template). Evidence: iOS
+   fixture dylibs built by Apple's clang (`pear-dyld/fixtures`, both fixup
+   formats) load and run — initializers, binds, rebases, imported data,
+   weak imports, TLV across threads — on macOS and on arm64 Linux (6.18,
+   4 KiB pages); all 264 Mach-O images of the 22 games map and fix up on
+   both, with identical results. Next: running real app code needs its
+   Objective-C metadata registered with a runtime (M7) and its imports
+   resolved against PearRuntime's frameworks; re-exports and arm64e are
+   not handled yet.
 7. **M7 — Objective-C runtime.** Decide between embedding a portable runtime
    (GNUstep libobjc2 has the Apple 64-bit ABI) and a Rust one; the 32-bit
    engine's runtime is the reference for semantics.
@@ -346,6 +368,7 @@ Each milestone is small, testable alone, and keeps working paths working.
 | Linux portability | `container run … rust` builds of each crate | pear-macho, pear-nib, pear-objc, pear-core, pear-host, pear-opengles, pear-gles build on arm64 Linux (the GLES forwarders use ELF `:lo12:` relocations there, Mach-O `@PAGE` on Apple; x86-64 needs its own trampolines); tests of pear-host/pear-macho/pear-nib pass; tests of pear-macho/pear-nib pass; pear-uikit/pear-keychain/pear-metalkit link Apple frameworks |
 | ObjC ABI parity | `tools/host-abi-census.py --compare` | identical to the last ObjC build and across M3 |
 | Host behaviour | `tools/host-behavior-probe.py --compare` (UIKit accessors, exception boundaries, constants, EAGL GLES 1/2/3) | identical across M3 (35 facts) and M4 step 1 (51 facts: + UIFont constructors/metrics, a UILabel's pixels) |
+| Mach-O loading | `pear-macho --example fixups-dump` vs `dyld_info -fixups`; `pear-dyld` tests (fixtures run); `pear-dyld --example load-check` over every game image | 228/228 identical fixups; fixtures run on macOS and Linux; 264/264 images load on both (M6 step 1) |
 | Image decoding | `tools/host-image-probe.py` (UIImage vs ImageIO: layout, bytes, drawn pixels); `pear-image --example imageio-compare`, `decode-hash` (macOS vs Linux) | 2,565/2,613 identical, rest JPEG-only and within libjpeg-turbo's output (M4 step 3) |
 | Host input path | `tools/host-event-probe.py` (synthetic NSEvents → host view → `events()` → guest UIView) | touches and presses delivered (M3 step 4) |
 | GL | `pear-gles --example pearangle-smoke`; EAGL GLES1/2/3 context test | pass on macOS |

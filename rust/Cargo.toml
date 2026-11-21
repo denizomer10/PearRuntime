@@ -17,6 +17,7 @@ members = [
     "crates/pear-host",
     "crates/pear-host-macos",
     "crates/pear-image",
+    "crates/pear-dyld",
 ]
 # pear-catalyst, pear-opengles, pear-cxxcompat and pear-swift-support target
 # Mac Catalyst only
@@ -35,6 +36,7 @@ default-members = [
     "crates/pear-host",
     "crates/pear-host-macos",
     "crates/pear-image",
+    "crates/pear-dyld",
 ]
 resolver = "2"
 

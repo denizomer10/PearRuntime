@@ -1,0 +1,13 @@
+[package]
+name = "pear-dyld"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "PearRuntime's own Mach-O loader: maps an arm64 iOS image, applies its fixups and runs its initializers without dyld"
+
+[lib]
+name = "pear_dyld"
+crate-type = ["rlib"]
+
+[dependencies]
+pear-macho = { path = "../pear-macho" }

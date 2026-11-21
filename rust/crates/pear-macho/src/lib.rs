@@ -3,6 +3,15 @@
 //! Pure-Rust parser for 64-bit ARM64 Mach-O headers, FairPlay `cryptid`
 //! detection, and `LC_BUILD_VERSION` platform checks / macOS retargeting.
 
+pub mod exports;
+pub mod fixups;
+pub mod image;
+
+pub use image::{
+    Dylib, DylibKind, Error, Export, ExportKind, Fixup, FixupKind, Fixups, Import, Initializer, MachO, Ordinal,
+    Section, Segment,
+};
+
 use std::ffi::{c_char, c_int, CStr};
 use std::fs;
 
