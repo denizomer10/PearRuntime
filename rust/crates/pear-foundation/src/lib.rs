@@ -58,6 +58,13 @@ foundation_class!(NSMUTABLEURLREQUEST_CLASS, NSMUTABLEURLREQUEST_META);
 foundation_class!(NSUUID_CLASS, NSUUID_META);
 foundation_class!(NSPROCESSINFO_CLASS, NSPROCESSINFO_META);
 foundation_class!(NSTIMER_CLASS, NSTIMER_META);
+foundation_class!(NSAUTORELEASEPOOL_CLASS, NSAUTORELEASEPOOL_META);
+foundation_class!(NSFILECOORDINATOR_CLASS, NSFILECOORDINATOR_META);
+foundation_class!(NSFILEVERSION_CLASS, NSFILEVERSION_META);
+foundation_class!(NSMETADATAQUERY_CLASS, NSMETADATAQUERY_META);
+foundation_class!(NSNUMBERFORMATTER_CLASS, NSNUMBERFORMATTER_META);
+foundation_class!(NSPREDICATE_CLASS, NSPREDICATE_META);
+foundation_class!(NSTHREAD_CLASS, NSTHREAD_META);
 
 static K_CF_ALLOCATOR_DEFAULT: usize = 0;
 
@@ -866,8 +873,35 @@ pub fn init_foundation() {
             &[("invalidate", i(timer_invalidate as *const ())), ("dealloc", i(f_dealloc as *const ()))],
             &[("scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:", i(timer_sched as *const ()))],
         );
+        runtime::register_builtin(
+            NSAUTORELEASEPOOL_CLASS.ptr(),
+            NSAUTORELEASEPOOL_META.ptr(),
+            "NSAutoreleasePool",
+            16,
+            &[("drain", i(timer_invalidate as *const ())), ("dealloc", i(f_dealloc as *const ()))],
+            &[],
+        );
+        runtime::register_builtin(
+            NSTHREAD_CLASS.ptr(),
+            NSTHREAD_META.ptr(),
+            "NSThread",
+            16,
+            &[("start", i(timer_invalidate as *const ())), ("dealloc", i(f_dealloc as *const ()))],
+            &[("isMainThread", i(thread_is_main as *const ()))],
+        );
+        for (cls, meta, name) in [
+            (&NSFILECOORDINATOR_CLASS, &NSFILECOORDINATOR_META, "NSFileCoordinator"),
+            (&NSFILEVERSION_CLASS, &NSFILEVERSION_META, "NSFileVersion"),
+            (&NSMETADATAQUERY_CLASS, &NSMETADATAQUERY_META, "NSMetadataQuery"),
+            (&NSNUMBERFORMATTER_CLASS, &NSNUMBERFORMATTER_META, "NSNumberFormatter"),
+            (&NSPREDICATE_CLASS, &NSPREDICATE_META, "NSPredicate"),
+        ] {
+            runtime::register_builtin(cls.ptr(), meta.ptr(), name, 16, &[("dealloc", i(f_dealloc as *const ()))], &[]);
+        }
     });
 }
+
+extern "C" fn thread_is_main(_self: Id, _cmd: Sel) -> bool { true }
 
 extern "C" fn timer_sched(
     _self: Id,
@@ -1021,6 +1055,22 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_OBJC_CLASS_$_NSUUID" => Some(NSUUID_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSProcessInfo" => Some(NSPROCESSINFO_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSTimer" => Some(NSTIMER_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSAutoreleasePool" => Some(NSAUTORELEASEPOOL_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSFileCoordinator" => Some(NSFILECOORDINATOR_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSFileVersion" => Some(NSFILEVERSION_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSMetadataQuery" => Some(NSMETADATAQUERY_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSNumberFormatter" => Some(NSNUMBERFORMATTER_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSPredicate" => Some(NSPREDICATE_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSThread" => Some(NSTHREAD_CLASS.ptr() as usize),
+        "_NSClassFromString" => f(ns_class_from_string as *const ()),
+        "_kCFRunLoopCommonModes" => Some(const_nsstr("kCFRunLoopCommonModes") as usize),
+        "_kCFStreamPropertySocketNativeHandle" => Some(const_nsstr("kCFStreamPropertySocketNativeHandle") as usize),
+        "_NSMetadataItemFSNameKey" => Some(const_nsstr("NSMetadataItemFSNameKey") as usize),
+        "_NSMetadataQueryDidFinishGatheringNotification" => Some(const_nsstr("NSMetadataQueryDidFinishGatheringNotification") as usize),
+        "_NSMetadataQueryUbiquitousDataScope" => Some(const_nsstr("NSMetadataQueryUbiquitousDataScope") as usize),
+        "_NSUbiquityIdentityDidChangeNotification" => Some(const_nsstr("NSUbiquityIdentityDidChangeNotification") as usize),
+        "_kCFTypeDictionaryKeyCallBacks" => Some(&raw const CF_CALLBACK_STUB as usize),
+        "_kCFTypeDictionaryValueCallBacks" => Some(&raw const CF_CALLBACK_STUB as usize),
         "___NSDictionary0__" => Some(empty_dict_singleton() as usize),
         "_kCFBooleanTrue" => Some(cf_bool_true_ptr() as usize),
         "_kCFBooleanFalse" => Some(cf_bool_false_ptr() as usize),
@@ -1545,6 +1595,15 @@ pub unsafe extern "C" fn cf_url_create_with_bytes(
 }
 
 pub extern "C" fn cf_url_copy_null(_url: Id) -> Id { std::ptr::null_mut() }
+
+static CF_CALLBACK_STUB: [usize; 6] = [0; 6];
+
+pub extern "C" fn ns_class_from_string(name: Id) -> *const ClassT {
+    let Some(s) = rust_str_from_nsstring(name) else {
+        return std::ptr::null();
+    };
+    runtime::class_named(&s).unwrap_or(std::ptr::null())
+}
 
 #[cfg(test)]
 mod tests {

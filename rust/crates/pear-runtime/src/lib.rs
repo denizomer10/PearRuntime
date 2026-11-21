@@ -187,6 +187,18 @@ extern "C" {
     fn strcmp(a: *const c_char, b: *const c_char) -> i32;
     fn getenv(name: *const c_char) -> *const c_char;
     fn abort() -> !;
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+}
+
+fn libc_dlsym(macho_sym: &str) -> Option<usize> {
+    let cname = macho_sym.strip_prefix('_')?;
+    let cstr = std::ffi::CString::new(cname).ok()?;
+    #[cfg(target_os = "macos")]
+    let default_handle = -2isize as *mut c_void;
+    #[cfg(not(target_os = "macos"))]
+    let default_handle = std::ptr::null_mut();
+    let ptr = unsafe { dlsym(default_handle, cstr.as_ptr()) };
+    if ptr.is_null() { None } else { Some(ptr as usize) }
 }
 
 extern "C" fn ca_current_media_time() -> f64 {
@@ -222,6 +234,88 @@ extern "C" fn sincosf_stret(x: f32) -> SincosfStret {
     let (s, c) = x.sin_cos();
     SincosfStret { sinval: s, cosval: c }
 }
+
+#[repr(C)]
+struct SincosStret {
+    sinval: f64,
+    cosval: f64,
+}
+
+extern "C" fn sincos_stret(x: f64) -> SincosStret {
+    let (s, c) = x.sin_cos();
+    SincosStret { sinval: s, cosval: c }
+}
+
+extern "C" fn acos_impl(x: f64) -> f64 { x.acos() }
+extern "C" fn tolower_impl(c: i32) -> i32 {
+    if (0..128).contains(&c) { (c as u8).to_ascii_lowercase() as i32 } else { c }
+}
+extern "C" fn toupper_impl(c: i32) -> i32 {
+    if (0..128).contains(&c) { (c as u8).to_ascii_uppercase() as i32 } else { c }
+}
+extern "C" fn os_atomic_add32(val: i32, ptr: *mut i32) -> i32 {
+    if ptr.is_null() { return 0; }
+    unsafe {
+        let a = &*(ptr as *const std::sync::atomic::AtomicI32);
+        a.fetch_add(val, std::sync::atomic::Ordering::SeqCst) + val
+    }
+}
+extern "C" fn arc4random_impl() -> u32 {
+    static STATE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0x5065_6172_3132_3334);
+    let mut x = STATE.load(std::sync::atomic::Ordering::Relaxed);
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    STATE.store(x, std::sync::atomic::Ordering::Relaxed);
+    x as u32
+}
+extern "C" fn availability_version_check(_count: u32, _versions: *const c_void) -> bool { true }
+
+extern "C" fn dispatch_once_f_impl(pred: *mut usize, ctx: *mut c_void, func: extern "C" fn(*mut c_void)) {
+    if pred.is_null() { return; }
+    unsafe {
+        let p = &*(pred as *const std::sync::atomic::AtomicUsize);
+        if p.swap(1, std::sync::atomic::Ordering::AcqRel) == 0 {
+            func(ctx);
+        }
+    }
+}
+
+extern "C" fn mach_absolute_time_impl() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_nanos() as u64
+}
+
+#[repr(C)]
+struct MachTimebaseInfo {
+    numer: u32,
+    denom: u32,
+}
+
+extern "C" fn mach_timebase_info_impl(info: *mut MachTimebaseInfo) -> i32 {
+    if !info.is_null() {
+        unsafe {
+            (*info).numer = 1;
+            (*info).denom = 1;
+        }
+    }
+    0
+}
+
+static MACH_TASK_SELF_STUB: u32 = 1;
+
+unsafe extern "C" fn memset_pattern16_impl(b: *mut u8, pattern16: *const u8, len: usize) {
+    if b.is_null() || pattern16.is_null() { return; }
+    let pat = std::slice::from_raw_parts(pattern16, 16);
+    for i in 0..len {
+        *b.add(i) = pat[i & 15];
+    }
+}
+
+extern "C" fn pthread_mach_thread_np_impl(_t: usize) -> u32 { 1 }
+extern "C" fn sysctlbyname_impl(_n: *const c_char, _oldp: *mut c_void, _oldlenp: *mut usize, _newp: *const c_void, _newlen: usize) -> i32 { -1 }
+extern "C" fn task_info_impl(_task: u32, _flavor: u32, _info: *mut c_void, _count: *mut u32) -> i32 { -1 }
+extern "C" fn thread_policy_set_impl(_t: u32, _flavor: u32, _policy: *const c_void, _count: u32) -> i32 { 0 }
 
 extern "C" fn exp10_impl(x: f64) -> f64 { 10.0f64.powf(x) }
 extern "C" fn acosf_impl(x: f32) -> f32 { x.acos() }
@@ -427,15 +521,31 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "___error" => Some(tls_errno_ptr as *const () as usize),
             "___memcpy_chk" => Some(memcpy_chk as *const () as usize),
             "___sincosf_stret" => Some(sincosf_stret as *const () as usize),
+            "___sincos_stret" => Some(sincos_stret as *const () as usize),
             "___exp10" => Some(exp10_impl as *const () as usize),
+            "_acos" => Some(acos_impl as *const () as usize),
             "_acosf" => Some(acosf_impl as *const () as usize),
             "_asinf" => Some(asinf_impl as *const () as usize),
             "_atan2f" => Some(atan2f_impl as *const () as usize),
+            "___tolower" => Some(tolower_impl as *const () as usize),
+            "___toupper" => Some(toupper_impl as *const () as usize),
+            "_OSAtomicAdd32" => Some(os_atomic_add32 as *const () as usize),
+            "_arc4random" => Some(arc4random_impl as *const () as usize),
+            "__availability_version_check" => Some(availability_version_check as *const () as usize),
             "___cxa_atexit" => Some(cxa_atexit_noop as *const () as usize),
             "__dyld_image_count" => Some(dyld_image_count_stub as *const () as usize),
             "__dyld_get_image_name" => Some(dyld_get_image_name_stub as *const () as usize),
             "__dispatch_main_q" => Some(&raw const DISPATCH_MAIN_Q as usize),
             "_dispatch_once" => Some(dispatch_once_impl as *const () as usize),
+            "_dispatch_once_f" => Some(dispatch_once_f_impl as *const () as usize),
+            "_mach_absolute_time" => Some(mach_absolute_time_impl as *const () as usize),
+            "_mach_timebase_info" => Some(mach_timebase_info_impl as *const () as usize),
+            "_mach_task_self_" => Some(&raw const MACH_TASK_SELF_STUB as usize),
+            "_memset_pattern16" => Some(memset_pattern16_impl as *const () as usize),
+            "_pthread_mach_thread_np" => Some(pthread_mach_thread_np_impl as *const () as usize),
+            "_sysctlbyname" => Some(sysctlbyname_impl as *const () as usize),
+            "_task_info" => Some(task_info_impl as *const () as usize),
+            "_thread_policy_set" => Some(thread_policy_set_impl as *const () as usize),
             "_dispatch_sync" | "_dispatch_async" => Some(dispatch_sync_impl as *const () as usize),
             "_dispatch_get_global_queue" => Some(dispatch_get_global_queue_impl as *const () as usize),
             "__DefaultRuneLocale" => Some(&raw const DEFAULT_RUNE_LOCALE as usize),
@@ -454,7 +564,7 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_strcmp" => Some(strcmp as *const () as usize),
             "_getenv" => Some(getenv as *const () as usize),
             "_abort" => Some(abort as *const () as usize),
-            _ => pear_libobjc::symbol(symbol),
+            _ => pear_libobjc::symbol(symbol).or_else(|| libc_dlsym(symbol)),
         },
         Some(path) if path.contains("CoreFoundation") || path.contains("Foundation") => {
             pear_foundation::symbol(symbol)
