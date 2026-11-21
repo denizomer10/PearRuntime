@@ -1007,7 +1007,12 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_CFDataGetLength" => f(cf_data_get_length as *const ()),
         "_CFArrayGetCount" => f(cf_array_get_count as *const ()),
         "_CFArrayGetValueAtIndex" => f(cf_array_get_value_at_index as *const ()),
+        "_CFDictionaryCreate" => f(cf_dictionary_create as *const ()),
+        "_CFDictionaryCreateMutable" => f(cf_dictionary_create_mutable as *const ()),
+        "_CFDictionarySetValue" => f(cf_dictionary_set_value as *const ()),
         "_CFDictionaryGetValue" => f(cf_dictionary_get_value as *const ()),
+        "_CFNumberCreate" => f(cf_number_create as *const ()),
+        "_CFNumberGetValue" => f(cf_number_get_value as *const ()),
         _ => None,
     }
 }
@@ -1327,6 +1332,92 @@ pub extern "C" fn cf_dictionary_get_value(dict: Id, key: Id) -> *const c_void {
         return d.get(&k).copied().unwrap_or(0) as *const c_void;
     }
     std::ptr::null()
+}
+
+pub unsafe extern "C" fn cf_dictionary_create(
+    _alloc: *const c_void,
+    keys: *const Id,
+    values: *const Id,
+    num_values: isize,
+    _key_cb: *const c_void,
+    _val_cb: *const c_void,
+) -> Id {
+    let mut map = HashMap::new();
+    if !keys.is_null() && !values.is_null() && num_values > 0 {
+        for idx in 0..num_values as usize {
+            let k = rust_str_from_nsstring(*keys.add(idx)).unwrap_or_default();
+            let v = *values.add(idx);
+            map.insert(k, retain(v) as usize);
+        }
+    }
+    alloc_with_backing(NSDICTIONARY_CLASS.ptr(), Backing::Dict(map))
+}
+
+pub unsafe extern "C" fn cf_dictionary_create_mutable(
+    _alloc: *const c_void,
+    _capacity: isize,
+    _key_cb: *const c_void,
+    _val_cb: *const c_void,
+) -> Id {
+    alloc_with_backing(NSMUTABLEDICTIONARY_CLASS.ptr(), Backing::Dict(HashMap::new()))
+}
+
+pub unsafe extern "C" fn cf_dictionary_set_value(dict: Id, key: Id, val: Id) {
+    let k = rust_str_from_nsstring(key).unwrap_or_default();
+    if let Some(Backing::Dict(d)) = store().lock().unwrap().get_mut(&(dict as usize)) {
+        if val.is_null() {
+            d.remove(&k);
+        } else {
+            d.insert(k, retain(val) as usize);
+        }
+    }
+}
+
+pub unsafe extern "C" fn cf_number_create(
+    _alloc: *const c_void,
+    the_type: isize,
+    value_ptr: *const c_void,
+) -> Id {
+    if value_ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let backing = match the_type {
+        1 | 7 => Backing::NumI64(*(value_ptr as *const i8) as i64),
+        2 | 8 => Backing::NumI64(*(value_ptr as *const i16) as i64),
+        3 | 9 => Backing::NumI64(*(value_ptr as *const i32) as i64),
+        4 | 10 | 11 | 14 => Backing::NumI64(*(value_ptr as *const i64)),
+        5 | 12 => Backing::NumF64(*(value_ptr as *const f32) as f64),
+        6 | 13 => Backing::NumF64(*(value_ptr as *const f64)),
+        _ => Backing::NumI64(*(value_ptr as *const i32) as i64),
+    };
+    alloc_with_backing(NSNUMBER_CLASS.ptr(), backing)
+}
+
+pub unsafe extern "C" fn cf_number_get_value(
+    num: Id,
+    the_type: isize,
+    value_ptr: *mut c_void,
+) -> bool {
+    if value_ptr.is_null() {
+        return false;
+    }
+    let backing = store().lock().unwrap().get(&(num as usize)).cloned();
+    let (i, f) = match backing {
+        Some(Backing::NumI64(n)) => (n, n as f64),
+        Some(Backing::NumF64(x)) => (x as i64, x),
+        Some(Backing::NumBool(b)) => (i64::from(b), if b { 1.0 } else { 0.0 }),
+        _ => return false,
+    };
+    match the_type {
+        1 | 7 => *(value_ptr as *mut i8) = i as i8,
+        2 | 8 => *(value_ptr as *mut i16) = i as i16,
+        3 | 9 => *(value_ptr as *mut i32) = i as i32,
+        4 | 10 | 11 | 14 => *(value_ptr as *mut i64) = i,
+        5 | 12 => *(value_ptr as *mut f32) = f as f32,
+        6 | 13 => *(value_ptr as *mut f64) = f,
+        _ => *(value_ptr as *mut i32) = i as i32,
+    }
+    true
 }
 
 #[cfg(test)]

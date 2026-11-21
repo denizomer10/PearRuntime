@@ -299,6 +299,86 @@ extern "C" fn ns_get_executable_path(buf: *mut c_char, bufsize: *mut u32) -> i32
     0
 }
 
+extern "C" fn status_ok_stub() -> i32 { 0 }
+extern "C" fn ptr_null_stub() -> *mut c_void { std::ptr::null_mut() }
+extern "C" fn false_stub() -> bool { false }
+
+fn framework_const(key: &'static str) -> usize {
+    static MAP: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<&'static str, usize>>> =
+        std::sync::OnceLock::new();
+    let m = MAP.get_or_init(Default::default);
+    let mut g = m.lock().unwrap();
+    *g.entry(key).or_insert_with(|| pear_foundation::nsstring_from_rust(key) as usize)
+}
+
+fn audiotoolbox_symbol(symbol: &str) -> Option<usize> {
+    let ok = status_ok_stub as *const () as usize;
+    let null = ptr_null_stub as *const () as usize;
+    match symbol {
+        "_AudioComponentFindNext" => Some(null),
+        "_AudioComponentInstanceNew"
+        | "_AudioComponentInstanceDispose"
+        | "_AudioConverterNew"
+        | "_AudioConverterDispose"
+        | "_AudioConverterReset"
+        | "_AudioConverterGetProperty"
+        | "_AudioConverterSetProperty"
+        | "_AudioConverterFillComplexBuffer"
+        | "_AudioFileOpenWithCallbacks"
+        | "_AudioFileClose"
+        | "_AudioFileGetGlobalInfo"
+        | "_AudioFileGetProperty"
+        | "_AudioFileGetPropertyInfo"
+        | "_AudioFileReadPackets"
+        | "_AudioFormatGetProperty"
+        | "_AudioOutputUnitStart"
+        | "_AudioOutputUnitStop"
+        | "_AudioSessionInitialize"
+        | "_AudioSessionSetActive"
+        | "_AudioSessionSetProperty"
+        | "_AudioUnitAddPropertyListener"
+        | "_AudioUnitGetProperty"
+        | "_AudioUnitSetProperty"
+        | "_AudioUnitInitialize"
+        | "_AudioUnitUninitialize"
+        | "_ExtAudioFileOpenURL"
+        | "_ExtAudioFileDispose"
+        | "_ExtAudioFileGetProperty"
+        | "_ExtAudioFileSetProperty"
+        | "_ExtAudioFileRead"
+        | "_ExtAudioFileSeek" => Some(ok),
+        _ => None,
+    }
+}
+
+fn cfnetwork_symbol(symbol: &str) -> Option<usize> {
+    let null = ptr_null_stub as *const () as usize;
+    let ok = status_ok_stub as *const () as usize;
+    match symbol {
+        "_CFHTTPMessageCreateRequest"
+        | "_CFHTTPMessageCopySerializedMessage"
+        | "_CFNetworkCopySystemProxySettings"
+        | "_CFReadStreamCreateForHTTPRequest"
+        | "_CFReadStreamCreateWithFTPURL" => Some(null),
+        "_CFHTTPMessageAddAuthentication"
+        | "_CFHTTPMessageAppendBytes"
+        | "_CFHTTPMessageSetHeaderFieldValue" => Some(ok),
+        "_kCFHTTPAuthenticationSchemeBasic" => Some(framework_const("Basic")),
+        "_kCFHTTPVersion1_0" => Some(framework_const("HTTP/1.0")),
+        "_kCFHTTPVersion1_1" => Some(framework_const("HTTP/1.1")),
+        "_kCFStreamPropertyHTTPProxy" => Some(framework_const("HTTPProxy")),
+        "_kCFStreamPropertyHTTPResponseHeader" => Some(framework_const("HTTPResponseHeader")),
+        "_kCFStreamPropertySSLSettings" => Some(framework_const("SSLSettings")),
+        "_kCFStreamSSLValidatesCertificateChain" => Some(framework_const("SSLValidatesCertificateChain")),
+        "_kCFStreamPropertyFTPProxy" => Some(framework_const("FTPProxy")),
+        "_kCFStreamPropertyFTPFetchResourceInfo" => Some(framework_const("FTPFetchResourceInfo")),
+        "_kCFStreamPropertyFTPFileTransferOffset" => Some(framework_const("FTPFileTransferOffset")),
+        "_kCFStreamPropertyFTPResourceSize" => Some(framework_const("FTPResourceSize")),
+        "_kCFStreamPropertyFTPUsePassiveMode" => Some(framework_const("FTPUsePassiveMode")),
+        _ => None,
+    }
+}
+
 fn quartz_const(name: &str) -> usize {
     static MAP: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<&'static str, usize>>> =
         std::sync::OnceLock::new();
@@ -428,6 +508,21 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
         Some(path) if path.contains("StoreKit") => match symbol {
             "_OBJC_CLASS_$_SKRequest" => Some(SKREQUEST_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_SKProductsRequest" => Some(SKPRODUCTSREQUEST_CLASS.ptr() as usize),
+            _ => None,
+        },
+        Some(path) if path.contains("AudioToolbox") => audiotoolbox_symbol(symbol),
+        Some(path) if path.contains("CFNetwork") => cfnetwork_symbol(symbol),
+        Some(path) if path.contains("Security") => match symbol {
+            "_SecItemCopyMatching" | "_SecItemAdd" | "_SecItemUpdate" | "_SecItemDelete" => {
+                Some(status_ok_stub as *const () as usize)
+            }
+            "_SecRandomCopyBytes" => Some(status_ok_stub as *const () as usize),
+            _ => None,
+        },
+        Some(path) if path.contains("SystemConfiguration") => match symbol {
+            "_SCNetworkReachabilityCreateWithName"
+            | "_SCNetworkReachabilityCreateWithAddress" => Some(ptr_null_stub as *const () as usize),
+            "_SCNetworkReachabilityGetFlags" => Some(false_stub as *const () as usize),
             _ => None,
         },
         Some(path) if path.contains("GLKit") => match symbol {
