@@ -196,9 +196,6 @@ impl LoadedImage {
 /// fixups. Initializers are not run yet (see [`LoadedImage::run_initializers`]).
 pub fn load(data: &[u8], resolver: &dyn Resolver, options: Options) -> Result<LoadedImage, Error> {
     let m = MachO::parse(data)?;
-    if m.sections_of_kind(S_THREAD_LOCAL_INIT_FUNCTION_POINTERS).next().is_some() {
-        return Err(Error::Unsupported("thread-local initializer functions"));
-    }
     let (low, size) = m.vm_range();
     let region = memory::Region::reserve(size as usize).ok_or(Error::Map)?;
     let slice = m.data();
@@ -308,7 +305,18 @@ fn setup_thread_locals(m: &MachO, image: &LoadedImage) -> Result<(), Error> {
                 std::ptr::copy_nonoverlapping(image.address(s.addr), template[at..].as_mut_ptr(), s.size as usize);
             }
         }
-        let key = tlv::register(template);
+        let mut init_fns = Vec::new();
+        for s in m.sections_of_kind(S_THREAD_LOCAL_INIT_FUNCTION_POINTERS) {
+            let count = (s.size / 8) as usize;
+            let base = image.address(s.addr) as *const usize;
+            for i in 0..count {
+                let p = unsafe { *base.add(i) };
+                if p != 0 {
+                    init_fns.push(p);
+                }
+            }
+        }
+        let key = tlv::register(template, init_fns);
         for s in descriptors {
             for i in 0..s.size / 24 {
                 let d = image.address(s.addr + i * 24) as *mut tlv::Descriptor;

@@ -183,6 +183,74 @@ extern "C" fn cxa_atexit_noop(_f: *const c_void, _arg: *const c_void, _dso: *con
 extern "C" fn dyld_image_count_stub() -> u32 { 1 }
 extern "C" fn dyld_get_image_name_stub(_idx: u32) -> *const c_char { c"PearGuest".as_ptr() }
 
+static DISPATCH_MAIN_Q: [usize; 16] = [0; 16];
+static DEFAULT_RUNE_LOCALE: [u8; 4096] = [0; 4096];
+static mut STDIN_STUB: usize = 0;
+static mut STDOUT_STUB: usize = 0;
+static mut STDERR_STUB: usize = 0;
+
+extern "C" fn dispatch_once_impl(pred: *mut usize, block: *mut c_void) {
+    if pred.is_null() || block.is_null() {
+        return;
+    }
+    unsafe {
+        let p = &*(pred as *const std::sync::atomic::AtomicUsize);
+        if p.swap(1, std::sync::atomic::Ordering::AcqRel) == 0 {
+            let invoke = *((block as *const usize).add(2));
+            let f: extern "C" fn(*mut c_void) = std::mem::transmute(invoke);
+            f(block);
+        }
+    }
+}
+
+extern "C" fn dispatch_sync_impl(_q: *mut c_void, block: *mut c_void) {
+    if !block.is_null() {
+        unsafe {
+            let invoke = *((block as *const usize).add(2));
+            let f: extern "C" fn(*mut c_void) = std::mem::transmute(invoke);
+            f(block);
+        }
+    }
+}
+
+extern "C" fn dispatch_get_global_queue_impl(_id: isize, _flags: usize) -> *const c_void {
+    &raw const DISPATCH_MAIN_Q as *const c_void
+}
+
+extern "C" fn maskrune_impl(c: i32, f: usize) -> i32 {
+    if (0..128).contains(&c) {
+        let ch = c as u8 as char;
+        let ok = match f {
+            0x0100 => ch.is_ascii_alphabetic(),
+            0x0400 => ch.is_ascii_digit(),
+            0x4000 => ch.is_ascii_whitespace(),
+            _ => ch.is_ascii_alphanumeric(),
+        };
+        if ok { 1 } else { 0 }
+    } else {
+        0
+    }
+}
+
+extern "C" fn ns_get_executable_path(buf: *mut c_char, bufsize: *mut u32) -> i32 {
+    let path = std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "/PearGuest".to_string());
+    let bytes = path.as_bytes();
+    let needed = (bytes.len() + 1) as u32;
+    if buf.is_null() || bufsize.is_null() || unsafe { *bufsize } < needed {
+        if !bufsize.is_null() {
+            unsafe { *bufsize = needed };
+        }
+        return -1;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, bytes.len());
+        *buf.add(bytes.len()) = 0;
+    }
+    0
+}
+
 fn quartz_const(name: &str) -> usize {
     static MAP: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<&'static str, usize>>> =
         std::sync::OnceLock::new();
@@ -238,6 +306,16 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "___cxa_atexit" => Some(cxa_atexit_noop as *const () as usize),
             "__dyld_image_count" => Some(dyld_image_count_stub as *const () as usize),
             "__dyld_get_image_name" => Some(dyld_get_image_name_stub as *const () as usize),
+            "__dispatch_main_q" => Some(&raw const DISPATCH_MAIN_Q as usize),
+            "_dispatch_once" => Some(dispatch_once_impl as *const () as usize),
+            "_dispatch_sync" | "_dispatch_async" => Some(dispatch_sync_impl as *const () as usize),
+            "_dispatch_get_global_queue" => Some(dispatch_get_global_queue_impl as *const () as usize),
+            "__DefaultRuneLocale" => Some(&raw const DEFAULT_RUNE_LOCALE as usize),
+            "___maskrune" => Some(maskrune_impl as *const () as usize),
+            "___stdinp" => Some(&raw const STDIN_STUB as usize),
+            "___stdoutp" => Some(&raw const STDOUT_STUB as usize),
+            "___stderrp" => Some(&raw const STDERR_STUB as usize),
+            "__NSGetExecutablePath" => Some(ns_get_executable_path as *const () as usize),
             "_malloc" => Some(malloc as *const () as usize),
             "_calloc" => Some(calloc as *const () as usize),
             "_realloc" => Some(realloc as *const () as usize),

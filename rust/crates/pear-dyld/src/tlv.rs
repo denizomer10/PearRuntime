@@ -18,13 +18,13 @@ pub struct Descriptor {
     pub offset: usize,
 }
 
-/// Per-image templates; `key` is the index + 1.
-static TEMPLATES: RwLock<Vec<Vec<u8>>> = RwLock::new(Vec::new());
+/// Per-image templates + optional TLV initializer function pointers; `key` is the index + 1.
+static TEMPLATES: RwLock<Vec<(Vec<u8>, Vec<usize>)>> = RwLock::new(Vec::new());
 
-/// Registers an image's template; returns its key.
-pub fn register(template: Vec<u8>) -> usize {
+/// Registers an image's template and TLV initializer functions; returns its key.
+pub fn register(template: Vec<u8>, init_fns: Vec<usize>) -> usize {
     let mut t = TEMPLATES.write().unwrap();
-    t.push(template);
+    t.push((template, init_fns));
     t.len()
 }
 
@@ -37,7 +37,8 @@ thread_local! {
 /// The calling thread's address for `descriptor`.
 extern "C" fn lookup(descriptor: *const Descriptor) -> *mut u8 {
     let (key, offset) = unsafe { ((*descriptor).key, (*descriptor).offset) };
-    BLOCKS.with(|blocks| {
+    let mut need_init: Option<Vec<usize>> = None;
+    let ptr = BLOCKS.with(|blocks| {
         let mut blocks = blocks.borrow_mut();
         if blocks.0.len() < key {
             blocks.0.resize_with(key, || None);
@@ -45,10 +46,21 @@ extern "C" fn lookup(descriptor: *const Descriptor) -> *mut u8 {
         let slot = &mut blocks.0[key - 1];
         if slot.is_none() {
             let templates = TEMPLATES.read().unwrap();
-            *slot = Some(templates[key - 1].clone().into_boxed_slice());
+            let (tmpl, inits) = &templates[key - 1];
+            *slot = Some(tmpl.clone().into_boxed_slice());
+            if !inits.is_empty() {
+                need_init = Some(inits.clone());
+            }
         }
         unsafe { slot.as_mut().unwrap().as_mut_ptr().add(offset) }
-    })
+    });
+    if let Some(inits) = need_init {
+        for addr in inits {
+            let f: extern "C" fn() = unsafe { std::mem::transmute(addr) };
+            f();
+        }
+    }
+    ptr
 }
 
 /// The descriptors' thunk: `x0 = lookup(x0)`, every other register (except
