@@ -77,6 +77,18 @@ guest_class!(UINAVIGATIONCONTROLLER_CLASS, UINAVIGATIONCONTROLLER_META);
 guest_class!(UIALERTCONTROLLER_CLASS, UIALERTCONTROLLER_META);
 guest_class!(SKREQUEST_CLASS, SKREQUEST_META);
 guest_class!(SKPRODUCTSREQUEST_CLASS, SKPRODUCTSREQUEST_META);
+guest_class!(SKPAYMENT_CLASS, SKPAYMENT_META);
+guest_class!(SKPAYMENTQUEUE_CLASS, SKPAYMENTQUEUE_META);
+guest_class!(SKSTOREREVIEWCONTROLLER_CLASS, SKSTOREREVIEWCONTROLLER_META);
+guest_class!(UIACCELEROMETER_CLASS, UIACCELEROMETER_META);
+guest_class!(UIACTIVITYVIEWCONTROLLER_CLASS, UIACTIVITYVIEWCONTROLLER_META);
+guest_class!(UIALERTVIEW_CLASS, UIALERTVIEW_META);
+guest_class!(UIPASTEBOARD_CLASS, UIPASTEBOARD_META);
+guest_class!(AVAUDIOSESSION_CLASS, AVAUDIOSESSION_META);
+guest_class!(AVAUDIOPLAYER_CLASS, AVAUDIOPLAYER_META);
+guest_class!(AVPLAYER_CLASS, AVPLAYER_META);
+guest_class!(AVPLAYERITEM_CLASS, AVPLAYERITEM_META);
+guest_class!(AVURLASSET_CLASS, AVURLASSET_META);
 
 extern "C" fn shared_app_stub(_self: Id, _cmd: Sel) -> Id {
     static APP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -143,6 +155,18 @@ fn init_guest_frameworks() {
             (&UIALERTCONTROLLER_CLASS, &UIALERTCONTROLLER_META, "UIAlertController"),
             (&SKREQUEST_CLASS, &SKREQUEST_META, "SKRequest"),
             (&SKPRODUCTSREQUEST_CLASS, &SKPRODUCTSREQUEST_META, "SKProductsRequest"),
+            (&SKPAYMENT_CLASS, &SKPAYMENT_META, "SKPayment"),
+            (&SKPAYMENTQUEUE_CLASS, &SKPAYMENTQUEUE_META, "SKPaymentQueue"),
+            (&SKSTOREREVIEWCONTROLLER_CLASS, &SKSTOREREVIEWCONTROLLER_META, "SKStoreReviewController"),
+            (&UIACCELEROMETER_CLASS, &UIACCELEROMETER_META, "UIAccelerometer"),
+            (&UIACTIVITYVIEWCONTROLLER_CLASS, &UIACTIVITYVIEWCONTROLLER_META, "UIActivityViewController"),
+            (&UIALERTVIEW_CLASS, &UIALERTVIEW_META, "UIAlertView"),
+            (&UIPASTEBOARD_CLASS, &UIPASTEBOARD_META, "UIPasteboard"),
+            (&AVAUDIOSESSION_CLASS, &AVAUDIOSESSION_META, "AVAudioSession"),
+            (&AVAUDIOPLAYER_CLASS, &AVAUDIOPLAYER_META, "AVAudioPlayer"),
+            (&AVPLAYER_CLASS, &AVPLAYER_META, "AVPlayer"),
+            (&AVPLAYERITEM_CLASS, &AVPLAYERITEM_META, "AVPlayerItem"),
+            (&AVURLASSET_CLASS, &AVURLASSET_META, "AVURLAsset"),
         ] {
             objc_rt::register_builtin(cls.ptr(), meta.ptr(), name, 32, &[], &[]);
         }
@@ -514,6 +538,9 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
     init();
     match library {
         Some("/usr/lib/libobjc.A.dylib") => pear_libobjc::symbol(symbol),
+        Some("/usr/lib/libc++.1.dylib") | Some("/usr/lib/libc++abi.dylib") => {
+            libc_dlsym(symbol)
+        }
         Some("/usr/lib/libSystem.B.dylib") => match symbol {
             "__Unwind_Resume" => Some(unwind_resume_trap as *const () as usize),
             "___stack_chk_guard" => Some(&raw const STACK_CHK_GUARD as usize),
@@ -613,11 +640,28 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_OBJC_CLASS_$_UIScrollView" => Some(UISCROLLVIEW_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UINavigationController" => Some(UINAVIGATIONCONTROLLER_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UIAlertController" => Some(UIALERTCONTROLLER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIAccelerometer" => Some(UIACCELEROMETER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIActivityViewController" => Some(UIACTIVITYVIEWCONTROLLER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIAlertView" => Some(UIALERTVIEW_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIPasteboard" => Some(UIPASTEBOARD_CLASS.ptr() as usize),
             _ => None,
         },
         Some(path) if path.contains("StoreKit") => match symbol {
             "_OBJC_CLASS_$_SKRequest" => Some(SKREQUEST_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_SKProductsRequest" => Some(SKPRODUCTSREQUEST_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_SKPayment" => Some(SKPAYMENT_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_SKPaymentQueue" => Some(SKPAYMENTQUEUE_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_SKStoreReviewController" => Some(SKSTOREREVIEWCONTROLLER_CLASS.ptr() as usize),
+            "_SKErrorDomain" => Some(framework_const("SKErrorDomain")),
+            _ => None,
+        },
+        Some(path) if path.contains("AVFAudio") || path.contains("AVFoundation") => match symbol {
+            "_OBJC_CLASS_$_AVAudioSession" => Some(AVAUDIOSESSION_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_AVAudioPlayer" => Some(AVAUDIOPLAYER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_AVPlayer" => Some(AVPLAYER_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_AVPlayerItem" => Some(AVPLAYERITEM_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_AVURLAsset" => Some(AVURLASSET_CLASS.ptr() as usize),
+            s if s.starts_with("_AV") => Some(framework_const(Box::leak(s.to_string().into_boxed_str()))),
             _ => None,
         },
         Some(path) if path.contains("AudioToolbox") => audiotoolbox_symbol(symbol),
@@ -646,11 +690,15 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
         },
         Some(path) if path.contains("OpenGLES") => match symbol {
             "_OBJC_CLASS_$_EAGLContext" => Some(EAGLCONTEXT_CLASS.ptr() as usize),
+            "_kEAGLColorFormatRGBA8" => Some(framework_const("kEAGLColorFormatRGBA8")),
+            "_kEAGLDrawablePropertyColorFormat" => Some(framework_const("kEAGLDrawablePropertyColorFormat")),
+            "_kEAGLDrawablePropertyRetainedBacking" => Some(framework_const("kEAGLDrawablePropertyRetainedBacking")),
             _ => None,
         },
         None => pear_libobjc::symbol(symbol)
             .or_else(|| pear_foundation::symbol(symbol))
-            .or_else(|| pear_graphics::symbol(symbol)),
+            .or_else(|| pear_graphics::symbol(symbol))
+            .or_else(|| libc_dlsym(symbol)),
         _ => None,
     }
 }
