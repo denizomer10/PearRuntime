@@ -944,6 +944,25 @@ mod tests {
             let num: Id = send1(NSNUMBER_CLASS.ptr() as Id, "numberWithLongLong:", 42i64);
             let v: i64 = send0(num, "longLongValue");
             assert_eq!(v, 42);
+
+            let ud: Id = send0(NSUSERDEFAULTS_CLASS.ptr() as Id, "standardUserDefaults");
+            let _: () = send2(ud, "setObject:forKey:", joined, s1);
+            let got: Id = send1(ud, "objectForKey:", s1);
+            assert_eq!(rust_str_from_nsstring(got).as_deref(), Some("hello/world"));
+
+            let u: Id = send1(NSURL_CLASS.ptr() as Id, "fileURLWithPath:", s2);
+            let up: Id = send0(u, "path");
+            assert_eq!(rust_str_from_nsstring(up).as_deref(), Some("world"));
+
+            let cls_name = ns_string_from_class(NSSTRING_CLASS.ptr());
+            assert_eq!(rust_str_from_nsstring(cls_name).as_deref(), Some("NSString"));
         }
+    }
+
+    unsafe fn send2<A1, A2, R>(obj: Id, name: &str, a1: A1, a2: A2) -> R {
+        let s = sel(name);
+        let d = lookup_for_send(obj, s);
+        let f: extern "C" fn(Id, Sel, A1, A2) -> R = std::mem::transmute(d.imp);
+        f(d.receiver, s, a1, a2)
     }
 }

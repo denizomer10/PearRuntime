@@ -225,6 +225,70 @@ pub extern "C" fn cg_color_space_create_device_rgb() -> *mut c_void {
 
 pub extern "C" fn cg_color_space_release(_cs: *mut c_void) {}
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct CATransform3D {
+    pub m11: f64, pub m12: f64, pub m13: f64, pub m14: f64,
+    pub m21: f64, pub m22: f64, pub m23: f64, pub m24: f64,
+    pub m31: f64, pub m32: f64, pub m33: f64, pub m34: f64,
+    pub m41: f64, pub m42: f64, pub m43: f64, pub m44: f64,
+}
+
+pub static CA_TRANSFORM_3D_IDENTITY: CATransform3D = CATransform3D {
+    m11: 1.0, m12: 0.0, m13: 0.0, m14: 0.0,
+    m21: 0.0, m22: 1.0, m23: 0.0, m24: 0.0,
+    m31: 0.0, m32: 0.0, m33: 1.0, m34: 0.0,
+    m41: 0.0, m42: 0.0, m43: 0.0, m44: 1.0,
+};
+
+pub extern "C" fn ca_transform_3d_is_identity(t: CATransform3D) -> bool {
+    t == CA_TRANSFORM_3D_IDENTITY
+}
+
+pub extern "C" fn ca_transform_3d_make_scale(sx: f64, sy: f64, sz: f64) -> CATransform3D {
+    let mut t = CA_TRANSFORM_3D_IDENTITY;
+    t.m11 = sx;
+    t.m22 = sy;
+    t.m33 = sz;
+    t
+}
+
+pub extern "C" fn ca_transform_3d_make_translation(tx: f64, ty: f64, tz: f64) -> CATransform3D {
+    let mut t = CA_TRANSFORM_3D_IDENTITY;
+    t.m41 = tx;
+    t.m42 = ty;
+    t.m43 = tz;
+    t
+}
+
+pub extern "C" fn ca_transform_3d_scale(mut t: CATransform3D, sx: f64, sy: f64, sz: f64) -> CATransform3D {
+    t.m11 *= sx; t.m12 *= sx; t.m13 *= sx; t.m14 *= sx;
+    t.m21 *= sy; t.m22 *= sy; t.m23 *= sy; t.m24 *= sy;
+    t.m31 *= sz; t.m32 *= sz; t.m33 *= sz; t.m34 *= sz;
+    t
+}
+
+pub extern "C" fn ca_transform_3d_translate(mut t: CATransform3D, tx: f64, ty: f64, tz: f64) -> CATransform3D {
+    t.m41 += t.m11 * tx + t.m21 * ty + t.m31 * tz;
+    t.m42 += t.m12 * tx + t.m22 * ty + t.m32 * tz;
+    t.m43 += t.m13 * tx + t.m23 * ty + t.m33 * tz;
+    t.m44 += t.m14 * tx + t.m24 * ty + t.m34 * tz;
+    t
+}
+
+pub fn quartz_symbol(name: &str) -> Option<usize> {
+    let f = |p: *const ()| Some(p as usize);
+    match name {
+        "_CATransform3DIdentity" => Some(&raw const CA_TRANSFORM_3D_IDENTITY as usize),
+        "_CATransform3DIsIdentity" => f(ca_transform_3d_is_identity as *const ()),
+        "_CATransform3DMakeScale" => f(ca_transform_3d_make_scale as *const ()),
+        "_CATransform3DMakeTranslation" => f(ca_transform_3d_make_translation as *const ()),
+        "_CATransform3DScale" => f(ca_transform_3d_scale as *const ()),
+        "_CATransform3DTranslate" => f(ca_transform_3d_translate as *const ()),
+        _ => None,
+    }
+}
+
 pub fn symbol(name: &str) -> Option<usize> {
     let f = |p: *const ()| Some(p as usize);
     match name {
@@ -295,5 +359,26 @@ mod tests {
         assert_eq!(img.width, 16);
         let idx = (3 * 16 + 3) * 4;
         assert_eq!(&img.rgba[idx..idx + 4], &[255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn cgrect_and_catransform3d_math() {
+        let r = CGRect {
+            origin: CGPoint { x: 10.0, y: 20.0 },
+            size: CGSize { width: 100.0, height: 50.0 },
+        };
+        let inset = cg_rect_inset(r, 5.0, 10.0);
+        assert_eq!(inset.origin, CGPoint { x: 15.0, y: 30.0 });
+        assert_eq!(inset.size, CGSize { width: 90.0, height: 30.0 });
+        assert!(cg_rect_contains_point(inset, CGPoint { x: 50.0, y: 40.0 }));
+        assert_eq!(cg_rect_get_mid_x(r), 60.0);
+        assert_eq!(cg_rect_get_max_y(r), 70.0);
+
+        assert!(ca_transform_3d_is_identity(CA_TRANSFORM_3D_IDENTITY));
+        let scaled = ca_transform_3d_make_scale(2.0, 3.0, 1.0);
+        assert!(!ca_transform_3d_is_identity(scaled));
+        let moved = ca_transform_3d_translate(scaled, 4.0, 5.0, 0.0);
+        assert_eq!(moved.m41, 8.0);
+        assert_eq!(moved.m42, 15.0);
     }
 }

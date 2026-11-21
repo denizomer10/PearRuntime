@@ -33,6 +33,60 @@ extern "C" fn ca_current_media_time() -> f64 {
     START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()
 }
 
+static STACK_CHK_GUARD: usize = 0x5065_6172_5369_6c69;
+
+extern "C" fn stack_chk_fail_trap() -> ! {
+    eprintln!("[pear-runtime] ___stack_chk_fail");
+    std::process::abort()
+}
+
+extern "C" fn tls_errno_ptr() -> *mut i32 {
+    thread_local! {
+        static ERRNO: std::cell::UnsafeCell<i32> = const { std::cell::UnsafeCell::new(0) };
+    }
+    ERRNO.with(|e| e.get())
+}
+
+extern "C" fn memcpy_chk(dst: *mut c_void, src: *const c_void, n: usize, _dstlen: usize) -> *mut c_void {
+    unsafe { memcpy(dst, src, n) }
+}
+
+#[repr(C)]
+struct SincosfStret {
+    sinval: f32,
+    cosval: f32,
+}
+
+extern "C" fn sincosf_stret(x: f32) -> SincosfStret {
+    let (s, c) = x.sin_cos();
+    SincosfStret { sinval: s, cosval: c }
+}
+
+extern "C" fn exp10_impl(x: f64) -> f64 { 10.0f64.powf(x) }
+extern "C" fn acosf_impl(x: f32) -> f32 { x.acos() }
+extern "C" fn asinf_impl(x: f32) -> f32 { x.asin() }
+extern "C" fn atan2f_impl(y: f32, x: f32) -> f32 { y.atan2(x) }
+extern "C" fn cxa_atexit_noop(_f: *const c_void, _arg: *const c_void, _dso: *const c_void) -> i32 { 0 }
+extern "C" fn dyld_image_count_stub() -> u32 { 1 }
+extern "C" fn dyld_get_image_name_stub(_idx: u32) -> *const c_char { c"PearGuest".as_ptr() }
+
+fn quartz_const(name: &str) -> usize {
+    static MAP: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<&'static str, usize>>> =
+        std::sync::OnceLock::new();
+    let m = MAP.get_or_init(Default::default);
+    let mut g = m.lock().unwrap();
+    let key: &'static str = match name {
+        "_kCAFilterLinear" => "linear",
+        "_kCAGravityResize" => "resize",
+        "_kCAMediaTimingFunctionEaseInEaseOut" => "easeInEaseOut",
+        "_kCAMediaTimingFunctionLinear" => "linear",
+        "_kCAMediaTimingFunctionEaseOut" => "easeOut",
+        "_kCAFillModeForwards" => "forwards",
+        _ => "",
+    };
+    *g.entry(key).or_insert_with(|| pear_foundation::nsstring_from_rust(key) as usize)
+}
+
 extern "C" fn unwind_resume_trap() -> ! {
     eprintln!("[pear-runtime] _Unwind_Resume reached");
     std::process::abort()
@@ -58,6 +112,18 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
         Some("/usr/lib/libobjc.A.dylib") => pear_libobjc::symbol(symbol),
         Some("/usr/lib/libSystem.B.dylib") => match symbol {
             "__Unwind_Resume" => Some(unwind_resume_trap as *const () as usize),
+            "___stack_chk_guard" => Some(&raw const STACK_CHK_GUARD as usize),
+            "___stack_chk_fail" => Some(stack_chk_fail_trap as *const () as usize),
+            "___error" => Some(tls_errno_ptr as *const () as usize),
+            "___memcpy_chk" => Some(memcpy_chk as *const () as usize),
+            "___sincosf_stret" => Some(sincosf_stret as *const () as usize),
+            "___exp10" => Some(exp10_impl as *const () as usize),
+            "_acosf" => Some(acosf_impl as *const () as usize),
+            "_asinf" => Some(asinf_impl as *const () as usize),
+            "_atan2f" => Some(atan2f_impl as *const () as usize),
+            "___cxa_atexit" => Some(cxa_atexit_noop as *const () as usize),
+            "__dyld_image_count" => Some(dyld_image_count_stub as *const () as usize),
+            "__dyld_get_image_name" => Some(dyld_get_image_name_stub as *const () as usize),
             "_malloc" => Some(malloc as *const () as usize),
             "_calloc" => Some(calloc as *const () as usize),
             "_realloc" => Some(realloc as *const () as usize),
@@ -76,7 +142,13 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
         Some(path) if path.contains("CoreGraphics") => pear_graphics::symbol(symbol),
         Some(path) if path.contains("QuartzCore") => match symbol {
             "_CACurrentMediaTime" => Some(ca_current_media_time as *const () as usize),
-            _ => None,
+            "_kCAFilterLinear"
+            | "_kCAGravityResize"
+            | "_kCAMediaTimingFunctionEaseInEaseOut"
+            | "_kCAMediaTimingFunctionLinear"
+            | "_kCAMediaTimingFunctionEaseOut"
+            | "_kCAFillModeForwards" => Some(quartz_const(symbol)),
+            _ => pear_graphics::quartz_symbol(symbol),
         },
         None => pear_libobjc::symbol(symbol)
             .or_else(|| pear_foundation::symbol(symbol))
