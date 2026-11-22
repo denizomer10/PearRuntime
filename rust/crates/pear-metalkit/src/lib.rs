@@ -11,6 +11,11 @@ extern "C" {
     static _dispatch_main_q: c_void;
     fn dispatch_async_f(queue: *const c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
 }
+
+#[link(name = "Foundation", kind = "framework")]
+extern "C" {
+    static NSRunLoopCommonModes: Id;
+}
 use std::ffi::{c_double, c_void};
 
 #[repr(C)]
@@ -423,7 +428,8 @@ unsafe fn mtk_update_loop(self_obj: Id) {
         let link: Id = msg2::<Id, Sel, Id>(scr, "displayLinkWithTarget:selector:", self_obj, sel("pear_tick:"));
         if !link.is_null() {
             let run_loop: Id = msg0(cls("NSRunLoop"), "mainRunLoop");
-            msg2::<Id, Id, ()>(link, "addToRunLoop:forMode:", run_loop, pear_objc::nsstring("kCFRunLoopCommonModes"));
+            // AppKit's display link expects the native common-modes constant.
+            msg2::<Id, Id, ()>(link, "addToRunLoop:forMode:", run_loop, NSRunLoopCommonModes);
             set_retained(&mut s.link, link);
         }
     } else if !want && !s.link.is_null() {

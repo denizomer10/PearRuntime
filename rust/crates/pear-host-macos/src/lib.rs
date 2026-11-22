@@ -457,6 +457,8 @@ static WEB_DATA_DETECTORS_KEY: u8 = 0;
 static WEB_SCROLL_OWNER_KEY: u8 = 0;
 static WEB_SCROLL_ENABLED_KEY: u8 = 0;
 static WEB_SCROLL_DELEGATE_KEY: u8 = 0;
+static WEB_SCROLL_OPAQUE_KEY: u8 = 0;
+static WEB_SCROLL_BACKGROUND_KEY: u8 = 0;
 static WEB_SCROLL_WHEEL_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
 static WEB_CONTAINER_KEY: u8 = 0;
 static WEB_EDGE_EFFECT_KEYS: [u8; 4] = [0; 4];
@@ -494,6 +496,33 @@ unsafe extern "C" fn web_scroll_delegate(scroll: Id, _cmd: Sel) -> Id {
 
 unsafe extern "C" fn web_scroll_set_delegate(scroll: Id, _cmd: Sel, delegate: Id) {
     pear_objc::assoc_set_weak(scroll, &WEB_SCROLL_DELEGATE_KEY, delegate);
+}
+
+unsafe extern "C" fn web_scroll_opaque(scroll: Id, _cmd: Sel) -> bool {
+    let opaque = assoc_get(scroll, &WEB_SCROLL_OPAQUE_KEY);
+    opaque.is_null() || msg0(opaque, "boolValue")
+}
+
+unsafe extern "C" fn web_scroll_set_opaque(scroll: Id, cmd: Sel, opaque: bool) {
+    assoc_set(scroll, &WEB_SCROLL_OPAQUE_KEY, pear_objc::nsnumber_bool(opaque));
+    let web = pear_objc::assoc_get_weak(scroll, &WEB_SCROLL_OWNER_KEY);
+    web_set_opaque(web, cmd, opaque);
+}
+
+unsafe extern "C" fn web_scroll_background(scroll: Id, _cmd: Sel) -> Id {
+    assoc_get(scroll, &WEB_SCROLL_BACKGROUND_KEY)
+}
+
+unsafe extern "C" fn web_scroll_set_background(scroll: Id, _cmd: Sel, color: Id) {
+    assoc_set(scroll, &WEB_SCROLL_BACKGROUND_KEY, color);
+    let web = pear_objc::assoc_get_weak(scroll, &WEB_SCROLL_OWNER_KEY);
+    let cg_color: *mut c_void = msg0(color, "CGColor");
+    let native_color: Id = if cg_color.is_null() {
+        NIL
+    } else {
+        msg1(cls("NSColor"), "colorWithCGColor:", cg_color)
+    };
+    msg1::<Id, ()>(web, "setUnderPageBackgroundColor:", native_color);
 }
 
 unsafe extern "C" fn web_scroll_wheel(web: Id, cmd: Sel, event: Id) {
@@ -595,6 +624,10 @@ unsafe fn install_webkit_compat() {
         ("PearWebScrollView", "NSObject", &[
             ("delegate", web_scroll_delegate as Imp, "@@:"),
             ("setDelegate:", web_scroll_set_delegate as Imp, "v@:@"),
+            ("isOpaque", web_scroll_opaque as Imp, "B@:"),
+            ("setOpaque:", web_scroll_set_opaque as Imp, "v@:B"),
+            ("backgroundColor", web_scroll_background as Imp, "@@:"),
+            ("setBackgroundColor:", web_scroll_set_background as Imp, "v@:@"),
             ("setBounces:", web_scroll_set_bounces as Imp, "v@:B"),
             ("isScrollEnabled", web_scroll_enabled as Imp, "B@:"),
             ("setScrollEnabled:", web_scroll_set_enabled as Imp, "v@:B"),
