@@ -13,6 +13,7 @@ use std::sync::Mutex;
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGColorCreateSRGB(r: f64, g: f64, b: f64, a: f64) -> *mut c_void;
+    fn CGColorCreateCopyWithAlpha(color: *mut c_void, alpha: c_double) -> *mut c_void;
     fn CGColorRelease(color: *mut c_void);
     fn CGColorSpaceCreateDeviceRGB() -> *mut c_void;
     fn CGColorSpaceRelease(space: *mut c_void);
@@ -219,6 +220,31 @@ unsafe extern "C" fn color_cgcolor(self_obj: Id, _cmd: Sel) -> *mut c_void {
         std::ptr::null_mut()
     } else {
         msg0(val, "pointerValue")
+    }
+}
+
+unsafe extern "C" fn color_with_alpha(self_obj: Id, _cmd: Sel, alpha: c_double) -> Id {
+    let cg = color_cgcolor(self_obj, _cmd);
+    if cg.is_null() {
+        return color_with_rgba(cls("UIColor"), _cmd, 0.0, 0.0, 0.0, alpha);
+    }
+    let copy = CGColorCreateCopyWithAlpha(cg, alpha);
+    if copy.is_null() {
+        return color_with_rgba(cls("UIColor"), _cmd, 0.0, 0.0, 0.0, alpha);
+    }
+    let obj: Id = msg0(msg0(cls("UIColor"), "alloc"), "init");
+    if !obj.is_null() {
+        let val: Id = msg1::<*mut c_void, Id>(cls("NSValue"), "valueWithPointer:", copy);
+        objc_setAssociatedObject(
+            obj,
+            &COLOR_KEY as *const u8 as *const c_void,
+            val,
+            OBJC_ASSOCIATION_RETAIN,
+        );
+        autoreleased(obj)
+    } else {
+        CGColorRelease(copy);
+        NIL
     }
 }
 
@@ -1055,6 +1081,14 @@ unsafe extern "C" fn font_with_size(self_obj: Id, _cmd: Sel, size: f64) -> Id {
     }
     make_uifont_owned(CTFontCreateCopyWithAttributes(ct, size, std::ptr::null(), std::ptr::null_mut()))
 }
+unsafe extern "C" fn font_forwarding_target(self_obj: Id, _cmd: Sel, a_selector: Sel) -> Id {
+    let ct = font_ct(self_obj) as Id;
+    if !ct.is_null() && !a_selector.is_null() && class_respondsToSelector(object_getClass(ct), a_selector) {
+        ct
+    } else {
+        NIL
+    }
+}
 
 // ---- UILabel ----
 static LABEL_TEXT_KEY: u8 = 0;
@@ -1589,6 +1623,7 @@ pub unsafe fn register() {
         add_method(meta, "whiteColor", color_white as Imp, "@@:");
         add_method(col, "initWithRed:green:blue:alpha:", color_init_rgba as Imp, "@@:dddd");
         add_method(col, "CGColor", color_cgcolor as Imp, "^{CGColor=}@:");
+        add_method(col, "colorWithAlphaComponent:", color_with_alpha as Imp, "@@:d");
         add_method(col, "dealloc", color_dealloc as Imp, "v@:");
         add_method(col, "copyWithZone:", copy_self as Imp, "@@:^{_NSZone=}");
     }
@@ -1642,6 +1677,7 @@ pub unsafe fn register() {
         add_method(fnt, "lineHeight", font_line_height as Imp, "d@:");
         add_method(fnt, "fontWithSize:", font_with_size as Imp, "@@:d");
         add_method(fnt, "copyWithZone:", copy_self as Imp, "@@:^{_NSZone=}");
+        add_method(fnt, "forwardingTargetForSelector:", font_forwarding_target as Imp, "@@::");
     }
 
     let lbl = cls("UILabel");

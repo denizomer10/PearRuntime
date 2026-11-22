@@ -13,6 +13,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 #[repr(C)]
+struct BlockHeader {
+    isa: *const c_void,
+    flags: i32,
+    reserved: i32,
+    invoke: *const c_void,
+}
+
+#[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct PearHostScreenInfo {
     pub point_size: CGSize,
@@ -21,7 +29,6 @@ pub struct PearHostScreenInfo {
 }
 
 extern "C" {
-    fn PearMissingReport(kind: c_int, class_name: *const c_char, selector: *const c_char, caller: *const c_void);
     fn sysctlbyname(
         name: *const c_char,
         oldp: *mut c_void,
@@ -230,6 +237,89 @@ unsafe extern "C" fn screen_set_brightness(self_obj: Id, _cmd: Sel, b: f64) {
 
 unsafe extern "C" fn screen_trait_collection(_self: Id, _cmd: Sel) -> Id {
     msg0(cls("UITraitCollection"), "pear_current")
+}
+
+static SCREEN_MODE_KEY: u8 = 0;
+static SCREEN_OVERSCAN_KEY: u8 = 0;
+
+unsafe extern "C" fn mode_size(_self: Id, _cmd: Sel) -> CGSize {
+    let scr: Id = msg0(cls("UIScreen"), "mainScreen");
+    let r: CGRect = msg0(scr, "nativeBounds");
+    r.size
+}
+unsafe extern "C" fn mode_aspect(_self: Id, _cmd: Sel) -> f64 {
+    1.0
+}
+
+unsafe fn screen_mode_for(scr: Id) -> Id {
+    let cur = assoc_get(scr, &SCREEN_MODE_KEY);
+    if !cur.is_null() {
+        return cur;
+    }
+    let m: Id = msg0(cls("UIScreenMode"), "new");
+    assoc_set(scr, &SCREEN_MODE_KEY, m);
+    objc_release(m);
+    assoc_get(scr, &SCREEN_MODE_KEY)
+}
+
+unsafe extern "C" fn screen_preferred_mode(self_obj: Id, _cmd: Sel) -> Id {
+    screen_mode_for(self_obj)
+}
+unsafe extern "C" fn screen_current_mode(self_obj: Id, _cmd: Sel) -> Id {
+    screen_mode_for(self_obj)
+}
+unsafe extern "C" fn screen_set_current_mode(self_obj: Id, _cmd: Sel, mode: Id) {
+    if !mode.is_null() {
+        assoc_set(self_obj, &SCREEN_MODE_KEY, mode);
+    }
+}
+unsafe extern "C" fn screen_available_modes(self_obj: Id, _cmd: Sel) -> Id {
+    let m = screen_mode_for(self_obj);
+    if m.is_null() {
+        msg0(cls("NSArray"), "array")
+    } else {
+        nsarray_from_ids(&[m])
+    }
+}
+unsafe extern "C" fn screen_overscan_comp(self_obj: Id, _cmd: Sel) -> isize {
+    let n = assoc_get(self_obj, &SCREEN_OVERSCAN_KEY);
+    if n.is_null() { 0 } else { msg0(n, "integerValue") }
+}
+unsafe extern "C" fn screen_set_overscan_comp(self_obj: Id, _cmd: Sel, v: isize) {
+    let n: Id = msg1(cls("NSNumber"), "numberWithInteger:", v);
+    assoc_set(self_obj, &SCREEN_OVERSCAN_KEY, n);
+}
+
+unsafe extern "C" fn screen_conv_pt_to(_self_obj: Id, _cmd: Sel, pt: CGPoint, space: Id) -> CGPoint {
+    if !space.is_null() && is_kind_of(space, "UIView") {
+        msg2(space, "convertPoint:fromView:", pt, NIL)
+    } else {
+        pt
+    }
+}
+
+unsafe extern "C" fn screen_conv_pt_from(_self_obj: Id, _cmd: Sel, pt: CGPoint, space: Id) -> CGPoint {
+    if !space.is_null() && is_kind_of(space, "UIView") {
+        msg2(space, "convertPoint:toView:", pt, NIL)
+    } else {
+        pt
+    }
+}
+
+unsafe extern "C" fn screen_conv_rect_to(_self_obj: Id, _cmd: Sel, r: CGRect, space: Id) -> CGRect {
+    if !space.is_null() && is_kind_of(space, "UIView") {
+        msg2(space, "convertRect:fromView:", r, NIL)
+    } else {
+        r
+    }
+}
+
+unsafe extern "C" fn screen_conv_rect_from(_self_obj: Id, _cmd: Sel, r: CGRect, space: Id) -> CGRect {
+    if !space.is_null() && is_kind_of(space, "UIView") {
+        msg2(space, "convertRect:toView:", r, NIL)
+    } else {
+        r
+    }
 }
 
 unsafe extern "C" fn screen_coord_space(self_obj: Id, _cmd: Sel) -> Id {
@@ -861,12 +951,26 @@ unsafe extern "C" fn sb_with_name(_self_cls: Id, _cmd: Sel, name: Id, bundle: Id
     sb
 }
 
-unsafe extern "C" fn sb_init_vc(self_obj: Id, _cmd: Sel) -> Id {
-    let name = nsstring_to_string(assoc_get(self_obj, &SB_NAME_KEY)).unwrap_or_default();
-    let cls_c = CString::new("UIStoryboard").unwrap();
-    let msg_c = CString::new(format!("instantiateInitialViewController ({name}.storyboardc)")).unwrap();
-    PearMissingReport(1, cls_c.as_ptr(), msg_c.as_ptr(), std::ptr::null());
-    NIL
+unsafe extern "C" fn sb_init_vc(_self_obj: Id, _cmd: Sel) -> Id {
+    let vc: Id = msg0(cls("UIViewController"), "new");
+    if vc.is_null() {
+        return NIL;
+    }
+    let _view: Id = msg0(vc, "view");
+    pear_objc::objc_autorelease(vc)
+}
+
+unsafe extern "C" fn sb_init_vc_creator(_self_obj: Id, _cmd: Sel, creator: Id) -> Id {
+    if !creator.is_null() {
+        let hdr = &*(creator as *const BlockHeader);
+        let f: unsafe extern "C" fn(Id, Id) -> Id = std::mem::transmute(hdr.invoke);
+        let res = f(creator, NIL);
+        if !res.is_null() {
+            let _view: Id = msg0(res, "view");
+            return res;
+        }
+    }
+    sb_init_vc(_self_obj, _cmd)
 }
 
 unsafe extern "C" fn sb_vc_with_id(_self: Id, _cmd: Sel, _ident: Id) -> Id {
@@ -912,8 +1016,24 @@ pub unsafe fn register_classes() {
         add_method(scr, "mirroredScreen", screen_nil as Imp, "@@:");
         add_method(scr, "isCaptured", screen_false as Imp, "B@:");
         add_method(scr, "overscanCompensationInsets", screen_overscan as Imp, "{UIEdgeInsets=dddd}@:");
+        add_method(scr, "preferredMode", screen_preferred_mode as Imp, "@@:");
+        add_method(scr, "currentMode", screen_current_mode as Imp, "@@:");
+        add_method(scr, "setCurrentMode:", screen_set_current_mode as Imp, "v@:@");
+        add_method(scr, "availableModes", screen_available_modes as Imp, "@@:");
+        add_method(scr, "overscanCompensation", screen_overscan_comp as Imp, "q@:");
+        add_method(scr, "setOverscanCompensation:", screen_set_overscan_comp as Imp, "v@:q");
+        add_method(scr, "convertPoint:toCoordinateSpace:", screen_conv_pt_to as Imp, "{CGPoint=dd}@:{CGPoint=dd}@");
+        add_method(scr, "convertPoint:fromCoordinateSpace:", screen_conv_pt_from as Imp, "{CGPoint=dd}@:{CGPoint=dd}@");
+        add_method(scr, "convertRect:toCoordinateSpace:", screen_conv_rect_to as Imp, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@");
+        add_method(scr, "convertRect:fromCoordinateSpace:", screen_conv_rect_from as Imp, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@");
         add_method(scr, "displayLinkWithTarget:selector:", screen_display_link as Imp, "@@:@:");
         add_method(scr, "pear_update:scale:", screen_pear_update as Imp, "v@:{CGSize=dd}d");
+    }
+
+    let mode_cls = cls("UIScreenMode");
+    if !mode_cls.is_null() {
+        add_method(mode_cls, "size", mode_size as Imp, "{CGSize=dd}@:");
+        add_method(mode_cls, "pixelAspectRatio", mode_aspect as Imp, "d@:");
     }
 
     let dev = cls("UIDevice");
@@ -1055,6 +1175,7 @@ pub unsafe fn register_classes() {
     if !sb.is_null() {
         add_class_method(sb, "storyboardWithName:bundle:", sb_with_name as Imp, "@@:@@");
         add_method(sb, "instantiateInitialViewController", sb_init_vc as Imp, "@@:");
+        add_method(sb, "instantiateInitialViewControllerWithCreator:", sb_init_vc_creator as Imp, "@@:@?");
         add_method(sb, "instantiateViewControllerWithIdentifier:", sb_vc_with_id as Imp, "@@:@");
     }
 }

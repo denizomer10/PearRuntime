@@ -4,13 +4,15 @@
 //! UIDocument, UIPopoverController, and PearUIKitWindowDidResize.
 
 use pear_objc::{
-    cls, is_kind_of, msg0, msg1, msg2, msg3, nsarray_count, nsarray_from_ids,
-    nsarray_object_at, nsdata_from_bytes, nsdata_to_vec, nsnumber_bool, nsnumber_f64, nsnumber_i64,
-    nsstring, nsstring_to_string, objc_getAssociatedObject, objc_msgSendSuper, objc_release,
-    objc_retain, objc_setAssociatedObject, replace_method as add_method, responds_to, sel, CGPoint,
-    CGRect, CGSize, Class, Id, Imp, Sel, UIEdgeInsets, NIL, OBJC_ASSOCIATION_RETAIN,
+    class_respondsToSelector, cls, is_kind_of, msg0, msg1, msg2, msg3, nsarray_count,
+    nsarray_from_ids, nsarray_object_at, nsdata_from_bytes, nsdata_to_vec, nsnumber_bool,
+    nsnumber_f64, nsnumber_i64, nsstring, nsstring_to_string, objc_autorelease,
+    objc_getAssociatedObject, objc_msgSend, objc_msgSendSuper, objc_release, objc_retain,
+    objc_setAssociatedObject, replace_method as add_method, responds_to, sel, sel_getName,
+    CGPoint, CGRect, CGSize, Class, Id, Imp, Sel, UIEdgeInsets, NIL, OBJC_ASSOCIATION_RETAIN,
 };
-use std::ffi::{c_char, c_int, c_void, CString};
+use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[repr(C)]
 struct ObjcSuper {
@@ -34,6 +36,7 @@ extern "C" {
     fn object_getClass(obj: Id) -> Class;
     fn class_getSuperclass(cls: Class) -> Class;
     fn class_getName(cls: Class) -> *const c_char;
+    fn class_getMethodImplementation(cls: Class, name: Sel) -> Imp;
     fn PearMissingReport(kind: c_int, class_name: *const c_char, selector: *const c_char, caller: *const c_void);
     fn PearHostLogMessage(tag: *const c_char, message: *const c_char);
     fn PearUIKitRegisterWindow(window: Id);
@@ -1538,9 +1541,21 @@ unsafe extern "C" fn win_init_coder(self_obj: Id, _cmd: Sel, coder: Id) -> Id {
     obj
 }
 
-unsafe extern "C" fn win_init_scene(self_obj: Id, _cmd: Sel, _scene: Id) -> Id {
+static WIN_SCENE_KEY: u8 = 0;
+
+unsafe extern "C" fn win_init_scene(self_obj: Id, _cmd: Sel, scene: Id) -> Id {
     let b: CGRect = msg0(msg0(cls("UIScreen"), "mainScreen"), "bounds");
-    msg1(self_obj, "initWithFrame:", b)
+    let obj: Id = msg1(self_obj, "initWithFrame:", b);
+    if !obj.is_null() {
+        pear_objc::assoc_set_weak(obj, &WIN_SCENE_KEY, scene);
+    }
+    obj
+}
+unsafe extern "C" fn win_scene(self_obj: Id, _cmd: Sel) -> Id {
+    pear_objc::assoc_get_weak(self_obj, &WIN_SCENE_KEY)
+}
+unsafe extern "C" fn win_set_scene(self_obj: Id, _cmd: Sel, scene: Id) {
+    pear_objc::assoc_set_weak(self_obj, &WIN_SCENE_KEY, scene);
 }
 
 unsafe extern "C" fn win_window(self_obj: Id, _cmd: Sel) -> Id {
@@ -2457,6 +2472,7 @@ pub unsafe fn register_classes() {
         add_method(v, "removeGestureRecognizer:", view_remove_gesture as Imp, "v@:@");
         add_method(v, "translatesAutoresizingMaskIntoConstraints", view_true as Imp, "B@:");
         add_method(v, "setTranslatesAutoresizingMaskIntoConstraints:", view_noop_bool as Imp, "v@:B");
+        layout_controls_imp::register_view(v);
         add_method(v, "pointInside:withEvent:", view_point_inside as Imp, "B@:{CGPoint=dd}@");
         add_method(v, "hitTest:withEvent:", view_hit_test as Imp, "@@:{CGPoint=dd}@");
         add_method(v, "convertPoint:toView:", view_conv_pt_to as Imp, "{CGPoint=dd}@:{CGPoint=dd}@");
@@ -2542,6 +2558,11 @@ pub unsafe fn register_classes() {
         add_method(vc, "pear_setPresenting:", vc_set_presenting as Imp, "v@:@");
         add_method(vc, "presentViewController:animated:completion:", vc_present as Imp, "v@:@B@?");
         add_method(vc, "dismissViewControllerAnimated:completion:", vc_dismiss as Imp, "v@:B@?");
+        add_method(vc, "isBeingPresented", view_false as Imp, "B@:");
+        add_method(vc, "isBeingDismissed", view_false as Imp, "B@:");
+        add_method(vc, "isMovingToParentViewController", view_false as Imp, "B@:");
+        add_method(vc, "isMovingFromParentViewController", view_false as Imp, "B@:");
+        add_method(object_getClass(vc as Id), "attemptRotationToDeviceOrientation", view_noop as Imp, "v@:");
     }
 
     let w = cls("UIWindow");
@@ -2555,8 +2576,8 @@ pub unsafe fn register_classes() {
         add_method(w, "setScreen:", win_set_screen as Imp, "v@:@");
         add_method(w, "windowLevel", win_level as Imp, "d@:");
         add_method(w, "setWindowLevel:", win_set_level as Imp, "v@:d");
-        add_method(w, "windowScene", view_nil as Imp, "@@:");
-        add_method(w, "setWindowScene:", view_noop_id as Imp, "v@:@");
+        add_method(w, "windowScene", win_scene as Imp, "@@:");
+        add_method(w, "setWindowScene:", win_set_scene as Imp, "v@:@");
         add_method(w, "isKeyWindow", win_is_key as Imp, "B@:");
         add_method(w, "rootViewController", win_root as Imp, "@@:");
         add_method(w, "setRootViewController:", win_set_root as Imp, "v@:@");
@@ -2791,5 +2812,727 @@ pub unsafe fn register_classes() {
         add_method(tap, "setNumberOfTapsRequired:", gr_set_taps_required as Imp, "v@:Q");
         add_method(tap, "numberOfTouchesRequired", gr_touches_required as Imp, "Q@:");
         add_method(tap, "setNumberOfTouchesRequired:", gr_set_touches_required as Imp, "v@:Q");
+    }
+
+    layout_controls_imp::register_classes();
+}
+
+mod layout_controls_imp {
+    use super::*;
+
+    unsafe fn get_pod<T: Copy + Default>(obj: Id, key: &u8) -> T {
+        let data = assoc_get(obj, key);
+        if let Some(bytes) = nsdata_to_vec(data) {
+            if bytes.len() == std::mem::size_of::<T>() {
+                return std::ptr::read_unaligned(bytes.as_ptr() as *const T);
+            }
+        }
+        T::default()
+    }
+
+    unsafe fn set_pod<T: Copy>(obj: Id, key: &u8, val: T) {
+        let bytes = std::slice::from_raw_parts(&val as *const T as *const u8, std::mem::size_of::<T>());
+        assoc_set(obj, key, nsdata_from_bytes(bytes));
+    }
+
+    unsafe fn set_copied(obj: Id, key: &u8, val: Id) {
+        let copied = if val.is_null() { NIL } else { msg0(val, "copy") };
+        assoc_set(obj, key, copied);
+        if !copied.is_null() {
+            objc_release(copied);
+        }
+    }
+
+    // ---- UIView animations + constraints ----
+    static G_ANIMATIONS_ENABLED: AtomicBool = AtomicBool::new(true);
+    static VIEW_CONSTRAINTS_KEY: u8 = 0;
+
+    unsafe extern "C" fn view_set_anim(_cls: Id, _c: Sel, enabled: bool) {
+        G_ANIMATIONS_ENABLED.store(enabled, Ordering::Release);
+    }
+    unsafe extern "C" fn view_are_anim(_cls: Id, _c: Sel) -> bool {
+        G_ANIMATIONS_ENABLED.load(Ordering::Acquire)
+    }
+    unsafe extern "C" fn view_constraints(self_obj: Id, _c: Sel) -> Id {
+        let arr = mut_array_for_key(self_obj, &VIEW_CONSTRAINTS_KEY);
+        msg1(cls("NSArray"), "arrayWithArray:", arr)
+    }
+    unsafe extern "C" fn view_add_constraint(self_obj: Id, _c: Sel, c: Id) {
+        if c.is_null() {
+            return;
+        }
+        let arr = mut_array_for_key(self_obj, &VIEW_CONSTRAINTS_KEY);
+        if !msg1::<Id, bool>(arr, "containsObject:", c) {
+            msg1::<Id, ()>(arr, "addObject:", c);
+        }
+    }
+    unsafe extern "C" fn view_add_constraints(self_obj: Id, _c: Sel, cs: Id) {
+        if cs.is_null() {
+            return;
+        }
+        for i in 0..nsarray_count(cs) {
+            view_add_constraint(self_obj, sel("addConstraint:"), nsarray_object_at(cs, i));
+        }
+    }
+    unsafe extern "C" fn view_remove_constraint(self_obj: Id, _c: Sel, c: Id) {
+        if c.is_null() {
+            return;
+        }
+        let arr = mut_array_for_key(self_obj, &VIEW_CONSTRAINTS_KEY);
+        msg1::<Id, ()>(arr, "removeObjectIdenticalTo:", c);
+    }
+    unsafe extern "C" fn view_remove_constraints(self_obj: Id, _c: Sel, cs: Id) {
+        if cs.is_null() {
+            return;
+        }
+        for i in 0..nsarray_count(cs) {
+            view_remove_constraint(self_obj, sel("removeConstraint:"), nsarray_object_at(cs, i));
+        }
+    }
+
+    pub unsafe fn register_view(v: Class) {
+        add_class_method(v, "setAnimationsEnabled:", view_set_anim as Imp, "v@:B");
+        add_class_method(v, "areAnimationsEnabled", view_are_anim as Imp, "B@:");
+        add_method(v, "constraints", view_constraints as Imp, "@@:");
+        add_method(v, "addConstraint:", view_add_constraint as Imp, "v@:@");
+        add_method(v, "addConstraints:", view_add_constraints as Imp, "v@:@");
+        add_method(v, "removeConstraint:", view_remove_constraint as Imp, "v@:@");
+        add_method(v, "removeConstraints:", view_remove_constraints as Imp, "v@:@");
+        for s in ["setNeedsUpdateConstraints", "updateConstraintsIfNeeded", "updateConstraints"] {
+            add_method(v, s, view_noop as Imp, "v@:");
+        }
+    }
+
+    // ---- PearLayoutConstraint + NSLayoutConstraint ----
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct ConstraintData {
+        first_attr: isize,
+        second_attr: isize,
+        relation: isize,
+        multiplier: f64,
+        constant: f64,
+        priority: f32,
+        active: bool,
+    }
+    impl Default for ConstraintData {
+        fn default() -> Self {
+            Self {
+                first_attr: 0,
+                second_attr: 0,
+                relation: 0,
+                multiplier: 1.0,
+                constant: 0.0,
+                priority: 1000.0,
+                active: false,
+            }
+        }
+    }
+
+    static PLC_DATA_KEY: u8 = 0;
+    static PLC_FIRST_KEY: u8 = 0;
+    static PLC_SECOND_KEY: u8 = 0;
+    static PLC_IDENT_KEY: u8 = 0;
+    static ORIG_WITH_ITEM: AtomicUsize = AtomicUsize::new(0);
+    static ORIG_ACTIVATE: AtomicUsize = AtomicUsize::new(0);
+    static ORIG_DEACTIVATE: AtomicUsize = AtomicUsize::new(0);
+    static ORIG_VFL: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe fn is_pear_layout_item(obj: Id) -> bool {
+        !obj.is_null() && (is_kind_of(obj, "UIView") || is_kind_of(obj, "UILayoutGuide"))
+    }
+
+    unsafe extern "C" fn plc_first(s: Id, _c: Sel) -> Id { pear_objc::assoc_get_weak(s, &PLC_FIRST_KEY) }
+    unsafe extern "C" fn plc_second(s: Id, _c: Sel) -> Id { pear_objc::assoc_get_weak(s, &PLC_SECOND_KEY) }
+    unsafe extern "C" fn plc_first_attr(s: Id, _c: Sel) -> isize { get_pod::<ConstraintData>(s, &PLC_DATA_KEY).first_attr }
+    unsafe extern "C" fn plc_second_attr(s: Id, _c: Sel) -> isize { get_pod::<ConstraintData>(s, &PLC_DATA_KEY).second_attr }
+    unsafe extern "C" fn plc_relation(s: Id, _c: Sel) -> isize { get_pod::<ConstraintData>(s, &PLC_DATA_KEY).relation }
+    unsafe extern "C" fn plc_multiplier(s: Id, _c: Sel) -> f64 { get_pod::<ConstraintData>(s, &PLC_DATA_KEY).multiplier }
+    unsafe extern "C" fn plc_constant(s: Id, _c: Sel) -> f64 { get_pod::<ConstraintData>(s, &PLC_DATA_KEY).constant }
+    unsafe extern "C" fn plc_set_constant(s: Id, _c: Sel, v: f64) {
+        let mut d: ConstraintData = get_pod(s, &PLC_DATA_KEY);
+        d.constant = v;
+        set_pod(s, &PLC_DATA_KEY, d);
+    }
+    unsafe extern "C" fn plc_priority(s: Id, _c: Sel) -> f32 { get_pod::<ConstraintData>(s, &PLC_DATA_KEY).priority }
+    unsafe extern "C" fn plc_set_priority(s: Id, _c: Sel, v: f32) {
+        let mut d: ConstraintData = get_pod(s, &PLC_DATA_KEY);
+        d.priority = v;
+        set_pod(s, &PLC_DATA_KEY, d);
+    }
+    unsafe extern "C" fn plc_active(s: Id, _c: Sel) -> bool { get_pod::<ConstraintData>(s, &PLC_DATA_KEY).active }
+    unsafe extern "C" fn plc_set_active(s: Id, _c: Sel, v: bool) {
+        let mut d: ConstraintData = get_pod(s, &PLC_DATA_KEY);
+        d.active = v;
+        set_pod(s, &PLC_DATA_KEY, d);
+    }
+    unsafe extern "C" fn plc_ident(s: Id, _c: Sel) -> Id { assoc_get(s, &PLC_IDENT_KEY) }
+    unsafe extern "C" fn plc_set_ident(s: Id, _c: Sel, v: Id) { set_copied(s, &PLC_IDENT_KEY, v); }
+
+    unsafe extern "C" fn nslc_with_item(
+        cls_obj: Id,
+        cmd: Sel,
+        v1: Id,
+        a1: isize,
+        rel: isize,
+        v2: Id,
+        a2: isize,
+        mul: f64,
+        c: f64,
+    ) -> Id {
+        if is_pear_layout_item(v1) || is_pear_layout_item(v2) {
+            let obj: Id = msg0(cls("PearLayoutConstraint"), "new");
+            if obj.is_null() {
+                return NIL;
+            }
+            pear_objc::assoc_set_weak(obj, &PLC_FIRST_KEY, v1);
+            pear_objc::assoc_set_weak(obj, &PLC_SECOND_KEY, v2);
+            set_pod(
+                obj,
+                &PLC_DATA_KEY,
+                ConstraintData {
+                    first_attr: a1,
+                    second_attr: a2,
+                    relation: rel,
+                    multiplier: mul,
+                    constant: c,
+                    priority: 1000.0,
+                    active: false,
+                },
+            );
+            return objc_autorelease(obj);
+        }
+        let orig = ORIG_WITH_ITEM.load(Ordering::Acquire);
+        if orig != 0 {
+            let f: unsafe extern "C" fn(Id, Sel, Id, isize, isize, Id, isize, f64, f64) -> Id =
+                std::mem::transmute(orig);
+            return f(cls_obj, cmd, v1, a1, rel, v2, a2, mul, c);
+        }
+        NIL
+    }
+
+    unsafe fn toggle_constraints(cls_obj: Id, cmd: Sel, arr: Id, activate: bool, slot: &AtomicUsize) {
+        if arr.is_null() {
+            return;
+        }
+        let mut rest = Vec::new();
+        for i in 0..nsarray_count(arr) {
+            let item = nsarray_object_at(arr, i);
+            if is_kind_of(item, "PearLayoutConstraint") {
+                plc_set_active(item, sel("setActive:"), activate);
+            } else if !item.is_null() {
+                rest.push(item);
+            }
+        }
+        if !rest.is_empty() {
+            let orig = slot.load(Ordering::Acquire);
+            if orig != 0 {
+                let f: unsafe extern "C" fn(Id, Sel, Id) = std::mem::transmute(orig);
+                f(cls_obj, cmd, nsarray_from_ids(&rest));
+            }
+        }
+    }
+
+    unsafe extern "C" fn nslc_activate(cls_obj: Id, cmd: Sel, arr: Id) {
+        toggle_constraints(cls_obj, cmd, arr, true, &ORIG_ACTIVATE);
+    }
+    unsafe extern "C" fn nslc_deactivate(cls_obj: Id, cmd: Sel, arr: Id) {
+        toggle_constraints(cls_obj, cmd, arr, false, &ORIG_DEACTIVATE);
+    }
+    unsafe extern "C" fn nslc_vfl(
+        cls_obj: Id,
+        cmd: Sel,
+        fmt: Id,
+        opts: usize,
+        metrics: Id,
+        views: Id,
+    ) -> Id {
+        if !views.is_null() && is_kind_of(views, "NSDictionary") {
+            let vals: Id = msg0(views, "allValues");
+            for i in 0..nsarray_count(vals) {
+                if is_pear_layout_item(nsarray_object_at(vals, i)) {
+                    return msg0(cls("NSArray"), "array");
+                }
+            }
+        }
+        let orig = ORIG_VFL.load(Ordering::Acquire);
+        if orig != 0 {
+            let f: unsafe extern "C" fn(Id, Sel, Id, usize, Id, Id) -> Id = std::mem::transmute(orig);
+            return f(cls_obj, cmd, fmt, opts, metrics, views);
+        }
+        msg0(cls("NSArray"), "array")
+    }
+
+    unsafe fn replace_class_hook(meta: Class, name: &str, imp: Imp, types: &str, slot: &AtomicUsize) {
+        if slot.load(Ordering::Acquire) != 0 {
+            return;
+        }
+        let prev = class_getMethodImplementation(meta, sel(name));
+        let replaced = add_method(meta, name, imp, types);
+        let orig = if !replaced.is_null() { replaced } else { prev };
+        slot.store(orig as usize, Ordering::Release);
+    }
+
+    // ---- UIControl ----
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct ControlFlags {
+        enabled: bool,
+        selected: bool,
+        highlighted: bool,
+        h_align: isize,
+        v_align: isize,
+    }
+    impl Default for ControlFlags {
+        fn default() -> Self {
+            Self {
+                enabled: true,
+                selected: false,
+                highlighted: false,
+                h_align: 0,
+                v_align: 0,
+            }
+        }
+    }
+
+    #[repr(C)]
+    #[derive(Copy, Clone, PartialEq, Eq)]
+    struct ControlTarget {
+        target: usize,
+        action: usize,
+        events: usize,
+    }
+
+    static CTL_FLAGS_KEY: u8 = 0;
+    static CTL_TARGETS_KEY: u8 = 0;
+
+    unsafe fn get_ctl_targets(c: Id) -> Vec<ControlTarget> {
+        let sz = std::mem::size_of::<ControlTarget>();
+        if let Some(bytes) = nsdata_to_vec(assoc_get(c, &CTL_TARGETS_KEY)) {
+            return bytes
+                .chunks_exact(sz)
+                .map(|ch| std::ptr::read_unaligned(ch.as_ptr() as *const ControlTarget))
+                .collect();
+        }
+        Vec::new()
+    }
+    unsafe fn set_ctl_targets(c: Id, targets: &[ControlTarget]) {
+        let sz = std::mem::size_of::<ControlTarget>();
+        let bytes = std::slice::from_raw_parts(targets.as_ptr() as *const u8, targets.len() * sz);
+        assoc_set(c, &CTL_TARGETS_KEY, nsdata_from_bytes(bytes));
+    }
+
+    unsafe extern "C" fn ctl_add_target(s: Id, _c: Sel, target: Id, action: Sel, events: usize) {
+        if action.is_null() || events == 0 {
+            return;
+        }
+        let t = target as usize;
+        let a = action as usize;
+        let mut list = get_ctl_targets(s);
+        if let Some(item) = list.iter_mut().find(|p| p.target == t && p.action == a) {
+            item.events |= events;
+        } else {
+            list.push(ControlTarget { target: t, action: a, events });
+        }
+        set_ctl_targets(s, &list);
+    }
+    unsafe extern "C" fn ctl_remove_target(s: Id, _c: Sel, target: Id, action: Sel, events: usize) {
+        let t = target as usize;
+        let a = action as usize;
+        let mut list = get_ctl_targets(s);
+        list.retain_mut(|p| {
+            let match_t = t == 0 || p.target == t;
+            let match_a = a == 0 || p.action == a;
+            if match_t && match_a {
+                p.events &= !events;
+                p.events != 0
+            } else {
+                true
+            }
+        });
+        set_ctl_targets(s, &list);
+    }
+    unsafe extern "C" fn ctl_all_targets(s: Id, _c: Sel) -> Id {
+        let ids: Vec<Id> = get_ctl_targets(s)
+            .into_iter()
+            .filter_map(|p| (p.target != 0).then_some(p.target as Id))
+            .collect();
+        msg1(cls("NSSet"), "setWithArray:", nsarray_from_ids(&ids))
+    }
+    unsafe extern "C" fn ctl_all_events(s: Id, _c: Sel) -> usize {
+        get_ctl_targets(s).into_iter().fold(0, |acc, p| acc | p.events)
+    }
+    unsafe extern "C" fn ctl_actions_for_target(s: Id, _c: Sel, target: Id, event: usize) -> Id {
+        let t = target as usize;
+        let names: Vec<Id> = get_ctl_targets(s)
+            .into_iter()
+            .filter(|p| p.target == t && (p.events & event) != 0 && p.action != 0)
+            .filter_map(|p| {
+                let ptr = sel_getName(p.action as Sel);
+                (!ptr.is_null()).then(|| nsstring(&CStr::from_ptr(ptr).to_string_lossy()))
+            })
+            .collect();
+        nsarray_from_ids(&names)
+    }
+    unsafe extern "C" fn ctl_send_actions(s: Id, _c: Sel, events: usize) {
+        let list = get_ctl_targets(s);
+        for p in list {
+            if (p.events & events) == 0 || p.target == 0 || p.action == 0 {
+                continue;
+            }
+            let target = p.target as Id;
+            let action = p.action as Sel;
+            if class_respondsToSelector(object_getClass(target), action) {
+                let f: unsafe extern "C" fn(Id, Sel, Id, Id) =
+                    std::mem::transmute(objc_msgSend as *const c_void);
+                f(target, action, s, NIL);
+            }
+        }
+    }
+    unsafe extern "C" fn ctl_enabled(s: Id, _c: Sel) -> bool { get_pod::<ControlFlags>(s, &CTL_FLAGS_KEY).enabled }
+    unsafe extern "C" fn ctl_set_enabled(s: Id, _c: Sel, v: bool) {
+        let mut f: ControlFlags = get_pod(s, &CTL_FLAGS_KEY);
+        f.enabled = v;
+        set_pod(s, &CTL_FLAGS_KEY, f);
+    }
+    unsafe extern "C" fn ctl_selected(s: Id, _c: Sel) -> bool { get_pod::<ControlFlags>(s, &CTL_FLAGS_KEY).selected }
+    unsafe extern "C" fn ctl_set_selected(s: Id, _c: Sel, v: bool) {
+        let mut f: ControlFlags = get_pod(s, &CTL_FLAGS_KEY);
+        f.selected = v;
+        set_pod(s, &CTL_FLAGS_KEY, f);
+    }
+    unsafe extern "C" fn ctl_highlighted(s: Id, _c: Sel) -> bool { get_pod::<ControlFlags>(s, &CTL_FLAGS_KEY).highlighted }
+    unsafe extern "C" fn ctl_set_highlighted(s: Id, _c: Sel, v: bool) {
+        let mut f: ControlFlags = get_pod(s, &CTL_FLAGS_KEY);
+        f.highlighted = v;
+        set_pod(s, &CTL_FLAGS_KEY, f);
+    }
+    unsafe extern "C" fn ctl_h_align(s: Id, _c: Sel) -> isize { get_pod::<ControlFlags>(s, &CTL_FLAGS_KEY).h_align }
+    unsafe extern "C" fn ctl_set_h_align(s: Id, _c: Sel, v: isize) {
+        let mut f: ControlFlags = get_pod(s, &CTL_FLAGS_KEY);
+        f.h_align = v;
+        set_pod(s, &CTL_FLAGS_KEY, f);
+    }
+    unsafe extern "C" fn ctl_v_align(s: Id, _c: Sel) -> isize { get_pod::<ControlFlags>(s, &CTL_FLAGS_KEY).v_align }
+    unsafe extern "C" fn ctl_set_v_align(s: Id, _c: Sel, v: isize) {
+        let mut f: ControlFlags = get_pod(s, &CTL_FLAGS_KEY);
+        f.v_align = v;
+        set_pod(s, &CTL_FLAGS_KEY, f);
+    }
+
+    // ---- UITextField ----
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct TextFieldState {
+        align: isize,
+        border: isize,
+        clear_mode: isize,
+        kb_type: isize,
+        kb_app: isize,
+        ret_key: isize,
+        autocorrect: isize,
+        autocap: isize,
+        spell: isize,
+        secure: bool,
+        clears_begin: bool,
+        adjusts_fit: bool,
+        min_font: f64,
+    }
+    impl Default for TextFieldState {
+        fn default() -> Self {
+            Self {
+                align: 0,
+                border: 0,
+                clear_mode: 0,
+                kb_type: 0,
+                kb_app: 0,
+                ret_key: 0,
+                autocorrect: 0,
+                autocap: 0,
+                spell: 0,
+                secure: false,
+                clears_begin: false,
+                adjusts_fit: false,
+                min_font: 0.0,
+            }
+        }
+    }
+
+    static TF_DEL_KEY: u8 = 0;
+    static TF_TEXT_KEY: u8 = 0;
+    static TF_ATTR_TEXT_KEY: u8 = 0;
+    static TF_PLACEHOLDER_KEY: u8 = 0;
+    static TF_FONT_KEY: u8 = 0;
+    static TF_COLOR_KEY: u8 = 0;
+    static TF_INPUT_ACC_KEY: u8 = 0;
+    static TF_INPUT_VIEW_KEY: u8 = 0;
+    static TF_STATE_KEY: u8 = 0;
+
+    unsafe extern "C" fn tf_del(s: Id, _c: Sel) -> Id { pear_objc::assoc_get_weak(s, &TF_DEL_KEY) }
+    unsafe extern "C" fn tf_set_del(s: Id, _c: Sel, v: Id) { pear_objc::assoc_set_weak(s, &TF_DEL_KEY, v); }
+    unsafe extern "C" fn tf_text(s: Id, _c: Sel) -> Id {
+        let t = assoc_get(s, &TF_TEXT_KEY);
+        if t.is_null() { nsstring("") } else { t }
+    }
+    unsafe extern "C" fn tf_set_text(s: Id, _c: Sel, v: Id) { set_copied(s, &TF_TEXT_KEY, v); }
+    unsafe extern "C" fn tf_attr_text(s: Id, _c: Sel) -> Id { assoc_get(s, &TF_ATTR_TEXT_KEY) }
+    unsafe extern "C" fn tf_set_attr_text(s: Id, _c: Sel, v: Id) { set_copied(s, &TF_ATTR_TEXT_KEY, v); }
+    unsafe extern "C" fn tf_placeholder(s: Id, _c: Sel) -> Id { assoc_get(s, &TF_PLACEHOLDER_KEY) }
+    unsafe extern "C" fn tf_set_placeholder(s: Id, _c: Sel, v: Id) { set_copied(s, &TF_PLACEHOLDER_KEY, v); }
+    unsafe extern "C" fn tf_font(s: Id, _c: Sel) -> Id { assoc_get(s, &TF_FONT_KEY) }
+    unsafe extern "C" fn tf_set_font(s: Id, _c: Sel, v: Id) { assoc_set(s, &TF_FONT_KEY, v); }
+    unsafe extern "C" fn tf_color(s: Id, _c: Sel) -> Id { assoc_get(s, &TF_COLOR_KEY) }
+    unsafe extern "C" fn tf_set_color(s: Id, _c: Sel, v: Id) { assoc_set(s, &TF_COLOR_KEY, v); }
+    unsafe extern "C" fn tf_input_acc(s: Id, _c: Sel) -> Id { assoc_get(s, &TF_INPUT_ACC_KEY) }
+    unsafe extern "C" fn tf_set_input_acc(s: Id, _c: Sel, v: Id) { assoc_set(s, &TF_INPUT_ACC_KEY, v); }
+    unsafe extern "C" fn tf_input_view(s: Id, _c: Sel) -> Id { assoc_get(s, &TF_INPUT_VIEW_KEY) }
+    unsafe extern "C" fn tf_set_input_view(s: Id, _c: Sel, v: Id) { assoc_set(s, &TF_INPUT_VIEW_KEY, v); }
+
+    unsafe extern "C" fn tf_align(s: Id, _c: Sel) -> isize { get_pod::<TextFieldState>(s, &TF_STATE_KEY).align }
+    unsafe extern "C" fn tf_set_align(s: Id, _c: Sel, v: isize) {
+        let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        st.align = v;
+        set_pod(s, &TF_STATE_KEY, st);
+    }
+    unsafe extern "C" fn tf_border(s: Id, _c: Sel) -> isize { get_pod::<TextFieldState>(s, &TF_STATE_KEY).border }
+    unsafe extern "C" fn tf_set_border(s: Id, _c: Sel, v: isize) {
+        let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        st.border = v;
+        set_pod(s, &TF_STATE_KEY, st);
+    }
+    unsafe extern "C" fn tf_clear_mode(s: Id, _c: Sel) -> isize { get_pod::<TextFieldState>(s, &TF_STATE_KEY).clear_mode }
+    unsafe extern "C" fn tf_set_clear_mode(s: Id, _c: Sel, v: isize) {
+        let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        st.clear_mode = v;
+        set_pod(s, &TF_STATE_KEY, st);
+    }
+    unsafe extern "C" fn tf_kb_type(s: Id, _c: Sel) -> isize { get_pod::<TextFieldState>(s, &TF_STATE_KEY).kb_type }
+    unsafe extern "C" fn tf_set_kb_type(s: Id, _c: Sel, v: isize) {
+        let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        st.kb_type = v;
+        set_pod(s, &TF_STATE_KEY, st);
+    }
+    unsafe extern "C" fn tf_kb_app(s: Id, _c: Sel) -> isize { get_pod::<TextFieldState>(s, &TF_STATE_KEY).kb_app }
+    unsafe extern "C" fn tf_set_kb_app(s: Id, _c: Sel, v: isize) {
+        let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        st.kb_app = v;
+        set_pod(s, &TF_STATE_KEY, st);
+    }
+    unsafe extern "C" fn tf_ret_key(s: Id, _c: Sel) -> isize { get_pod::<TextFieldState>(s, &TF_STATE_KEY).ret_key }
+    unsafe extern "C" fn tf_set_ret_key(s: Id, _c: Sel, v: isize) {
+        let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        st.ret_key = v;
+        set_pod(s, &TF_STATE_KEY, st);
+    }
+    unsafe extern "C" fn tf_autocorrect(s: Id, _c: Sel) -> isize { get_pod::<TextFieldState>(s, &TF_STATE_KEY).autocorrect }
+    unsafe extern "C" fn tf_set_autocorrect(s: Id, _c: Sel, v: isize) {
+        let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        st.autocorrect = v;
+        set_pod(s, &TF_STATE_KEY, st);
+    }
+    unsafe extern "C" fn tf_autocap(s: Id, _c: Sel) -> isize { get_pod::<TextFieldState>(s, &TF_STATE_KEY).autocap }
+    unsafe extern "C" fn tf_set_autocap(s: Id, _c: Sel, v: isize) {
+        let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        st.autocap = v;
+        set_pod(s, &TF_STATE_KEY, st);
+    }
+    unsafe extern "C" fn tf_spell(s: Id, _c: Sel) -> isize { get_pod::<TextFieldState>(s, &TF_STATE_KEY).spell }
+    unsafe extern "C" fn tf_set_spell(s: Id, _c: Sel, v: isize) {
+        let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        st.spell = v;
+        set_pod(s, &TF_STATE_KEY, st);
+    }
+    unsafe extern "C" fn tf_secure(s: Id, _c: Sel) -> bool { get_pod::<TextFieldState>(s, &TF_STATE_KEY).secure }
+    unsafe extern "C" fn tf_set_secure(s: Id, _c: Sel, v: bool) {
+        let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        st.secure = v;
+        set_pod(s, &TF_STATE_KEY, st);
+    }
+    unsafe extern "C" fn tf_clears_begin(s: Id, _c: Sel) -> bool { get_pod::<TextFieldState>(s, &TF_STATE_KEY).clears_begin }
+    unsafe extern "C" fn tf_set_clears_begin(s: Id, _c: Sel, v: bool) {
+        let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        st.clears_begin = v;
+        set_pod(s, &TF_STATE_KEY, st);
+    }
+    unsafe extern "C" fn tf_adjusts_fit(s: Id, _c: Sel) -> bool { get_pod::<TextFieldState>(s, &TF_STATE_KEY).adjusts_fit }
+    unsafe extern "C" fn tf_set_adjusts_fit(s: Id, _c: Sel, v: bool) {
+        let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        st.adjusts_fit = v;
+        set_pod(s, &TF_STATE_KEY, st);
+    }
+    unsafe extern "C" fn tf_min_font(s: Id, _c: Sel) -> f64 { get_pod::<TextFieldState>(s, &TF_STATE_KEY).min_font }
+    unsafe extern "C" fn tf_set_min_font(s: Id, _c: Sel, v: f64) {
+        let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        st.min_font = v;
+        set_pod(s, &TF_STATE_KEY, st);
+    }
+
+    // ---- UIToolbar ----
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct ToolbarState {
+        bar_style: isize,
+        translucent: bool,
+    }
+    impl Default for ToolbarState {
+        fn default() -> Self {
+            Self { bar_style: 0, translucent: true }
+        }
+    }
+
+    static TB_ITEMS_KEY: u8 = 0;
+    static TB_TINT_KEY: u8 = 0;
+    static TB_STATE_KEY: u8 = 0;
+
+    unsafe extern "C" fn tb_items(s: Id, _c: Sel) -> Id {
+        let arr = assoc_get(s, &TB_ITEMS_KEY);
+        if arr.is_null() { msg0(cls("NSArray"), "array") } else { arr }
+    }
+    unsafe extern "C" fn tb_set_items(s: Id, _c: Sel, items: Id) {
+        let copied = if items.is_null() { NIL } else { msg1(cls("NSArray"), "arrayWithArray:", items) };
+        assoc_set(s, &TB_ITEMS_KEY, copied);
+    }
+    unsafe extern "C" fn tb_set_items_anim(s: Id, _c: Sel, items: Id, _anim: bool) {
+        tb_set_items(s, sel("setItems:"), items);
+    }
+    unsafe extern "C" fn tb_style(s: Id, _c: Sel) -> isize { get_pod::<ToolbarState>(s, &TB_STATE_KEY).bar_style }
+    unsafe extern "C" fn tb_set_style(s: Id, _c: Sel, v: isize) {
+        let mut st: ToolbarState = get_pod(s, &TB_STATE_KEY);
+        st.bar_style = v;
+        set_pod(s, &TB_STATE_KEY, st);
+    }
+    unsafe extern "C" fn tb_translucent(s: Id, _c: Sel) -> bool { get_pod::<ToolbarState>(s, &TB_STATE_KEY).translucent }
+    unsafe extern "C" fn tb_set_translucent(s: Id, _c: Sel, v: bool) {
+        let mut st: ToolbarState = get_pod(s, &TB_STATE_KEY);
+        st.translucent = v;
+        set_pod(s, &TB_STATE_KEY, st);
+    }
+    unsafe extern "C" fn tb_tint(s: Id, _c: Sel) -> Id { assoc_get(s, &TB_TINT_KEY) }
+    unsafe extern "C" fn tb_set_tint(s: Id, _c: Sel, v: Id) { assoc_set(s, &TB_TINT_KEY, v); }
+
+    pub unsafe fn register_classes() {
+        let plc = cls("PearLayoutConstraint");
+        if !plc.is_null() {
+            add_method(plc, "firstItem", plc_first as Imp, "@@:");
+            add_method(plc, "secondItem", plc_second as Imp, "@@:");
+            add_method(plc, "firstAttribute", plc_first_attr as Imp, "q@:");
+            add_method(plc, "secondAttribute", plc_second_attr as Imp, "q@:");
+            add_method(plc, "relation", plc_relation as Imp, "q@:");
+            add_method(plc, "multiplier", plc_multiplier as Imp, "d@:");
+            add_method(plc, "constant", plc_constant as Imp, "d@:");
+            add_method(plc, "setConstant:", plc_set_constant as Imp, "v@:d");
+            add_method(plc, "priority", plc_priority as Imp, "f@:");
+            add_method(plc, "setPriority:", plc_set_priority as Imp, "v@:f");
+            add_method(plc, "isActive", plc_active as Imp, "B@:");
+            add_method(plc, "active", plc_active as Imp, "B@:");
+            add_method(plc, "setActive:", plc_set_active as Imp, "v@:B");
+            add_method(plc, "identifier", plc_ident as Imp, "@@:");
+            add_method(plc, "setIdentifier:", plc_set_ident as Imp, "v@:@");
+        }
+
+        let nslc = cls("NSLayoutConstraint");
+        if !nslc.is_null() {
+            let meta = object_getClass(nslc as Id);
+            replace_class_hook(
+                meta,
+                "constraintWithItem:attribute:relatedBy:toItem:attribute:multiplier:constant:",
+                nslc_with_item as Imp,
+                "@@:@qq@qdd",
+                &ORIG_WITH_ITEM,
+            );
+            replace_class_hook(meta, "activateConstraints:", nslc_activate as Imp, "v@:@", &ORIG_ACTIVATE);
+            replace_class_hook(meta, "deactivateConstraints:", nslc_deactivate as Imp, "v@:@", &ORIG_DEACTIVATE);
+            replace_class_hook(
+                meta,
+                "constraintsWithVisualFormat:options:metrics:views:",
+                nslc_vfl as Imp,
+                "@@:@Q@@",
+                &ORIG_VFL,
+            );
+        }
+
+        let ctl = cls("UIControl");
+        if !ctl.is_null() {
+            add_method(ctl, "addTarget:action:forControlEvents:", ctl_add_target as Imp, "v@:@:Q");
+            add_method(ctl, "removeTarget:action:forControlEvents:", ctl_remove_target as Imp, "v@:@:Q");
+            add_method(ctl, "allTargets", ctl_all_targets as Imp, "@@:");
+            add_method(ctl, "allControlEvents", ctl_all_events as Imp, "Q@:");
+            add_method(ctl, "actionsForTarget:forControlEvent:", ctl_actions_for_target as Imp, "@@:@Q");
+            add_method(ctl, "sendActionsForControlEvents:", ctl_send_actions as Imp, "v@:Q");
+            add_method(ctl, "isEnabled", ctl_enabled as Imp, "B@:");
+            add_method(ctl, "enabled", ctl_enabled as Imp, "B@:");
+            add_method(ctl, "setEnabled:", ctl_set_enabled as Imp, "v@:B");
+            add_method(ctl, "isSelected", ctl_selected as Imp, "B@:");
+            add_method(ctl, "selected", ctl_selected as Imp, "B@:");
+            add_method(ctl, "setSelected:", ctl_set_selected as Imp, "v@:B");
+            add_method(ctl, "isHighlighted", ctl_highlighted as Imp, "B@:");
+            add_method(ctl, "highlighted", ctl_highlighted as Imp, "B@:");
+            add_method(ctl, "setHighlighted:", ctl_set_highlighted as Imp, "v@:B");
+            add_method(ctl, "contentHorizontalAlignment", ctl_h_align as Imp, "q@:");
+            add_method(ctl, "setContentHorizontalAlignment:", ctl_set_h_align as Imp, "v@:q");
+            add_method(ctl, "contentVerticalAlignment", ctl_v_align as Imp, "q@:");
+            add_method(ctl, "setContentVerticalAlignment:", ctl_set_v_align as Imp, "v@:q");
+        }
+
+        let tf = cls("UITextField");
+        if !tf.is_null() {
+            add_method(tf, "delegate", tf_del as Imp, "@@:");
+            add_method(tf, "setDelegate:", tf_set_del as Imp, "v@:@");
+            add_method(tf, "text", tf_text as Imp, "@@:");
+            add_method(tf, "setText:", tf_set_text as Imp, "v@:@");
+            add_method(tf, "attributedText", tf_attr_text as Imp, "@@:");
+            add_method(tf, "setAttributedText:", tf_set_attr_text as Imp, "v@:@");
+            add_method(tf, "placeholder", tf_placeholder as Imp, "@@:");
+            add_method(tf, "setPlaceholder:", tf_set_placeholder as Imp, "v@:@");
+            add_method(tf, "font", tf_font as Imp, "@@:");
+            add_method(tf, "setFont:", tf_set_font as Imp, "v@:@");
+            add_method(tf, "textColor", tf_color as Imp, "@@:");
+            add_method(tf, "setTextColor:", tf_set_color as Imp, "v@:@");
+            add_method(tf, "textAlignment", tf_align as Imp, "q@:");
+            add_method(tf, "setTextAlignment:", tf_set_align as Imp, "v@:q");
+            add_method(tf, "borderStyle", tf_border as Imp, "q@:");
+            add_method(tf, "setBorderStyle:", tf_set_border as Imp, "v@:q");
+            add_method(tf, "clearButtonMode", tf_clear_mode as Imp, "q@:");
+            add_method(tf, "setClearButtonMode:", tf_set_clear_mode as Imp, "v@:q");
+            add_method(tf, "inputAccessoryView", tf_input_acc as Imp, "@@:");
+            add_method(tf, "setInputAccessoryView:", tf_set_input_acc as Imp, "v@:@");
+            add_method(tf, "inputView", tf_input_view as Imp, "@@:");
+            add_method(tf, "setInputView:", tf_set_input_view as Imp, "v@:@");
+            add_method(tf, "keyboardType", tf_kb_type as Imp, "q@:");
+            add_method(tf, "setKeyboardType:", tf_set_kb_type as Imp, "v@:q");
+            add_method(tf, "keyboardAppearance", tf_kb_app as Imp, "q@:");
+            add_method(tf, "setKeyboardAppearance:", tf_set_kb_app as Imp, "v@:q");
+            add_method(tf, "returnKeyType", tf_ret_key as Imp, "q@:");
+            add_method(tf, "setReturnKeyType:", tf_set_ret_key as Imp, "v@:q");
+            add_method(tf, "autocorrectionType", tf_autocorrect as Imp, "q@:");
+            add_method(tf, "setAutocorrectionType:", tf_set_autocorrect as Imp, "v@:q");
+            add_method(tf, "autocapitalizationType", tf_autocap as Imp, "q@:");
+            add_method(tf, "setAutocapitalizationType:", tf_set_autocap as Imp, "v@:q");
+            add_method(tf, "spellCheckingType", tf_spell as Imp, "q@:");
+            add_method(tf, "setSpellCheckingType:", tf_set_spell as Imp, "v@:q");
+            add_method(tf, "isSecureTextEntry", tf_secure as Imp, "B@:");
+            add_method(tf, "secureTextEntry", tf_secure as Imp, "B@:");
+            add_method(tf, "setSecureTextEntry:", tf_set_secure as Imp, "v@:B");
+            add_method(tf, "clearsOnBeginEditing", tf_clears_begin as Imp, "B@:");
+            add_method(tf, "setClearsOnBeginEditing:", tf_set_clears_begin as Imp, "v@:B");
+            add_method(tf, "adjustsFontSizeToFitWidth", tf_adjusts_fit as Imp, "B@:");
+            add_method(tf, "setAdjustsFontSizeToFitWidth:", tf_set_adjusts_fit as Imp, "v@:B");
+            add_method(tf, "minimumFontSize", tf_min_font as Imp, "d@:");
+            add_method(tf, "setMinimumFontSize:", tf_set_min_font as Imp, "v@:d");
+        }
+
+        let tb = cls("UIToolbar");
+        if !tb.is_null() {
+            add_method(tb, "items", tb_items as Imp, "@@:");
+            add_method(tb, "setItems:", tb_set_items as Imp, "v@:@");
+            add_method(tb, "setItems:animated:", tb_set_items_anim as Imp, "v@:@B");
+            add_method(tb, "barStyle", tb_style as Imp, "q@:");
+            add_method(tb, "setBarStyle:", tb_set_style as Imp, "v@:q");
+            add_method(tb, "isTranslucent", tb_translucent as Imp, "B@:");
+            add_method(tb, "translucent", tb_translucent as Imp, "B@:");
+            add_method(tb, "setTranslucent:", tb_set_translucent as Imp, "v@:B");
+            add_method(tb, "barTintColor", tb_tint as Imp, "@@:");
+            add_method(tb, "setBarTintColor:", tb_set_tint as Imp, "v@:@");
+        }
     }
 }

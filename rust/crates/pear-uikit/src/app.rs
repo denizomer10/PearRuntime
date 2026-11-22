@@ -154,7 +154,9 @@ static APP_DEL_KEY: u8 = 0;
 static APP_STRONG_DEL_KEY: u8 = 0;
 static APP_IDLE_KEY: u8 = 0;
 static APP_BADGE_KEY: u8 = 0;
+static APP_NOTIF_SETTINGS_KEY: u8 = 0;
 static APP_NEXT_TASK: AtomicUsize = AtomicUsize::new(0);
+static G_CONNECTED_SCENES: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
 unsafe extern "C" fn app_shared(_cls: Id, _c: Sel) -> Id {
     G_APP.load(Ordering::Acquire) as Id
@@ -174,7 +176,36 @@ unsafe extern "C" fn app_retain_del(s: Id, _c: Sel, d: Id) {
 }
 unsafe extern "C" fn app_key_win(_s: Id, _c: Sel) -> Id { PearUIKitKeyWindow() }
 unsafe extern "C" fn app_windows(_s: Id, _c: Sel) -> Id { PearUIKitWindows() }
-unsafe extern "C" fn app_empty_set(_s: Id, _c: Sel) -> Id { msg0(cls("NSSet"), "set") }
+unsafe extern "C" fn app_connected_scenes(_s: Id, _c: Sel) -> Id {
+    let guard = G_CONNECTED_SCENES.lock().unwrap();
+    let ids: Vec<Id> = guard.iter().map(|&p| p as Id).collect();
+    let arr = nsarray_from_ids(&ids);
+    msg1(cls("NSSet"), "setWithArray:", arr)
+}
+unsafe extern "C" fn app_open_sessions(_s: Id, _c: Sel) -> Id {
+    let guard = G_CONNECTED_SCENES.lock().unwrap();
+    let ids: Vec<Id> = guard
+        .iter()
+        .filter_map(|&p| {
+            let sess: Id = msg0(p as Id, "session");
+            (!sess.is_null()).then_some(sess)
+        })
+        .collect();
+    let arr = nsarray_from_ids(&ids);
+    msg1(cls("NSSet"), "setWithArray:", arr)
+}
+unsafe extern "C" fn app_reg_notif_settings(s: Id, _c: Sel, settings: Id) {
+    assoc_set(s, &APP_NOTIF_SETTINGS_KEY, settings);
+}
+unsafe extern "C" fn app_cur_notif_settings(s: Id, _c: Sel) -> Id {
+    let stored = assoc_get(s, &APP_NOTIF_SETTINGS_KEY);
+    if !stored.is_null() {
+        return stored;
+    }
+    let settings: Id = msg2(cls("UIUserNotificationSettings"), "settingsForTypes:categories:", 0usize, NIL);
+    assoc_set(s, &APP_NOTIF_SETTINGS_KEY, settings);
+    settings
+}
 unsafe extern "C" fn app_false(_s: Id, _c: Sel) -> bool { false }
 unsafe extern "C" fn app_true(_s: Id, _c: Sel) -> bool { true }
 unsafe extern "C" fn app_state(_s: Id, _c: Sel) -> isize { G_APP_STATE.load(Ordering::Acquire) }
@@ -187,10 +218,10 @@ unsafe extern "C" fn app_set_idle(s: Id, _c: Sel, d: bool) {
     pear_host::host().set_idle_timer_disabled(d);
 }
 unsafe extern "C" fn app_orient(_s: Id, _c: Sel) -> isize { 4 }
+unsafe extern "C" fn app_bg_refresh_status(_self_obj: Id, _cmd: Sel) -> isize { 2 }
 unsafe extern "C" fn app_noop(_s: Id, _c: Sel) {}
 unsafe extern "C" fn app_noop_b(_s: Id, _c: Sel, _b: bool) {}
 unsafe extern "C" fn app_noop_bi(_s: Id, _c: Sel, _b: bool, _i: isize) {}
-unsafe extern "C" fn app_noop_id(_s: Id, _c: Sel, _x: Id) {}
 unsafe extern "C" fn app_noop_u(_s: Id, _c: Sel, _u: usize) {}
 unsafe extern "C" fn app_noop_f(_s: Id, _c: Sel, _f: f64) {}
 unsafe extern "C" fn app_zero_rect(_s: Id, _c: Sel) -> CGRect { CGRect::default() }
@@ -260,10 +291,42 @@ unsafe fn call_app_delegate(sel_name: &str) {
     }
 }
 
-unsafe fn post_app_notif(name: &str) {
-    let app = G_APP.load(Ordering::Acquire) as Id;
+static SCENE_DEL_KEY: u8 = 0;
+static SCENE_SESSION_KEY: u8 = 0;
+static SCENE_TITLE_KEY: u8 = 0;
+static SESSION_ROLE_KEY: u8 = 0;
+static SESSION_CONFIG_KEY: u8 = 0;
+static SESSION_SCENE_KEY: u8 = 0;
+static SCFG_NAME_KEY: u8 = 0;
+static SCFG_ROLE_KEY: u8 = 0;
+static SCFG_DELEGATE_CLS_KEY: u8 = 0;
+static SCFG_SCENE_CLS_KEY: u8 = 0;
+
+fn cls_opt(name: Option<&str>) -> Class {
+    match name {
+        Some(s) if !s.is_empty() && !s.contains('\0') => cls(s),
+        _ => std::ptr::null_mut(),
+    }
+}
+
+unsafe fn post_notif(name: &str, obj: Id) {
     let nc: Id = msg0(cls("NSNotificationCenter"), "defaultCenter");
-    msg2::<Id, Id, ()>(nc, "postNotificationName:object:", nsstring(name), app);
+    msg2::<Id, Id, ()>(nc, "postNotificationName:object:", nsstring(name), obj);
+}
+
+unsafe fn post_app_notif(name: &str) {
+    post_notif(name, G_APP.load(Ordering::Acquire) as Id);
+}
+
+unsafe fn notify_scenes(selector: &str, notif: &str) {
+    let scenes: Vec<Id> = G_CONNECTED_SCENES.lock().unwrap().iter().map(|&p| p as Id).collect();
+    for scene in scenes {
+        let sdel: Id = msg0(scene, "delegate");
+        if !sdel.is_null() && responds_to(sdel, selector) {
+            msg1::<Id, ()>(sdel, selector, scene);
+        }
+        post_notif(notif, scene);
+    }
 }
 
 #[no_mangle]
@@ -275,6 +338,7 @@ pub extern "C" fn PearUIKitApplicationDidBecomeActive() {
     unsafe {
         call_app_delegate("applicationDidBecomeActive:");
         post_app_notif("UIApplicationDidBecomeActiveNotification");
+        notify_scenes("sceneDidBecomeActive:", "UISceneDidActivateNotification");
     }
 }
 
@@ -287,6 +351,7 @@ pub extern "C" fn PearUIKitApplicationWillResignActive() {
     unsafe {
         call_app_delegate("applicationWillResignActive:");
         post_app_notif("UIApplicationWillResignActiveNotification");
+        notify_scenes("sceneWillResignActive:", "UISceneWillDeactivateNotification");
     }
 }
 
@@ -300,6 +365,7 @@ pub extern "C" fn PearUIKitApplicationDidEnterBackground() {
     unsafe {
         call_app_delegate("applicationDidEnterBackground:");
         post_app_notif("UIApplicationDidEnterBackgroundNotification");
+        notify_scenes("sceneDidEnterBackground:", "UISceneDidEnterBackgroundNotification");
     }
 }
 
@@ -312,6 +378,7 @@ pub extern "C" fn PearUIKitApplicationWillEnterForeground() {
     unsafe {
         call_app_delegate("applicationWillEnterForeground:");
         post_app_notif("UIApplicationWillEnterForegroundNotification");
+        notify_scenes("sceneWillEnterForeground:", "UISceneWillEnterForegroundNotification");
     }
 }
 
@@ -321,6 +388,88 @@ pub extern "C" fn PearUIKitApplicationWillTerminate() {
         call_app_delegate("applicationWillTerminate:");
         post_app_notif("UIApplicationWillTerminateNotification");
     }
+}
+
+unsafe fn extract_scene_manifest_entry(manifest: Id) -> (Option<String>, Option<String>) {
+    if manifest.is_null() || !is_kind_of(manifest, "NSDictionary") {
+        return (None, None);
+    }
+    let cfgs: Id = msg1(manifest, "objectForKey:", nsstring("UISceneConfigurations"));
+    if cfgs.is_null() || !is_kind_of(cfgs, "NSDictionary") {
+        return (None, None);
+    }
+    let arr: Id = msg1(cfgs, "objectForKey:", nsstring("UIWindowSceneSessionRoleApplication"));
+    if arr.is_null() || !is_kind_of(arr, "NSArray") || nsarray_count(arr) == 0 {
+        return (None, None);
+    }
+    let entry = nsarray_object_at(arr, 0);
+    if entry.is_null() || !is_kind_of(entry, "NSDictionary") {
+        return (None, None);
+    }
+    let name = nsstring_to_string(msg1(entry, "objectForKey:", nsstring("UISceneConfigurationName")));
+    let del_name = nsstring_to_string(msg1(entry, "objectForKey:", nsstring("UISceneDelegateClassName")));
+    (name, del_name)
+}
+
+unsafe fn connect_main_scene(app: Id, app_del: Id, manifest: Id) {
+    let (cfg_name, del_cls_name) = extract_scene_manifest_entry(manifest);
+    let role = nsstring("UIWindowSceneSessionRoleApplication");
+    let name_id = cfg_name.as_deref().map(|s| nsstring(s)).unwrap_or(NIL);
+    let mut cfg: Id = msg2(cls("UISceneConfiguration"), "configurationWithName:sessionRole:", name_id, role);
+    let manifest_del_cls = cls_opt(del_cls_name.as_deref());
+    if !manifest_del_cls.is_null() {
+        msg1::<Class, ()>(cfg, "setDelegateClass:", manifest_del_cls);
+    }
+
+    let session: Id = msg0(cls("UISceneSession"), "new");
+    assoc_set(session, &SESSION_ROLE_KEY, role);
+    assoc_set(session, &SESSION_CONFIG_KEY, cfg);
+    let opts: Id = msg0(cls("UISceneConnectionOptions"), "new");
+
+    let cfg_cb = "application:configurationForConnectingSceneSession:options:";
+    if !app_del.is_null() && responds_to(app_del, cfg_cb) {
+        let custom: Id = msg3(app_del, cfg_cb, app, session, opts);
+        if !custom.is_null() {
+            cfg = custom;
+            assoc_set(session, &SESSION_CONFIG_KEY, cfg);
+        }
+    }
+
+    let mut scene_cls: Class = msg0(cfg, "sceneClass");
+    if scene_cls.is_null() {
+        scene_cls = cls("UIWindowScene");
+    }
+    let scene: Id = msg0(scene_cls as Id, "new");
+    if !scene.is_null() {
+        assoc_set(scene, &SCENE_SESSION_KEY, session);
+        pear_objc::assoc_set_weak(session, &SESSION_SCENE_KEY, scene);
+
+        let mut del_cls: Class = msg0(cfg, "delegateClass");
+        if del_cls.is_null() {
+            del_cls = manifest_del_cls;
+        }
+        if !del_cls.is_null() {
+            let scene_del: Id = msg0(del_cls as Id, "new");
+            if !scene_del.is_null() {
+                msg1::<Id, ()>(scene, "setDelegate:", scene_del);
+                objc_release(scene_del);
+            }
+        }
+        G_CONNECTED_SCENES.lock().unwrap().push(scene as usize);
+
+        let scene_del: Id = msg0(scene, "delegate");
+        if !scene_del.is_null() && responds_to(scene_del, "scene:willConnectToSession:options:") {
+            msg3::<Id, Id, Id, ()>(scene_del, "scene:willConnectToSession:options:", scene, session, opts);
+        }
+        post_notif("UISceneWillConnectNotification", scene);
+        if !scene_del.is_null() && responds_to(scene_del, "sceneWillEnterForeground:") {
+            msg1::<Id, ()>(scene_del, "sceneWillEnterForeground:", scene);
+        }
+        post_notif("UISceneWillEnterForegroundNotification", scene);
+    }
+
+    objc_release(session);
+    objc_release(opts);
 }
 
 extern "C-unwind" fn launch_finish_inner(ctx: *mut c_void) {
@@ -352,6 +501,7 @@ extern "C-unwind" fn launch_finish_inner(ctx: *mut c_void) {
         }
 
         let del: Id = msg0(app, "delegate");
+        let has_scene_cb = !del.is_null() && responds_to(del, "application:configurationForConnectingSceneSession:options:");
         if del.is_null() {
             log_msg("app", "no application delegate after launch setup");
         } else {
@@ -359,14 +509,16 @@ extern "C-unwind" fn launch_finish_inner(ctx: *mut c_void) {
             if responds_to(del, "application:willFinishLaunchingWithOptions:") {
                 let _: bool = msg2(del, "application:willFinishLaunchingWithOptions:", app, options);
             }
-            if responds_to(del, "application:configurationForConnectingSceneSession:options:") {
-                log_msg("app", "delegate supports scenes; launching without a scene session");
-            }
             if responds_to(del, "application:didFinishLaunchingWithOptions:") {
                 let _: bool = msg2(del, "application:didFinishLaunchingWithOptions:", app, options);
             } else if responds_to(del, "applicationDidFinishLaunching:") {
                 msg1::<Id, ()>(del, "applicationDidFinishLaunching:", app);
             }
+        }
+
+        let manifest: Id = msg1(info, "objectForKey:", nsstring("UIApplicationSceneManifest"));
+        if !manifest.is_null() || has_scene_cb {
+            connect_main_scene(app, del, manifest);
         }
 
         for w in nib_windows {
@@ -1552,7 +1704,8 @@ pub unsafe fn register_classes() {
         add_method(app, "pear_retainDelegate:", app_retain_del as Imp, "v@:@");
         add_method(app, "keyWindow", app_key_win as Imp, "@@:");
         add_method(app, "windows", app_windows as Imp, "@@:");
-        add_method(app, "connectedScenes", app_empty_set as Imp, "@@:");
+        add_method(app, "connectedScenes", app_connected_scenes as Imp, "@@:");
+        add_method(app, "openSessions", app_open_sessions as Imp, "@@:");
         add_method(app, "supportsMultipleScenes", app_false as Imp, "B@:");
         add_method(app, "applicationState", app_state as Imp, "q@:");
         add_method(app, "isIdleTimerDisabled", app_idle as Imp, "B@:");
@@ -1574,7 +1727,8 @@ pub unsafe fn register_classes() {
         add_method(app, "openURL:options:completionHandler:", app_open_url_opts as Imp, "v@:@@@?");
         add_method(app, "registerForRemoteNotifications", app_reg_remote as Imp, "v@:");
         add_method(app, "unregisterForRemoteNotifications", app_noop as Imp, "v@:");
-        add_method(app, "registerUserNotificationSettings:", app_noop_id as Imp, "v@:@");
+        add_method(app, "registerUserNotificationSettings:", app_reg_notif_settings as Imp, "v@:@");
+        add_method(app, "currentUserNotificationSettings", app_cur_notif_settings as Imp, "@@:");
         add_method(app, "beginBackgroundTaskWithExpirationHandler:", app_begin_bg as Imp, "Q@:@?");
         add_method(app, "beginBackgroundTaskWithName:expirationHandler:", app_begin_bg_name as Imp, "Q@:@@?");
         add_method(app, "endBackgroundTask:", app_noop_u as Imp, "v@:Q");
@@ -1582,6 +1736,7 @@ pub unsafe fn register_classes() {
         add_method(app, "sendAction:to:from:forEvent:", app_send_action as Imp, "B@::@@@");
         add_method(app, "beginReceivingRemoteControlEvents", app_noop as Imp, "v@:");
         add_method(app, "endReceivingRemoteControlEvents", app_noop as Imp, "v@:");
+        add_method(app, "backgroundRefreshStatus", app_bg_refresh_status as Imp, "q@:");
     }
 
     let k = cls("UIKey");
@@ -1737,4 +1892,163 @@ pub unsafe fn register_classes() {
         add_method(bdl, "loadNibNamed:owner:options:", bundle_load_nib as Imp, "@@:@@@");
     }
 
+    scene_imp::register();
+}
+
+mod scene_imp {
+    use super::*;
+
+    static WS_GEOM_KEY: u8 = 0;
+
+    unsafe extern "C" fn nil_ret(_s: Id, _c: Sel) -> Id { NIL }
+    unsafe extern "C" fn empty_set(_s: Id, _c: Sel) -> Id { msg0(cls("NSSet"), "set") }
+
+    unsafe extern "C" fn scene_del(s: Id, _c: Sel) -> Id { assoc_get(s, &SCENE_DEL_KEY) }
+    unsafe extern "C" fn scene_set_del(s: Id, _c: Sel, d: Id) { assoc_set(s, &SCENE_DEL_KEY, d); }
+    unsafe extern "C" fn scene_sess(s: Id, _c: Sel) -> Id { assoc_get(s, &SCENE_SESSION_KEY) }
+    unsafe extern "C" fn scene_act_state(_s: Id, _c: Sel) -> isize { 0 }
+    unsafe extern "C" fn scene_title(s: Id, _c: Sel) -> Id {
+        let t = assoc_get(s, &SCENE_TITLE_KEY);
+        if t.is_null() { nsstring("") } else { t }
+    }
+    unsafe extern "C" fn scene_set_title(s: Id, _c: Sel, v: Id) {
+        let copied = if v.is_null() { NIL } else { msg0(v, "copy") };
+        assoc_set(s, &SCENE_TITLE_KEY, copied);
+        if !copied.is_null() {
+            objc_release(copied);
+        }
+    }
+
+    unsafe extern "C" fn wscene_screen(_s: Id, _c: Sel) -> Id { msg0(cls("UIScreen"), "mainScreen") }
+    unsafe extern "C" fn wscene_windows(_s: Id, _c: Sel) -> Id { PearUIKitWindows() }
+    unsafe extern "C" fn wscene_key_window(_s: Id, _c: Sel) -> Id { PearUIKitKeyWindow() }
+    unsafe extern "C" fn wscene_coord_space(_s: Id, _c: Sel) -> Id {
+        msg0(msg0(cls("UIScreen"), "mainScreen"), "coordinateSpace")
+    }
+    unsafe extern "C" fn wscene_traits(_s: Id, _c: Sel) -> Id {
+        msg0(msg0(cls("UIScreen"), "mainScreen"), "traitCollection")
+    }
+    unsafe extern "C" fn wscene_effective_geometry(s: Id, _c: Sel) -> Id {
+        let g = assoc_get(s, &WS_GEOM_KEY);
+        if !g.is_null() {
+            return g;
+        }
+        let geom: Id = msg0(cls("UIWindowSceneGeometry"), "new");
+        assoc_set(s, &WS_GEOM_KEY, geom);
+        if !geom.is_null() {
+            objc_release(geom);
+        }
+        geom
+    }
+    unsafe extern "C" fn geom_system_frame(_s: Id, _c: Sel) -> CGRect {
+        msg0(msg0(cls("UIScreen"), "mainScreen"), "bounds")
+    }
+    unsafe extern "C" fn geom_resizing(_s: Id, _c: Sel) -> isize { 0 }
+
+    unsafe extern "C" fn sess_role(s: Id, _c: Sel) -> Id {
+        let r = assoc_get(s, &SESSION_ROLE_KEY);
+        if r.is_null() { nsstring("UIWindowSceneSessionRoleApplication") } else { r }
+    }
+    unsafe extern "C" fn sess_cfg(s: Id, _c: Sel) -> Id { assoc_get(s, &SESSION_CONFIG_KEY) }
+    unsafe extern "C" fn sess_scene(s: Id, _c: Sel) -> Id { pear_objc::assoc_get_weak(s, &SESSION_SCENE_KEY) }
+    unsafe extern "C" fn sess_pid(_s: Id, _c: Sel) -> Id { nsstring("pear-main-scene") }
+
+    unsafe extern "C" fn scfg_with_name_role(cls_obj: Id, _c: Sel, name: Id, role: Id) -> Id {
+        let obj: Id = msg2(msg0(cls_obj, "alloc"), "initWithName:sessionRole:", name, role);
+        objc_autorelease(obj)
+    }
+    unsafe extern "C" fn scfg_init_name_role(s: Id, _c: Sel, name: Id, role: Id) -> Id {
+        let o: Id = super0(s, "UISceneConfiguration", "init");
+        if !o.is_null() {
+            assoc_set(o, &SCFG_NAME_KEY, name);
+            let r = if role.is_null() { nsstring("UIWindowSceneSessionRoleApplication") } else { role };
+            assoc_set(o, &SCFG_ROLE_KEY, r);
+        }
+        o
+    }
+    unsafe extern "C" fn scfg_name(s: Id, _c: Sel) -> Id { assoc_get(s, &SCFG_NAME_KEY) }
+    unsafe extern "C" fn scfg_role(s: Id, _c: Sel) -> Id {
+        let r = assoc_get(s, &SCFG_ROLE_KEY);
+        if r.is_null() { nsstring("UIWindowSceneSessionRoleApplication") } else { r }
+    }
+    unsafe extern "C" fn scfg_get_cls(s: Id, key: &u8, default: Class) -> Class {
+        let v = assoc_get(s, key);
+        if v.is_null() { default } else { msg0(v, "pointerValue") }
+    }
+    unsafe extern "C" fn scfg_set_cls(s: Id, key: &u8, c: Class) {
+        let val = if c.is_null() {
+            NIL
+        } else {
+            msg1::<*const c_void, Id>(cls("NSValue"), "valueWithPointer:", c as *const c_void)
+        };
+        assoc_set(s, key, val);
+    }
+    unsafe extern "C" fn scfg_del_cls(s: Id, _c: Sel) -> Class { scfg_get_cls(s, &SCFG_DELEGATE_CLS_KEY, std::ptr::null_mut()) }
+    unsafe extern "C" fn scfg_set_del_cls(s: Id, _c: Sel, c: Class) { scfg_set_cls(s, &SCFG_DELEGATE_CLS_KEY, c); }
+    unsafe extern "C" fn scfg_scene_cls(s: Id, _c: Sel) -> Class { scfg_get_cls(s, &SCFG_SCENE_CLS_KEY, cls("UIWindowScene")) }
+    unsafe extern "C" fn scfg_set_scene_cls(s: Id, _c: Sel, c: Class) { scfg_set_cls(s, &SCFG_SCENE_CLS_KEY, c); }
+
+    pub unsafe fn register() {
+        let sc = cls("UIScene");
+        if !sc.is_null() {
+            add_method(sc, "delegate", scene_del as Imp, "@@:");
+            add_method(sc, "setDelegate:", scene_set_del as Imp, "v@:@");
+            add_method(sc, "session", scene_sess as Imp, "@@:");
+            add_method(sc, "activationState", scene_act_state as Imp, "q@:");
+            add_method(sc, "title", scene_title as Imp, "@@:");
+            add_method(sc, "setTitle:", scene_set_title as Imp, "v@:@");
+        }
+
+        let wsc = cls("UIWindowScene");
+        if !wsc.is_null() {
+            add_method(wsc, "screen", wscene_screen as Imp, "@@:");
+            add_method(wsc, "windows", wscene_windows as Imp, "@@:");
+            add_method(wsc, "keyWindow", wscene_key_window as Imp, "@@:");
+            add_method(wsc, "interfaceOrientation", app_orient as Imp, "q@:");
+            add_method(wsc, "coordinateSpace", wscene_coord_space as Imp, "@@:");
+            add_method(wsc, "traitCollection", wscene_traits as Imp, "@@:");
+            add_method(wsc, "effectiveGeometry", wscene_effective_geometry as Imp, "@@:");
+            add_method(wsc, "statusBarManager", nil_ret as Imp, "@@:");
+            add_method(wsc, "sizeRestrictions", nil_ret as Imp, "@@:");
+        }
+
+        let geom_cls = cls("UIWindowSceneGeometry");
+        if !geom_cls.is_null() {
+            add_method(geom_cls, "coordinateSpace", wscene_coord_space as Imp, "@@:");
+            add_method(geom_cls, "systemFrame", geom_system_frame as Imp, "{CGRect={CGPoint=dd}{CGSize=dd}}@:");
+            add_method(geom_cls, "interfaceOrientation", app_orient as Imp, "q@:");
+            add_method(geom_cls, "resizingRestrictions", geom_resizing as Imp, "q@:");
+        }
+
+        let sess = cls("UISceneSession");
+        if !sess.is_null() {
+            add_method(sess, "role", sess_role as Imp, "@@:");
+            add_method(sess, "configuration", sess_cfg as Imp, "@@:");
+            add_method(sess, "scene", sess_scene as Imp, "@@:");
+            add_method(sess, "persistentIdentifier", sess_pid as Imp, "@@:");
+        }
+
+        let opts = cls("UISceneConnectionOptions");
+        if !opts.is_null() {
+            add_method(opts, "URLContexts", empty_set as Imp, "@@:");
+            add_method(opts, "userActivities", empty_set as Imp, "@@:");
+            add_method(opts, "sourceApplication", nil_ret as Imp, "@@:");
+            add_method(opts, "handoffUserActivityType", nil_ret as Imp, "@@:");
+            add_method(opts, "notificationResponse", nil_ret as Imp, "@@:");
+            add_method(opts, "shortcutItem", nil_ret as Imp, "@@:");
+        }
+
+        let cfg = cls("UISceneConfiguration");
+        if !cfg.is_null() {
+            add_class_method(cfg, "configurationWithName:sessionRole:", scfg_with_name_role as Imp, "@@:@@");
+            add_method(cfg, "initWithName:sessionRole:", scfg_init_name_role as Imp, "@@:@@");
+            add_method(cfg, "name", scfg_name as Imp, "@@:");
+            add_method(cfg, "role", scfg_role as Imp, "@@:");
+            add_method(cfg, "delegateClass", scfg_del_cls as Imp, "#@:");
+            add_method(cfg, "setDelegateClass:", scfg_set_del_cls as Imp, "v@:#");
+            add_method(cfg, "sceneClass", scfg_scene_cls as Imp, "#@:");
+            add_method(cfg, "setSceneClass:", scfg_set_scene_cls as Imp, "v@:#");
+            add_method(cfg, "storyboard", nil_ret as Imp, "@@:");
+        }
+    }
 }

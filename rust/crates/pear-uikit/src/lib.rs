@@ -15,6 +15,8 @@ mod events;
 mod image_decode;
 mod globals;
 mod graphics;
+#[cfg(target_os = "macos")]
+mod metal_compat;
 pub mod objc_classes;
 mod view;
 
@@ -43,6 +45,8 @@ extern "C" fn pear_uikit_load() {
         #[cfg(target_os = "macos")]
         pear_host_macos::install();
         pear_uikit_register_classes();
+        #[cfg(target_os = "macos")]
+        metal_compat::install();
         PearMissingInstallForImage(pear_uikit_load as *const std::ffi::c_void);
     }
 }

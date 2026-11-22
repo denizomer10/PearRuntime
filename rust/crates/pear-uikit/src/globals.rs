@@ -27,6 +27,37 @@ pear_objc::nsstring_constant!(UIKeyboardIsLocalUserInfoKey = "UIKeyboardIsLocalU
 pear_objc::nsstring_constant!(UITextViewTextDidBeginEditingNotification = "UITextViewTextDidBeginEditingNotification");
 pear_objc::nsstring_constant!(UITextViewTextDidChangeNotification = "UITextViewTextDidChangeNotification");
 pear_objc::nsstring_constant!(UITextViewTextDidEndEditingNotification = "UITextViewTextDidEndEditingNotification");
+pear_objc::nsstring_constant!(UISceneWillDeactivateNotification = "UISceneWillDeactivateNotification");
+pear_objc::nsstring_constant!(UISceneDidDisconnectNotification = "UISceneDidDisconnectNotification");
+pear_objc::nsstring_constant!(UIWindowSceneSessionRoleApplication = "UIWindowSceneSessionRoleApplication");
+pear_objc::nsstring_constant!(UIPasteboardDetectionPatternCalendarEvent = "com.apple.uikit.pasteboard-detection-pattern.calendar-event");
+pear_objc::nsstring_constant!(UIPasteboardDetectionPatternEmailAddress = "com.apple.uikit.pasteboard-detection-pattern.email-address");
+pear_objc::nsstring_constant!(UIPasteboardDetectionPatternFlightNumber = "com.apple.uikit.pasteboard-detection-pattern.flight-number");
+pear_objc::nsstring_constant!(UIPasteboardDetectionPatternLink = "com.apple.uikit.pasteboard-detection-pattern.link");
+pear_objc::nsstring_constant!(UIPasteboardDetectionPatternMoneyAmount = "com.apple.uikit.pasteboard-detection-pattern.money-amount");
+pear_objc::nsstring_constant!(UIPasteboardDetectionPatternNumber = "com.apple.uikit.pasteboard-detection-pattern.number");
+pear_objc::nsstring_constant!(UIPasteboardDetectionPatternPhoneNumber = "com.apple.uikit.pasteboard-detection-pattern.phone-number");
+pear_objc::nsstring_constant!(UIPasteboardDetectionPatternPostalAddress = "com.apple.uikit.pasteboard-detection-pattern.postal-address");
+pear_objc::nsstring_constant!(UIPasteboardDetectionPatternProbableWebSearch = "com.apple.uikit.pasteboard-detection-pattern.probable-web-search");
+pear_objc::nsstring_constant!(UIPasteboardDetectionPatternProbableWebURL = "com.apple.uikit.pasteboard-detection-pattern.probable-web-url");
+pear_objc::nsstring_constant!(UIPasteboardDetectionPatternShipmentTrackingNumber = "com.apple.uikit.pasteboard-detection-pattern.shipment-tracking-number");
+
+extern "C" {
+    #[link_name = "OBJC_CLASS_$_NSObject"]
+    static NSObject_CLASS: c_void;
+    #[link_name = "OBJC_METACLASS_$_NSObject"]
+    static NSObject_META: c_void;
+}
+
+pear_objc::empty_class!(UITraitHorizontalSizeClass : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+pear_objc::empty_class!(UITraitVerticalSizeClass : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+pear_objc::empty_class!(UIViewLayoutRegion : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+pear_objc::empty_class!(UISceneSession : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+pear_objc::empty_class!(UISceneConnectionOptions : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+pear_objc::empty_class!(UISceneConfiguration : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+pear_objc::empty_class!(UIScreenMode : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+pear_objc::empty_class!(PearLayoutConstraint : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+pear_objc::empty_class!(UIWindowSceneGeometry : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
 
 extern "C" {
     fn PearHostLogMessage(area: *const c_char, message: *const c_char);
