@@ -3,7 +3,7 @@
 
 use pear_objc::{
     cls, is_kind_of, msg0, msg1, msg2, msg3, nsarray_count, nsarray_from_ids,
-    nsarray_object_at, nsdata_from_bytes, nsdata_to_vec, nsnumber_f64, nsstring, nsstring_to_string,
+    nsarray_object_at, nsdata_from_bytes, nsdata_to_vec, nsnumber_bool, nsnumber_f64, nsstring, nsstring_to_string,
     objc_getAssociatedObject, objc_release, objc_retain, objc_setAssociatedObject,
     replace_method as add_method, sel, CGPoint, CGRect, CGSize, Class, Id, Imp, Sel, UIEdgeInsets,
     NIL, OBJC_ASSOCIATION_RETAIN,
@@ -153,16 +153,21 @@ fn screen_info() -> PearHostScreenInfo {
 
 unsafe fn get_screen_state(scr: Id) -> ScreenState {
     let data = assoc_get(scr, &SCREEN_STATE_KEY);
+    let mut brightness = 1.0;
     if let Some(v) = nsdata_to_vec(data) {
         if v.len() == std::mem::size_of::<ScreenState>() {
-            return std::ptr::read_unaligned(v.as_ptr() as *const ScreenState);
+            let stored = std::ptr::read_unaligned(v.as_ptr() as *const ScreenState);
+            if stored.size.width > 0.0 && stored.size.height > 0.0 {
+                return stored;
+            }
+            brightness = stored.brightness;
         }
     }
     let info = screen_info();
     ScreenState {
         size: info.point_size,
         scale: if info.scale > 0.0 { info.scale } else { 1.0 },
-        brightness: 1.0,
+        brightness,
     }
 }
 
@@ -177,18 +182,16 @@ unsafe extern "C" fn screen_main(self_cls: Id, _cmd: Sel) -> Id {
         return cached as Id;
     }
     let scr: Id = msg0(self_cls, "new");
-    let info = screen_info();
-    set_screen_state(
-        scr,
-        ScreenState {
-            size: info.point_size,
-            scale: if info.scale > 0.0 { info.scale } else { 1.0 },
-            brightness: 1.0,
-        },
-    );
-    objc_retain(scr);
-    MAIN_SCREEN.store(scr as usize, Ordering::Release);
-    scr
+    // Guest initializers can ask for the singleton before the backend has
+    // initialized its display geometry. Keep reading the host until a window
+    // supplies its own size.
+    match MAIN_SCREEN.compare_exchange(0, scr as usize, Ordering::AcqRel, Ordering::Acquire) {
+        Ok(_) => scr,
+        Err(existing) => {
+            objc_release(scr);
+            existing as Id
+        }
+    }
 }
 
 unsafe extern "C" fn screen_screens(self_cls: Id, _cmd: Sel) -> Id {
@@ -223,6 +226,14 @@ unsafe extern "C" fn screen_scale(self_obj: Id, _cmd: Sel) -> f64 {
 
 unsafe extern "C" fn screen_max_fps(_self: Id, _cmd: Sel) -> isize {
     screen_info().max_fps
+}
+
+unsafe extern "C" fn screen_current_edr(_self: Id, _cmd: Sel) -> f64 {
+    pear_host::host().screen_edr_headroom().0
+}
+
+unsafe extern "C" fn screen_potential_edr(_self: Id, _cmd: Sel) -> f64 {
+    pear_host::host().screen_edr_headroom().1
 }
 
 unsafe extern "C" fn screen_brightness(self_obj: Id, _cmd: Sel) -> f64 {
@@ -533,6 +544,7 @@ unsafe extern "C" fn resp_can_perform(self_obj: Id, _cmd: Sel, action: Sel, _sen
 static TOUCH_STATE_KEY: u8 = 0;
 static TOUCH_VIEW_KEY: u8 = 0;
 static TOUCH_WINDOW_KEY: u8 = 0;
+static TOUCH_CANCELLED_BY_GESTURE_KEY: u8 = 0;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -749,12 +761,23 @@ pub extern "C" fn PearUIKitDeliverPointer(window: Id, phase: isize, point: CGPoi
         let ev: Id = msg2(ev_alloc, "initWithTouches:timestamp:", set, timestamp);
         let target_view: Id = msg0(touch, "view");
         if !target_view.is_null() {
-            match phase {
-                0 => msg2::<Id, Id, ()>(target_view, "touchesBegan:withEvent:", set, ev),
-                1 => msg2::<Id, Id, ()>(target_view, "touchesMoved:withEvent:", set, ev),
-                3 => msg2::<Id, Id, ()>(target_view, "touchesEnded:withEvent:", set, ev),
-                4 => msg2::<Id, Id, ()>(target_view, "touchesCancelled:withEvent:", set, ev),
-                _ => {}
+            let cancel = crate::view::deliver_pointer_gestures(target_view, touch, phase);
+            if assoc_get(touch, &TOUCH_CANCELLED_BY_GESTURE_KEY).is_null() {
+                if cancel {
+                    assoc_set(touch, &TOUCH_CANCELLED_BY_GESTURE_KEY, nsnumber_bool(true));
+                    let mut state = get_touch_state(touch);
+                    state.phase = 4;
+                    set_touch_state(touch, state);
+                    msg2::<Id, Id, ()>(target_view, "touchesCancelled:withEvent:", set, ev);
+                } else {
+                    match phase {
+                        0 => msg2::<Id, Id, ()>(target_view, "touchesBegan:withEvent:", set, ev),
+                        1 => msg2::<Id, Id, ()>(target_view, "touchesMoved:withEvent:", set, ev),
+                        3 => msg2::<Id, Id, ()>(target_view, "touchesEnded:withEvent:", set, ev),
+                        4 => msg2::<Id, Id, ()>(target_view, "touchesCancelled:withEvent:", set, ev),
+                        _ => {}
+                    }
+                }
             }
         }
         objc_release(ev);
@@ -1007,6 +1030,8 @@ pub unsafe fn register_classes() {
         add_method(scr, "scale", screen_scale as Imp, "d@:");
         add_method(scr, "nativeScale", screen_scale as Imp, "d@:");
         add_method(scr, "maximumFramesPerSecond", screen_max_fps as Imp, "q@:");
+        add_method(scr, "currentEDRHeadroom", screen_current_edr as Imp, "d@:");
+        add_method(scr, "potentialEDRHeadroom", screen_potential_edr as Imp, "d@:");
         add_method(scr, "brightness", screen_brightness as Imp, "d@:");
         add_method(scr, "setBrightness:", screen_set_brightness as Imp, "v@:d");
         add_method(scr, "displayGamut", trait_gamut as Imp, "q@:");

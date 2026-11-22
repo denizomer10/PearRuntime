@@ -49,6 +49,8 @@ pub static UIAccessibilityTraitAllowsDirectInteraction: u64 = 1 << 13;
 pub static UIAccessibilityTraitHeader: u64 = 1 << 16;
 #[no_mangle]
 pub static UIAccessibilityTraitTabBar: u64 = 1 << 19;
+#[no_mangle]
+pub static UIAccessibilityTraitToggleButton: u64 = 1 << 53;
 
 #[no_mangle]
 pub extern "C" fn UIAccessibilityIsVoiceOverRunning() -> bool {

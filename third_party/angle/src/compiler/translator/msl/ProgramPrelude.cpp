@@ -3105,6 +3105,8 @@ ProgramPrelude::FuncToEmitter ProgramPrelude::BuildFuncToEmitter()
                 UNREACHABLE();
         }
     });
+    putBuiltIn("shadow2DEXT", EMIT_METHOD(texture_2DShadow));
+    putBuiltIn("shadow2DProjEXT", EMIT_METHOD(textureProj_2DShadow));
     putBuiltIn("texture2D", [](ProgramPrelude &pp, const TFunction &func) {
         switch (func.getParamCount())
         {

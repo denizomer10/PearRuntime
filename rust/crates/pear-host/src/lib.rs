@@ -163,6 +163,9 @@ pub trait HostPlatform: Send + Sync {
 
     fn screen(&self) -> ScreenInfo;
 
+    /// Current and potential extended dynamic range headroom for the display.
+    fn screen_edr_headroom(&self) -> (f64, f64) { (1.0, 1.0) }
+
     /// A host window for the UIKit window `owner`, sized to `frame` (points).
     /// Its events are delivered for `owner`.
     fn create_window(&self, owner: GuestObject, frame: Rect) -> WindowHandle;
@@ -171,6 +174,9 @@ pub trait HostPlatform: Send + Sync {
     fn set_root_layer(&self, window: WindowHandle, layer: LayerRef);
 
     fn show_window(&self, window: WindowHandle, key: bool);
+
+    /// Updates the native window's content size and orientation aspect ratio.
+    fn orient_window(&self, _window: WindowHandle, _size: Size) {}
 
     /// The native surface behind `layer`, a guest layer a graphics API is
     /// asked to render into (EAGL's `renderbufferStorage:fromDrawable:`), or

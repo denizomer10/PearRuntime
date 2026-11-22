@@ -2224,6 +2224,8 @@ GenMetalTraverser::FuncToName GenMetalTraverser::BuildFuncToName()
     putAngle("texelFetch");
     putAngle("texelFetchOffset");
     putAngle("texture");
+    map[ImmutableString("shadow2DEXT")] = Name("texture", SymbolType::AngleInternal);
+    map[ImmutableString("shadow2DProjEXT")] = Name("textureProj", SymbolType::AngleInternal);
     putAngle("texture2D");
     putAngle("texture2DGradEXT");
     putAngle("texture2DLod");

@@ -3,6 +3,10 @@
 //! UIActivityViewController, UIDocumentPickerViewController, UIImagePickerController,
 //! UIDocument, UIPopoverController, and PearUIKitWindowDidResize.
 
+use crate::graphics::CGAffineTransform;
+
+mod pointer_gestures;
+pub(crate) use pointer_gestures::deliver_pointer_gestures;
 use pear_objc::{
     class_respondsToSelector, cls, is_kind_of, msg0, msg1, msg2, msg3, nsarray_count,
     nsarray_from_ids, nsarray_object_at, nsdata_from_bytes, nsdata_to_vec, nsnumber_bool,
@@ -31,12 +35,16 @@ struct BlockHeader {
 extern "C" {
     static _dispatch_main_q: c_void;
     fn dispatch_async_f(queue: *const c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
+    fn dispatch_after_f(when: u64, queue: *const c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
+    fn dispatch_time(when: u64, delta: i64) -> u64;
     fn _Block_copy(aBlock: *const c_void) -> *mut c_void;
     fn _Block_release(aBlock: *const c_void);
     fn object_getClass(obj: Id) -> Class;
     fn class_getSuperclass(cls: Class) -> Class;
     fn class_getName(cls: Class) -> *const c_char;
+    fn class_getInstanceMethod(cls: Class, name: Sel) -> *mut c_void;
     fn class_getMethodImplementation(cls: Class, name: Sel) -> Imp;
+    fn method_getImplementation(method: *mut c_void) -> Imp;
     fn PearMissingReport(kind: c_int, class_name: *const c_char, selector: *const c_char, caller: *const c_void);
     fn PearHostLogMessage(tag: *const c_char, message: *const c_char);
     fn PearUIKitRegisterWindow(window: Id);
@@ -148,6 +156,8 @@ fn rect_contains(r: CGRect, p: CGPoint) -> bool {
 static VIEW_LAYER_KEY: u8 = 0;
 static VIEW_SUPERVIEW_KEY: u8 = 0;
 static VIEW_SUBVIEWS_KEY: u8 = 0;
+static VIEW_NATIVE_SUBVIEWS_KEY: u8 = 0;
+static HAS_NATIVE_SUBVIEWS: AtomicBool = AtomicBool::new(false);
 static VIEW_WINDOW_KEY: u8 = 0;
 static VIEW_VC_KEY: u8 = 0;
 static VIEW_BG_KEY: u8 = 0;
@@ -194,6 +204,32 @@ unsafe fn set_view_flags(v: Id, f: ViewFlags) {
 
 unsafe fn view_layer(v: Id) -> Id {
     assoc_get(v, &VIEW_LAYER_KEY)
+}
+
+unsafe fn view_sync_native_subviews(view: Id) {
+    let native = assoc_get(view, &VIEW_NATIVE_SUBVIEWS_KEY);
+    if native.is_null() { return; }
+    let window = pear_objc::assoc_get_weak(view, &VIEW_WINDOW_KEY);
+    let frame: CGRect = msg2(view, "convertRect:toView:", msg0::<CGRect>(view, "bounds"), window);
+    let mut ancestor = view;
+    let mut hidden = false;
+    while !ancestor.is_null() {
+        hidden |= msg0::<bool>(ancestor, "isHidden");
+        ancestor = pear_objc::assoc_get_weak(ancestor, &VIEW_SUPERVIEW_KEY);
+    }
+    for i in 0..nsarray_count(native) {
+        let child = nsarray_object_at(native, i);
+        msg3::<Id, CGRect, bool, ()>(child, "pear_mountInHostWindow:frame:hidden:", win_native_ptr(window) as Id, frame, hidden);
+    }
+}
+
+unsafe fn view_sync_native_tree(view: Id) {
+    if !HAS_NATIVE_SUBVIEWS.load(Ordering::Relaxed) { return; }
+    view_sync_native_subviews(view);
+    let subs = assoc_get(view, &VIEW_SUBVIEWS_KEY);
+    for i in 0..nsarray_count(subs) {
+        view_sync_native_tree(nsarray_object_at(subs, i));
+    }
 }
 
 unsafe fn view_common_init(v: Id, frame: CGRect) {
@@ -360,9 +396,10 @@ unsafe extern "C" fn view_set_frame(self_obj: Id, _cmd: Sel, frame: CGRect) {
     msg1::<bool, ()>(ca, "setDisableActions:", true);
     msg1::<CGRect, ()>(l, "setFrame:", frame);
     msg0::<()>(ca, "commit");
-    if old_b.size != frame.size {
+    if old_b.size != msg0::<CGRect>(l, "bounds").size {
         view_bounds_size_changed(self_obj, old_b.size);
     }
+    view_sync_native_tree(self_obj);
 }
 
 unsafe extern "C" fn view_bounds(self_obj: Id, _cmd: Sel) -> CGRect {
@@ -388,6 +425,7 @@ unsafe extern "C" fn view_set_bounds(self_obj: Id, _cmd: Sel, bounds: CGRect) {
     if old_b.size != bounds.size {
         view_bounds_size_changed(self_obj, old_b.size);
     }
+    view_sync_native_tree(self_obj);
 }
 
 unsafe extern "C" fn view_center(self_obj: Id, _cmd: Sel) -> CGPoint {
@@ -409,6 +447,20 @@ unsafe extern "C" fn view_set_center(self_obj: Id, _cmd: Sel, pt: CGPoint) {
     msg1::<bool, ()>(ca, "setDisableActions:", true);
     msg1::<CGPoint, ()>(l, "setPosition:", pt);
     msg0::<()>(ca, "commit");
+    view_sync_native_tree(self_obj);
+}
+
+unsafe extern "C" fn view_transform(self_obj: Id, _cmd: Sel) -> CGAffineTransform {
+    msg0(view_layer(self_obj), "affineTransform")
+}
+
+unsafe extern "C" fn view_set_transform(self_obj: Id, _cmd: Sel, transform: CGAffineTransform) {
+    let ca = cls("CATransaction");
+    msg0::<()>(ca, "begin");
+    msg1::<bool, ()>(ca, "setDisableActions:", true);
+    msg1::<CGAffineTransform, ()>(view_layer(self_obj), "setAffineTransform:", transform);
+    msg0::<()>(ca, "commit");
+    view_sync_native_tree(self_obj);
 }
 
 unsafe extern "C" fn view_superview(self_obj: Id, _cmd: Sel) -> Id {
@@ -448,11 +500,21 @@ unsafe extern "C" fn view_set_window(self_obj: Id, _cmd: Sel, window: Id) {
         let sub = nsarray_object_at(subs, i);
         msg1::<Id, ()>(sub, "pear_setWindow:", window);
     }
+    view_sync_native_subviews(self_obj);
     msg0::<()>(self_obj, "didMoveToWindow");
 }
 
 unsafe extern "C" fn view_insert_subview(self_obj: Id, _cmd: Sel, view: Id, index: isize) {
     if view.is_null() || view == self_obj {
+        return;
+    }
+    if responds_to(view, "pear_mountInHostWindow:frame:hidden:") {
+        let native = mut_array_for_key(self_obj, &VIEW_NATIVE_SUBVIEWS_KEY);
+        if !msg1::<Id, bool>(native, "containsObject:", view) {
+            msg1::<Id, ()>(native, "addObject:", view);
+        }
+        HAS_NATIVE_SUBVIEWS.store(true, Ordering::Relaxed);
+        view_sync_native_subviews(self_obj);
         return;
     }
     objc_retain(view);
@@ -695,6 +757,7 @@ unsafe extern "C" fn view_set_hidden(self_obj: Id, _cmd: Sel, h: bool) {
     if !l.is_null() {
         msg1::<bool, ()>(l, "setHidden:", h);
     }
+    view_sync_native_tree(self_obj);
 }
 unsafe extern "C" fn view_is_opaque(self_obj: Id, _cmd: Sel) -> bool {
     let l = view_layer(self_obj);
@@ -786,6 +849,8 @@ static GR_STATE_KEY: u8 = 0;
 static GR_VIEW_KEY: u8 = 0;
 static GR_DELEGATE_KEY: u8 = 0;
 static GR_TARGETS_KEY: u8 = 0;
+static GR_ACTION_TARGET_KEY: u8 = 0;
+static GR_ACTION_SELECTOR_KEY: u8 = 0;
 static GR_NAME_KEY: u8 = 0;
 static GR_TOUCH_TYPES_KEY: u8 = 0;
 static GR_PRESS_TYPES_KEY: u8 = 0;
@@ -799,6 +864,7 @@ struct GestureState {
     delays_began: bool,
     delays_ended: bool,
     requires_exclusive_touch_type: bool,
+    reserved: [u8; 3],
     min_press_duration: f64,
     allowable_movement: f64,
     touches_required: usize,
@@ -815,6 +881,7 @@ impl Default for GestureState {
             delays_began: false,
             delays_ended: false,
             requires_exclusive_touch_type: true,
+            reserved: [0; 3],
             min_press_duration: 0.5,
             allowable_movement: 10.0,
             touches_required: 1,
@@ -824,7 +891,6 @@ impl Default for GestureState {
     }
 }
 
-#[repr(C)]
 #[derive(Copy, Clone, PartialEq, Eq)]
 struct GestureTarget {
     target: usize,
@@ -850,21 +916,25 @@ unsafe fn set_gr_state(g: Id, st: GestureState) {
 }
 
 unsafe fn get_gr_targets(g: Id) -> Vec<GestureTarget> {
-    let data = assoc_get(g, &GR_TARGETS_KEY);
-    let sz = std::mem::size_of::<GestureTarget>();
-    if let Some(bytes) = nsdata_to_vec(data) {
-        return bytes
-            .chunks_exact(sz)
-            .map(|chunk| std::ptr::read_unaligned(chunk.as_ptr() as *const GestureTarget))
-            .collect();
-    }
-    Vec::new()
+    let entries = assoc_get(g, &GR_TARGETS_KEY);
+    (0..nsarray_count(entries)).filter_map(|index| {
+        let entry = nsarray_object_at(entries, index);
+        let target = pear_objc::assoc_get_weak(entry, &GR_ACTION_TARGET_KEY);
+        let action = pear_objc::assoc_i64(entry, &GR_ACTION_SELECTOR_KEY, 0);
+        (!target.is_null()).then_some(GestureTarget { target: target as usize, action: action as usize })
+    }).collect()
 }
 
 unsafe fn set_gr_targets(g: Id, targets: &[GestureTarget]) {
-    let sz = std::mem::size_of::<GestureTarget>();
-    let bytes = std::slice::from_raw_parts(targets.as_ptr() as *const u8, targets.len() * sz);
-    assoc_set(g, &GR_TARGETS_KEY, nsdata_from_bytes(bytes));
+    let entries: Id = msg0(cls("NSMutableArray"), "array");
+    for target in targets {
+        let entry: Id = msg0(cls("NSObject"), "new");
+        pear_objc::assoc_set_weak(entry, &GR_ACTION_TARGET_KEY, target.target as Id);
+        pear_objc::assoc_set_i64(entry, &GR_ACTION_SELECTOR_KEY, target.action as i64);
+        msg1::<Id, ()>(entries, "addObject:", entry);
+        objc_release(entry);
+    }
+    assoc_set(g, &GR_TARGETS_KEY, entries);
 }
 
 unsafe extern "C" fn view_empty_arr(_self: Id, _cmd: Sel) -> Id {
@@ -1294,7 +1364,9 @@ static VC_PRESENTING_KEY: u8 = 0;
 static VC_NIB_NAME_KEY: u8 = 0;
 static VC_NIB_BUNDLE_KEY: u8 = 0;
 static VC_MODAL_STYLE_KEY: u8 = 0;
+static VC_MODAL_TRANSITION_KEY: u8 = 0;
 static VC_EDGES_KEY: u8 = 0;
+static VC_WANTS_FULL_SCREEN_KEY: u8 = 0;
 
 unsafe extern "C" fn vc_init(self_obj: Id, _cmd: Sel) -> Id {
     msg2(self_obj, "initWithNibName:bundle:", NIL, NIL)
@@ -1429,6 +1501,14 @@ unsafe extern "C" fn vc_modal_style(self_obj: Id, _cmd: Sel) -> isize {
 unsafe extern "C" fn vc_set_modal_style(self_obj: Id, _cmd: Sel, s: isize) {
     assoc_set(self_obj, &VC_MODAL_STYLE_KEY, nsnumber_i64(s as i64));
 }
+
+unsafe extern "C" fn vc_modal_transition(controller: Id, _cmd: Sel) -> isize {
+    pear_objc::assoc_i64(controller, &VC_MODAL_TRANSITION_KEY, 0) as isize
+}
+
+unsafe extern "C" fn vc_set_modal_transition(controller: Id, _cmd: Sel, style: isize) {
+    pear_objc::assoc_set_i64(controller, &VC_MODAL_TRANSITION_KEY, style as i64);
+}
 unsafe extern "C" fn vc_edges(self_obj: Id, _cmd: Sel) -> usize {
     let n = assoc_get(self_obj, &VC_EDGES_KEY);
     if n.is_null() {
@@ -1440,11 +1520,83 @@ unsafe extern "C" fn vc_edges(self_obj: Id, _cmd: Sel) -> usize {
 unsafe extern "C" fn vc_set_edges(self_obj: Id, _cmd: Sel, e: usize) {
     assoc_set(self_obj, &VC_EDGES_KEY, nsnumber_i64(e as i64));
 }
+
+unsafe extern "C" fn vc_wants_full_screen_layout(controller: Id, _cmd: Sel) -> bool {
+    pear_objc::assoc_bool(controller, &VC_WANTS_FULL_SCREEN_KEY, false)
+}
+
+unsafe extern "C" fn vc_set_wants_full_screen_layout(controller: Id, _cmd: Sel, full_screen: bool) {
+    // PearHost has no in-window status bar, so the root already uses the
+    // entire content area. Keep the legacy controller property readable.
+    pear_objc::assoc_set_bool(controller, &VC_WANTS_FULL_SCREEN_KEY, full_screen);
+}
 unsafe extern "C" fn vc_orientations(_self: Id, _cmd: Sel) -> usize {
     (1 << 3) | (1 << 4) // landscape
 }
 unsafe extern "C" fn vc_pref_orientation(_self: Id, _cmd: Sel) -> isize {
     4 // landscapeRight
+}
+unsafe extern "C" fn vc_interface_orientation(_self: Id, _cmd: Sel) -> isize {
+    let view: Id = msg0(_self, "viewIfLoaded");
+    let window: Id = msg0(view, "window");
+    window_orientation(if window.is_null() { PearUIKitKeyWindow() } else { window })
+}
+
+static VC_ORIENTATION_UPDATE_KEY: u8 = 0;
+
+unsafe extern "C" fn vc_needs_orientation_update(controller: Id, _cmd: Sel) {
+    if !assoc_get(controller, &VC_ORIENTATION_UPDATE_KEY).is_null() {
+        return;
+    }
+    assoc_set(controller, &VC_ORIENTATION_UPDATE_KEY, nsnumber_bool(true));
+    dispatch_async_f(&raw const _dispatch_main_q, objc_retain(controller) as *mut c_void, vc_update_orientation);
+}
+
+extern "C" fn vc_update_orientation(context: *mut c_void) {
+    unsafe {
+        let controller = context as Id;
+        assoc_set(controller, &VC_ORIENTATION_UPDATE_KEY, NIL);
+        let view: Id = msg0(controller, "viewIfLoaded");
+        let window: Id = msg0(view, "window");
+        if !window.is_null() {
+            let mut active: Id = msg0(window, "rootViewController");
+            while !active.is_null() {
+                let presented: Id = msg0(active, "presentedViewController");
+                if presented.is_null() || presented == active { break; }
+                active = presented;
+            }
+            if active == controller {
+                update_window_orientation(window, controller);
+            }
+        }
+        objc_release(controller);
+    }
+}
+
+unsafe fn update_window_orientation(window: Id, controller: Id) {
+    let application: Id = msg0(cls("UIApplication"), "sharedApplication");
+    let application_mask: usize = msg1(application, "supportedInterfaceOrientationsForWindow:", window);
+    let controller_mask: usize = msg0(controller, "supportedInterfaceOrientations");
+    let supported = application_mask & controller_mask;
+    let current = window_orientation(window);
+    if supported & (1 << current) != 0 {
+        return;
+    }
+    let preferred: isize = msg0(controller, "preferredInterfaceOrientationForPresentation");
+    let Some(orientation) = [preferred, 4, 3, 1, 2].into_iter().find(|&value| {
+        (1..=4).contains(&value) && supported & (1 << value) != 0
+    }) else { return };
+
+    let native = win_native_ptr(window);
+    if native.is_null() {
+        return;
+    }
+    pear_objc::assoc_set_i64(window, &WIN_ORIENTATION_KEY, orientation as i64);
+    if (orientation >= 3) != (current >= 3) {
+        let bounds: CGRect = msg0(window, "bounds");
+        let size = pear_host::Size { width: bounds.size.height, height: bounds.size.width };
+        pear_host::host().orient_window(pear_host::WindowHandle(native), size);
+    }
 }
 unsafe extern "C" fn vc_pref_edges(_self: Id, _cmd: Sel) -> usize {
     0
@@ -1542,6 +1694,17 @@ unsafe extern "C" fn win_init_coder(self_obj: Id, _cmd: Sel, coder: Id) -> Id {
 }
 
 static WIN_SCENE_KEY: u8 = 0;
+static WIN_ORIENTATION_KEY: u8 = 0;
+
+pub(crate) unsafe fn window_orientation(window: Id) -> isize {
+    if window.is_null() {
+        return 4;
+    }
+    let bounds: CGRect = msg0(window, "bounds");
+    let landscape = bounds.size.width >= bounds.size.height;
+    let stored = pear_objc::assoc_i64(window, &WIN_ORIENTATION_KEY, 0) as isize;
+    if stored != 0 && (stored >= 3) == landscape { stored } else if landscape { 4 } else { 1 }
+}
 
 unsafe extern "C" fn win_init_scene(self_obj: Id, _cmd: Sel, scene: Id) -> Id {
     let b: CGRect = msg0(msg0(cls("UIScreen"), "mainScreen"), "bounds");
@@ -1636,10 +1799,9 @@ unsafe fn win_ensure_native(w: Id) -> *mut c_void {
     let val: Id = msg1(cls("NSValue"), "valueWithPointer:", native);
     assoc_set(w, &WIN_NATIVE_KEY, val);
     let l: Id = msg0(w, "layer");
-    msg1::<CGPoint, ()>(l, "setAnchorPoint:", CGPoint::default());
-    msg1::<CGPoint, ()>(l, "setPosition:", CGPoint::default());
     if !native.is_null() {
         pear_host::host().set_root_layer(pear_host::WindowHandle(native), pear_host::LayerRef(l));
+        view_sync_native_tree(w);
     }
     native
 }
@@ -1679,9 +1841,7 @@ pub extern "C" fn PearUIKitWindowDidResize(window: Id, point_size: CGSize, scale
             size: point_size,
         };
         msg1::<CGRect, ()>(window, "setFrame:", r);
-        let l: Id = msg0(window, "layer");
-        msg1::<CGPoint, ()>(l, "setAnchorPoint:", CGPoint::default());
-        msg1::<CGPoint, ()>(l, "setPosition:", CGPoint::default());
+        msg0::<()>(window, "layoutIfNeeded");
         let w = point_size.width.round() as isize;
         let h = point_size.height.round() as isize;
         let tag = CString::new("host").unwrap();
@@ -2406,6 +2566,8 @@ pub unsafe fn register_classes() {
         add_method(v, "setBounds:", view_set_bounds as Imp, "v@:{CGRect={CGPoint=dd}{CGSize=dd}}");
         add_method(v, "center", view_center as Imp, "{CGPoint=dd}@:");
         add_method(v, "setCenter:", view_set_center as Imp, "v@:{CGPoint=dd}");
+        add_method(v, "transform", view_transform as Imp, "{CGAffineTransform=dddddd}@:");
+        add_method(v, "setTransform:", view_set_transform as Imp, "v@:{CGAffineTransform=dddddd}");
         add_method(v, "superview", view_superview as Imp, "@@:");
         add_method(v, "subviews", view_subviews as Imp, "@@:");
         add_method(v, "window", view_window as Imp, "@@:");
@@ -2539,8 +2701,12 @@ pub unsafe fn register_classes() {
         add_method(vc, "setTitle:", vc_set_title as Imp, "v@:@");
         add_method(vc, "modalPresentationStyle", vc_modal_style as Imp, "q@:");
         add_method(vc, "setModalPresentationStyle:", vc_set_modal_style as Imp, "v@:q");
+        add_method(vc, "modalTransitionStyle", vc_modal_transition as Imp, "q@:");
+        add_method(vc, "setModalTransitionStyle:", vc_set_modal_transition as Imp, "v@:q");
         add_method(vc, "edgesForExtendedLayout", vc_edges as Imp, "Q@:");
         add_method(vc, "setEdgesForExtendedLayout:", vc_set_edges as Imp, "v@:Q");
+        add_method(vc, "wantsFullScreenLayout", vc_wants_full_screen_layout as Imp, "B@:");
+        add_method(vc, "setWantsFullScreenLayout:", vc_set_wants_full_screen_layout as Imp, "v@:B");
         add_method(vc, "traitCollection", view_trait_collection as Imp, "@@:");
         add_method(vc, "parentViewController", view_nil as Imp, "@@:");
         add_method(vc, "childViewControllers", view_empty_arr as Imp, "@@:");
@@ -2551,6 +2717,8 @@ pub unsafe fn register_classes() {
         add_method(vc, "prefersPointerLocked", view_false as Imp, "B@:");
         add_method(vc, "shouldAutorotate", view_true as Imp, "B@:");
         add_method(vc, "supportedInterfaceOrientations", vc_orientations as Imp, "Q@:");
+        add_method(vc, "setNeedsUpdateOfSupportedInterfaceOrientations", vc_needs_orientation_update as Imp, "v@:");
+        add_method(vc, "interfaceOrientation", vc_interface_orientation as Imp, "q@:");
         add_method(vc, "preferredInterfaceOrientationForPresentation", vc_pref_orientation as Imp, "q@:");
         add_method(vc, "preferredScreenEdgesDeferringSystemGestures", vc_pref_edges as Imp, "Q@:");
         add_method(vc, "presentedViewController", vc_presented as Imp, "@@:");
@@ -2814,6 +2982,7 @@ pub unsafe fn register_classes() {
         add_method(tap, "setNumberOfTouchesRequired:", gr_set_touches_required as Imp, "v@:Q");
     }
 
+    pointer_gestures::register();
     layout_controls_imp::register_classes();
 }
 
@@ -2852,6 +3021,34 @@ mod layout_controls_imp {
     }
     unsafe extern "C" fn view_are_anim(_cls: Id, _c: Sel) -> bool {
         G_ANIMATIONS_ENABLED.load(Ordering::Acquire)
+    }
+    extern "C" fn finish_view_animation(context: *mut c_void) {
+        unsafe {
+            let block = &*context.cast::<BlockHeader>();
+            let finish: unsafe extern "C" fn(Id, bool) = std::mem::transmute(block.invoke);
+            finish(context as Id, true);
+            _Block_release(context);
+        }
+    }
+    unsafe extern "C" fn view_animate(
+        _cls: Id, _c: Sel, duration: f64, delay: f64, _options: usize, animations: Id, completion: Id,
+    ) {
+        // Update the view state immediately, as UIKit does for model values,
+        // and deliver the completion on the main queue when the transition ends.
+        invoke_void_block(animations);
+        if completion.is_null() { return; }
+        let copied = _Block_copy(completion as *const c_void);
+        let seconds = if G_ANIMATIONS_ENABLED.load(Ordering::Acquire) {
+            delay.max(0.0) + duration.max(0.0)
+        } else {
+            0.0
+        };
+        dispatch_after_f(
+            dispatch_time(0, (seconds * 1e9) as i64),
+            &_dispatch_main_q,
+            copied,
+            finish_view_animation,
+        );
     }
     unsafe extern "C" fn view_constraints(self_obj: Id, _c: Sel) -> Id {
         let arr = mut_array_for_key(self_obj, &VIEW_CONSTRAINTS_KEY);
@@ -2893,6 +3090,7 @@ mod layout_controls_imp {
     pub unsafe fn register_view(v: Class) {
         add_class_method(v, "setAnimationsEnabled:", view_set_anim as Imp, "v@:B");
         add_class_method(v, "areAnimationsEnabled", view_are_anim as Imp, "B@:");
+        add_class_method(v, "animateWithDuration:delay:options:animations:completion:", view_animate as Imp, "v@:ddQ@?@?");
         add_method(v, "constraints", view_constraints as Imp, "@@:");
         add_method(v, "addConstraint:", view_add_constraint as Imp, "v@:@");
         add_method(v, "addConstraints:", view_add_constraints as Imp, "v@:@");
@@ -2900,6 +3098,9 @@ mod layout_controls_imp {
         add_method(v, "removeConstraints:", view_remove_constraints as Imp, "v@:@");
         for s in ["setNeedsUpdateConstraints", "updateConstraintsIfNeeded", "updateConstraints"] {
             add_method(v, s, view_noop as Imp, "v@:");
+        }
+        for name in ANCHOR_SELECTORS {
+            add_method(v, name, view_anchor as Imp, "@@:");
         }
     }
 
@@ -2937,6 +3138,62 @@ mod layout_controls_imp {
     static ORIG_ACTIVATE: AtomicUsize = AtomicUsize::new(0);
     static ORIG_DEACTIVATE: AtomicUsize = AtomicUsize::new(0);
     static ORIG_VFL: AtomicUsize = AtomicUsize::new(0);
+    static ANCHOR_KEYS: [u8; 12] = [0; 12];
+    static ANCHOR_ITEM_KEY: u8 = 0;
+    static ANCHOR_ATTRIBUTE_KEY: u8 = 0;
+    const ANCHOR_SELECTORS: [&str; 12] = [
+        "leftAnchor", "rightAnchor", "topAnchor", "bottomAnchor", "leadingAnchor",
+        "trailingAnchor", "widthAnchor", "heightAnchor", "centerXAnchor", "centerYAnchor",
+        "lastBaselineAnchor", "firstBaselineAnchor",
+    ];
+
+    unsafe extern "C" fn view_anchor(item: Id, cmd: Sel) -> Id {
+        let Some(index) = ANCHOR_SELECTORS.iter().position(|name| sel(name) == cmd) else {
+            return NIL;
+        };
+        let key = &ANCHOR_KEYS[index];
+        let existing = assoc_get(item, key);
+        if !existing.is_null() { return existing; }
+        let anchor: Id = msg0(cls("PearLayoutAnchor"), "new");
+        pear_objc::assoc_set_weak(anchor, &ANCHOR_ITEM_KEY, item);
+        assoc_set(anchor, &ANCHOR_ATTRIBUTE_KEY, nsnumber_i64(index as i64 + 1));
+        assoc_set(item, key, anchor);
+        objc_release(anchor);
+        anchor
+    }
+
+    unsafe fn anchor_constraint(anchor: Id, cmd: Sel, other: Id, multiplier: f64, constant: f64) -> Id {
+        let relation = match CStr::from_ptr(sel_getName(cmd)).to_bytes() {
+            s if s.starts_with(b"constraintLessThanOrEqualTo") => -1,
+            s if s.starts_with(b"constraintGreaterThanOrEqualTo") => 1,
+            _ => 0,
+        };
+        let item = pear_objc::assoc_get_weak(anchor, &ANCHOR_ITEM_KEY);
+        let other_item = pear_objc::assoc_get_weak(other, &ANCHOR_ITEM_KEY);
+        let attribute = msg0(assoc_get(anchor, &ANCHOR_ATTRIBUTE_KEY), "integerValue");
+        let other_attribute = msg0(assoc_get(other, &ANCHOR_ATTRIBUTE_KEY), "integerValue");
+        let command = sel("constraintWithItem:attribute:relatedBy:toItem:attribute:multiplier:constant:");
+        nslc_with_item(cls("NSLayoutConstraint") as Id, command, item, attribute, relation,
+                       other_item, other_attribute, multiplier, constant)
+    }
+
+    unsafe extern "C" fn anchor_to(anchor: Id, cmd: Sel, other: Id) -> Id {
+        anchor_constraint(anchor, cmd, other, 1.0, 0.0)
+    }
+    unsafe extern "C" fn anchor_to_constant(anchor: Id, cmd: Sel, other: Id, constant: f64) -> Id {
+        anchor_constraint(anchor, cmd, other, 1.0, constant)
+    }
+    unsafe extern "C" fn anchor_constant(anchor: Id, cmd: Sel, constant: f64) -> Id {
+        anchor_constraint(anchor, cmd, NIL, 1.0, constant)
+    }
+    unsafe extern "C" fn anchor_to_multiplier(anchor: Id, cmd: Sel, other: Id, multiplier: f64) -> Id {
+        anchor_constraint(anchor, cmd, other, multiplier, 0.0)
+    }
+    unsafe extern "C" fn anchor_to_multiplier_constant(
+        anchor: Id, cmd: Sel, other: Id, multiplier: f64, constant: f64,
+    ) -> Id {
+        anchor_constraint(anchor, cmd, other, multiplier, constant)
+    }
 
     unsafe fn is_pear_layout_item(obj: Id) -> bool {
         !obj.is_null() && (is_kind_of(obj, "UIView") || is_kind_of(obj, "UILayoutGuide"))
@@ -2965,6 +3222,16 @@ mod layout_controls_imp {
         let mut d: ConstraintData = get_pod(s, &PLC_DATA_KEY);
         d.active = v;
         set_pod(s, &PLC_DATA_KEY, d);
+    }
+    unsafe extern "C" fn plc_auto_install(s: Id, cmd: Sel) {
+        // Preserve the app's PureLayout category, including batched installs.
+        let method = class_getInstanceMethod(cls("NSLayoutConstraint"), cmd);
+        if !method.is_null() {
+            let install: unsafe extern "C" fn(Id, Sel) = std::mem::transmute(method_getImplementation(method));
+            install(s, cmd);
+        } else {
+            plc_set_active(s, sel("setActive:"), true);
+        }
     }
     unsafe extern "C" fn plc_ident(s: Id, _c: Sel) -> Id { assoc_get(s, &PLC_IDENT_KEY) }
     unsafe extern "C" fn plc_set_ident(s: Id, _c: Sel, v: Id) { set_copied(s, &PLC_IDENT_KEY, v); }
@@ -3220,6 +3487,74 @@ mod layout_controls_imp {
         set_pod(s, &CTL_FLAGS_KEY, f);
     }
 
+    static BUTTON_IMAGES_KEY: u8 = 0;
+    static BUTTON_IMAGE_VIEW_KEY: u8 = 0;
+    static BUTTON_IMAGE_INSETS_KEY: u8 = 0;
+
+    unsafe extern "C" fn button_image(s: Id, _c: Sel, state: usize) -> Id {
+        let images = assoc_get(s, &BUTTON_IMAGES_KEY);
+        msg1(images, "objectForKey:", nsnumber_i64(state as i64))
+    }
+
+    unsafe extern "C" fn button_set_image(s: Id, _c: Sel, image: Id, state: usize) {
+        let mut images = assoc_get(s, &BUTTON_IMAGES_KEY);
+        if images.is_null() {
+            images = msg0(cls("NSMutableDictionary"), "dictionary");
+            assoc_set(s, &BUTTON_IMAGES_KEY, images);
+        }
+        let key = nsnumber_i64(state as i64);
+        if image.is_null() {
+            msg1::<Id, ()>(images, "removeObjectForKey:", key);
+        } else {
+            msg2::<Id, Id, ()>(images, "setObject:forKey:", image, key);
+        }
+        msg0::<()>(s, "setNeedsLayout");
+    }
+
+    unsafe extern "C" fn button_image_insets(s: Id, _c: Sel) -> UIEdgeInsets {
+        get_pod(s, &BUTTON_IMAGE_INSETS_KEY)
+    }
+
+    unsafe extern "C" fn button_set_image_insets(s: Id, _c: Sel, insets: UIEdgeInsets) {
+        set_pod(s, &BUTTON_IMAGE_INSETS_KEY, insets);
+        msg0::<()>(s, "setNeedsLayout");
+    }
+
+    unsafe extern "C" fn button_layout(s: Id, _c: Sel) {
+        let flags: ControlFlags = get_pod(s, &CTL_FLAGS_KEY);
+        let state = flags.highlighted as usize | ((!flags.enabled as usize) << 1) | ((flags.selected as usize) << 2);
+        let mut image = button_image(s, sel("imageForState:"), state);
+        if image.is_null() && state != 0 {
+            image = button_image(s, sel("imageForState:"), 0);
+        }
+        let mut view = assoc_get(s, &BUTTON_IMAGE_VIEW_KEY);
+        if view.is_null() {
+            if image.is_null() { return; }
+            view = msg0(cls("UIImageView"), "new");
+            msg1::<isize, ()>(view, "setContentMode:", 4); // center
+            assoc_set(s, &BUTTON_IMAGE_VIEW_KEY, view);
+            msg1::<Id, ()>(s, "addSubview:", view);
+            objc_release(view);
+        }
+        let mut frame: CGRect = msg0(s, "bounds");
+        let insets = button_image_insets(s, sel("imageEdgeInsets"));
+        frame.origin.x += insets.left;
+        frame.origin.y += insets.top;
+        frame.size.width = (frame.size.width - insets.left - insets.right).max(0.0);
+        frame.size.height = (frame.size.height - insets.top - insets.bottom).max(0.0);
+        msg1::<CGRect, ()>(view, "setFrame:", frame);
+        msg1::<Id, ()>(view, "setImage:", image);
+    }
+
+    unsafe extern "C" fn button_touch_ended(s: Id, _c: Sel, touches: Id, event: Id) {
+        let touch: Id = msg0(touches, "anyObject");
+        if !touch.is_null() && ctl_enabled(s, sel("isEnabled")) {
+            let point: CGPoint = msg1(touch, "locationInView:", s);
+            let inside: bool = msg2(s, "pointInside:withEvent:", point, event);
+            msg1::<usize, ()>(s, "sendActionsForControlEvents:", if inside { 1 << 6 } else { 1 << 7 });
+        }
+    }
+
     // ---- UITextField ----
     #[repr(C)]
     #[derive(Copy, Clone)]
@@ -3411,6 +3746,18 @@ mod layout_controls_imp {
     unsafe extern "C" fn tb_set_tint(s: Id, _c: Sel, v: Id) { assoc_set(s, &TB_TINT_KEY, v); }
 
     pub unsafe fn register_classes() {
+        let anchor = cls("PearLayoutAnchor");
+        for relation in ["EqualTo", "LessThanOrEqualTo", "GreaterThanOrEqualTo"] {
+            for (suffix, implementation, types) in [
+                ("Anchor:", anchor_to as Imp, "@@:@"),
+                ("Anchor:constant:", anchor_to_constant as Imp, "@@:@d"),
+                ("Constant:", anchor_constant as Imp, "@@:d"),
+                ("Anchor:multiplier:", anchor_to_multiplier as Imp, "@@:@d"),
+                ("Anchor:multiplier:constant:", anchor_to_multiplier_constant as Imp, "@@:@dd"),
+            ] {
+                add_method(anchor, &format!("constraint{relation}{suffix}"), implementation, types);
+            }
+        }
         let plc = cls("PearLayoutConstraint");
         if !plc.is_null() {
             add_method(plc, "firstItem", plc_first as Imp, "@@:");
@@ -3426,6 +3773,7 @@ mod layout_controls_imp {
             add_method(plc, "isActive", plc_active as Imp, "B@:");
             add_method(plc, "active", plc_active as Imp, "B@:");
             add_method(plc, "setActive:", plc_set_active as Imp, "v@:B");
+            add_method(plc, "autoInstall", plc_auto_install as Imp, "v@:");
             add_method(plc, "identifier", plc_ident as Imp, "@@:");
             add_method(plc, "setIdentifier:", plc_set_ident as Imp, "v@:@");
         }
@@ -3472,6 +3820,16 @@ mod layout_controls_imp {
             add_method(ctl, "setContentHorizontalAlignment:", ctl_set_h_align as Imp, "v@:q");
             add_method(ctl, "contentVerticalAlignment", ctl_v_align as Imp, "q@:");
             add_method(ctl, "setContentVerticalAlignment:", ctl_set_v_align as Imp, "v@:q");
+        }
+
+        let button = cls("UIButton");
+        if !button.is_null() {
+            add_method(button, "imageForState:", button_image as Imp, "@@:Q");
+            add_method(button, "setImage:forState:", button_set_image as Imp, "v@:@Q");
+            add_method(button, "imageEdgeInsets", button_image_insets as Imp, "{UIEdgeInsets=dddd}@:");
+            add_method(button, "setImageEdgeInsets:", button_set_image_insets as Imp, "v@:{UIEdgeInsets=dddd}");
+            add_method(button, "layoutSubviews", button_layout as Imp, "v@:");
+            add_method(button, "touchesEnded:withEvent:", button_touch_ended as Imp, "v@:@@");
         }
 
         let tf = cls("UITextField");

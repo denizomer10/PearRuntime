@@ -7,6 +7,9 @@ use pear_objc::{
 use std::ffi::{c_char, c_int, c_void, CString};
 use std::sync::OnceLock;
 
+#[cfg(target_os = "macos")]
+mod minecraft_context;
+
 const EGL_TRUE: i32 = 1;
 const EGL_NONE: i32 = 0x3038;
 const EGL_RED_SIZE: i32 = 0x3024;
@@ -365,7 +368,9 @@ unsafe extern "C" fn eagl_set_current_context(_self_cls: Id, _cmd: pear_objc::Se
         gl_symbols::CURRENT_API.with(|api| api.set(state.api));
         true
     } else {
-        bridge.make_current(std::ptr::null_mut(), std::ptr::null_mut());
+        if !bridge.make_current(std::ptr::null_mut(), std::ptr::null_mut()) {
+            return false;
+        }
         msg1::<Id, ()>(dict, "removeObjectForKey:", key);
         gl_symbols::CURRENT_API.with(|api| api.set(0));
         true
@@ -401,6 +406,8 @@ unsafe extern "C" fn eagl_renderbuffer_storage(
             // pixel size; presentRenderbuffer: copies it to the window.
             if ok {
                 drawable_storage::allocate(state, info.pixels);
+                #[cfg(target_os = "macos")]
+                minecraft_context::remember_drawable_context(self_obj);
             }
         }
         ok
@@ -445,11 +452,11 @@ mod drawable_storage {
     }
 
     /// PEAR_DEBUG_GL: drawable storage and presentation, first few times.
-    fn debug(message: &str) {
+    fn debug(message: impl FnOnce() -> String) {
         use std::sync::atomic::{AtomicU32, Ordering};
         static COUNT: AtomicU32 = AtomicU32::new(0);
         if std::env::var_os("PEAR_DEBUG_GL").is_some() && COUNT.fetch_add(1, Ordering::Relaxed) < 40 {
-            let m = CString::new(message).unwrap_or_default();
+            let m = CString::new(message()).unwrap_or_default();
             unsafe { PearHostLogMessage(c"gl".as_ptr(), m.as_ptr()) };
         }
     }
@@ -488,7 +495,7 @@ mod drawable_storage {
         if bound == 0 {
             bound = super::gl_symbols::BOUND_RENDERBUFFER.with(|b| b.get()) as i32;
         }
-        debug(&format!("renderbufferStorage:fromDrawable: GLES{} renderbuffer={bound} {w}x{h}", state.api));
+        debug(|| format!("renderbufferStorage:fromDrawable: GLES{} renderbuffer={bound} {w}x{h}", state.api));
         if bound == 0 || w <= 0 || h <= 0 {
             return;
         }
@@ -533,12 +540,11 @@ mod drawable_storage {
         }
         let (w, h) = (state.drawable_width, state.drawable_height);
         blit(0, 0, w, h, 0, 0, w, h, COLOR_BUFFER_BIT, NEAREST);
-        let error: Option<unsafe extern "C" fn() -> u32> = plain(c"glGetError");
-        debug(&format!(
-            "present renderbuffer={} via framebuffer={} {w}x{h} (game read={old_read} draw={old_draw}) glError=0x{:x}",
+        // glGetError clears the guest's GL error state. Leave it to the guest.
+        debug(|| format!(
+            "present renderbuffer={} via framebuffer={} {w}x{h} (game read={old_read} draw={old_draw})",
             state.drawable_renderbuffer,
             state.present_framebuffer,
-            error.map(|e| e()).unwrap_or(0)
         ));
         if scissor {
             enable(SCISSOR_TEST);
@@ -745,6 +751,10 @@ mod gl_symbols {
                 static OES: OnceLock<usize> = OnceLock::new();
                 let core = *CORE.get_or_init(|| angle(CStr::from_bytes_with_nul(concat!($core, "\0").as_bytes()).unwrap()) as usize);
                 let oes = *OES.get_or_init(|| angle(CStr::from_bytes_with_nul(concat!($core, "OES\0").as_bytes()).unwrap()) as usize);
+                #[cfg(target_os = "macos")]
+                if $core == "glBindFramebuffer" {
+                    super::minecraft_context::bind_for_framebuffer();
+                }
                 let f = if CURRENT_API.with(|api| api.get()) == 1 && oes != 0 { oes } else { core };
                 let f: F = std::mem::transmute::<usize, F>(f);
                 track($core, &[$($a as usize),*]);
@@ -778,6 +788,32 @@ mod gl_symbols {
         generate_mipmap = "glGenerateMipmap" (target: u32);
     }
 
+    /// iOS GLES 2 accepts RGBA storage with BGRA byte uploads. ANGLE's
+    /// BGRA extension requires the internal format to match the upload format.
+    unsafe extern "C" fn tex_image_2d(
+        target: u32, level: i32, internal_format: i32, width: i32, height: i32,
+        border: i32, format: u32, ty: u32, pixels: *const c_void,
+    ) {
+        const RGBA: i32 = 0x1908;
+        const BGRA: u32 = 0x80e1;
+        const UNSIGNED_BYTE: u32 = 0x1401;
+        type TexImage = unsafe extern "C" fn(u32, i32, i32, i32, i32, i32, u32, u32, *const c_void);
+        static PROC: OnceLock<usize> = OnceLock::new();
+        let proc = *PROC.get_or_init(|| angle(c"glTexImage2D") as usize);
+        if proc == 0 {
+            return;
+        }
+        let upload: TexImage = std::mem::transmute(proc);
+        let internal_format = if CURRENT_API.with(|api| api.get()) == 2
+            && internal_format == RGBA && format == BGRA && ty == UNSIGNED_BYTE
+        {
+            BGRA as i32
+        } else {
+            internal_format
+        };
+        upload(target, level, internal_format, width, height, border, format, ty, pixels);
+    }
+
     /// The GLES (and EAGL) implementation for `name`, or null.
     #[export_name = "_Z19PearANGLEGameSymbolPKc"]
     pub unsafe extern "C" fn game_symbol(name: *const c_char) -> *mut c_void {
@@ -790,6 +826,7 @@ mod gl_symbols {
             return alias;
         }
         match c.to_bytes() {
+            b"glTexImage2D" if !angle(c).is_null() => return tex_image_2d as *mut c_void,
             b"glResolveMultisampleFramebufferAPPLE" => return resolve_multisample_apple as *mut c_void,
             b"EAGLGetVersion" => return super::EAGLGetVersion as *mut c_void,
             b"EAGLGetProcAddress" => return super::EAGLGetProcAddress as *mut c_void,
@@ -816,4 +853,30 @@ pub unsafe extern "C" fn EAGLGetVersion(major: *mut u32, minor: *mut u32) {
 #[no_mangle]
 pub unsafe extern "C" fn EAGLGetProcAddress(name: *const c_char) -> *mut c_void {
     gl_symbols::game_symbol(name)
+}
+
+// This Minecraft build looks up the suffixed spelling directly with dlsym
+// when initializing its OpenGL ES 3 renderer.
+#[export_name = "glGetInteger64vXXXXX"]
+pub unsafe extern "C" fn minecraft_get_integer64v(pname: u32, value: *mut i64) {
+    type GetInteger = unsafe extern "C" fn(u32, *mut i64);
+    static PROC: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let proc = *PROC.get_or_init(|| gl_symbols::angle(c"glGetInteger64v") as usize);
+    if proc != 0 {
+        let get_integer: GetInteger = std::mem::transmute(proc);
+        get_integer(pname, value);
+    }
+}
+
+// Resolve the desktop spelling to the GLES extension on ANGLE's context.
+// The system OpenGL symbol would operate on an unrelated desktop context.
+#[no_mangle]
+pub unsafe extern "C" fn glPolygonMode(face: u32, mode: u32) {
+    type PolygonMode = unsafe extern "C" fn(u32, u32);
+    static PROC: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let proc = *PROC.get_or_init(|| gl_symbols::angle(c"glPolygonModeANGLE") as usize);
+    if proc != 0 {
+        let polygon_mode: PolygonMode = std::mem::transmute(proc);
+        polygon_mode(face, mode);
+    }
 }

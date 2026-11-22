@@ -29,6 +29,8 @@ pear_objc::nsstring_constant!(UITextViewTextDidChangeNotification = "UITextViewT
 pear_objc::nsstring_constant!(UITextViewTextDidEndEditingNotification = "UITextViewTextDidEndEditingNotification");
 pear_objc::nsstring_constant!(UISceneWillDeactivateNotification = "UISceneWillDeactivateNotification");
 pear_objc::nsstring_constant!(UISceneDidDisconnectNotification = "UISceneDidDisconnectNotification");
+pear_objc::nsstring_constant!(UIPointerLockStateDidChangeNotification = "UIPointerLockStateDidChangeNotification");
+pear_objc::nsstring_constant!(UIPointerLockStateSceneUserInfoKey = "UIPointerLockStateSceneUserInfoKey");
 pear_objc::nsstring_constant!(UIWindowSceneSessionRoleApplication = "UIWindowSceneSessionRoleApplication");
 pear_objc::nsstring_constant!(UIPasteboardDetectionPatternCalendarEvent = "com.apple.uikit.pasteboard-detection-pattern.calendar-event");
 pear_objc::nsstring_constant!(UIPasteboardDetectionPatternEmailAddress = "com.apple.uikit.pasteboard-detection-pattern.email-address");
@@ -57,6 +59,7 @@ pear_objc::empty_class!(UISceneConnectionOptions : &raw const super::NSObject_CL
 pear_objc::empty_class!(UISceneConfiguration : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
 pear_objc::empty_class!(UIScreenMode : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
 pear_objc::empty_class!(PearLayoutConstraint : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+pear_objc::empty_class!(PearLayoutAnchor : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
 pear_objc::empty_class!(UIWindowSceneGeometry : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
 
 extern "C" {

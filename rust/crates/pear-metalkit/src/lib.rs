@@ -1,9 +1,9 @@
 //! PearHost MetalKit.framework (`MTKView` as a `UIView` subclass) in Rust.
 
 use pear_objc::{
-    autorelease_pool, cls, msg0, msg1, msg2, msg4, msg_super0, msg_super1, object_getClass,
-    objc_getAssociatedObject, objc_release, objc_retain, objc_setAssociatedObject,
-    replace_method as add_method, responds_to, sel, super_dealloc, CGRect, CGSize, Class, Id,
+    autorelease_pool, class_getSuperclass, cls, msg0, msg1, msg2, msg4, object_getClass,
+    objc_getAssociatedObject, objc_msgSendSuper, objc_release, objc_retain, objc_setAssociatedObject,
+    replace_method as add_method, responds_to, sel, CGRect, CGSize, Class, Id, ObjcSuper,
     Imp, Sel, NIL, OBJC_ASSOCIATION_RETAIN,
 };
 
@@ -70,6 +70,26 @@ struct MtkState {
 }
 
 static MTK_STATE_KEY: u8 = 0;
+
+// Native MetalKit can be loaded by a macOS framework in the same process.
+// Register and dispatch through the class symbol our guest images bind to.
+fn mtk_class() -> Class {
+    abi::MTKView::CLASS.ptr() as Class
+}
+
+unsafe fn mtk_super0<R>(receiver: Id, selector: &str) -> R {
+    let mut call = ObjcSuper { receiver, super_class: class_getSuperclass(mtk_class()) };
+    let send: unsafe extern "C" fn(*mut ObjcSuper, Sel) -> R =
+        std::mem::transmute(objc_msgSendSuper as *const c_void);
+    send(&mut call, sel(selector))
+}
+
+unsafe fn mtk_super1<A, R>(receiver: Id, selector: &str, argument: A) -> R {
+    let mut call = ObjcSuper { receiver, super_class: class_getSuperclass(mtk_class()) };
+    let send: unsafe extern "C" fn(*mut ObjcSuper, Sel, A) -> R =
+        std::mem::transmute(objc_msgSendSuper as *const c_void);
+    send(&mut call, sel(selector), argument)
+}
 
 unsafe fn mtk_state(obj: Id) -> Option<&'static mut MtkState> {
     let val = objc_getAssociatedObject(obj, &MTK_STATE_KEY as *const u8 as *const c_void);
@@ -154,7 +174,7 @@ unsafe extern "C" fn mtk_init_with_frame(self_obj: Id, _cmd: Sel, frame: CGRect)
 }
 
 unsafe extern "C" fn mtk_init_with_frame_device(self_obj: Id, _cmd: Sel, frame: CGRect, device: Id) -> Id {
-    let obj: Id = msg_super1(self_obj, "MTKView", "initWithFrame:", frame);
+    let obj: Id = mtk_super1(self_obj, "initWithFrame:", frame);
     if !obj.is_null() {
         mtk_setup(obj, device);
     }
@@ -162,7 +182,7 @@ unsafe extern "C" fn mtk_init_with_frame_device(self_obj: Id, _cmd: Sel, frame: 
 }
 
 unsafe extern "C" fn mtk_init_with_coder(self_obj: Id, _cmd: Sel, coder: Id) -> Id {
-    let obj: Id = msg_super1(self_obj, "MTKView", "initWithCoder:", coder);
+    let obj: Id = mtk_super1(self_obj, "initWithCoder:", coder);
     if !obj.is_null() {
         mtk_setup(obj, NIL);
     }
@@ -188,7 +208,7 @@ unsafe extern "C" fn mtk_dealloc(self_obj: Id, _cmd: Sel) {
         }
         objc_setAssociatedObject(self_obj, &MTK_STATE_KEY as *const u8 as *const c_void, NIL, OBJC_ASSOCIATION_RETAIN);
     }
-    super_dealloc(self_obj, "MTKView");
+    mtk_super0::<()>(self_obj, "dealloc");
 }
 
 unsafe extern "C" fn mtk_device(self_obj: Id, _cmd: Sel) -> Id {
@@ -425,12 +445,12 @@ unsafe fn mtk_update_loop(self_obj: Id) {
 }
 
 unsafe extern "C" fn mtk_layout_subviews(self_obj: Id, _cmd: Sel) {
-    msg_super0::<()>(self_obj, "MTKView", "layoutSubviews");
+    mtk_super0::<()>(self_obj, "layoutSubviews");
     mtk_resize_drawable(self_obj);
 }
 
 unsafe extern "C" fn mtk_did_move_to_window(self_obj: Id, _cmd: Sel) {
-    msg_super0::<()>(self_obj, "MTKView", "didMoveToWindow");
+    mtk_super0::<()>(self_obj, "didMoveToWindow");
     mtk_resize_drawable(self_obj);
     mtk_update_loop(self_obj);
 }
@@ -438,17 +458,17 @@ unsafe extern "C" fn mtk_did_move_to_window(self_obj: Id, _cmd: Sel) {
 // The drawable follows the view's size (autoResizeDrawable), so every
 // geometry change resizes it, not only layout passes.
 unsafe extern "C" fn mtk_set_frame(self_obj: Id, _cmd: Sel, frame: CGRect) {
-    msg_super1::<CGRect, ()>(self_obj, "MTKView", "setFrame:", frame);
+    mtk_super1::<CGRect, ()>(self_obj, "setFrame:", frame);
     mtk_resize_drawable(self_obj);
 }
 
 unsafe extern "C" fn mtk_set_bounds(self_obj: Id, _cmd: Sel, bounds: CGRect) {
-    msg_super1::<CGRect, ()>(self_obj, "MTKView", "setBounds:", bounds);
+    mtk_super1::<CGRect, ()>(self_obj, "setBounds:", bounds);
     mtk_resize_drawable(self_obj);
 }
 
 unsafe extern "C" fn mtk_set_content_scale(self_obj: Id, _cmd: Sel, scale: f64) {
-    msg_super1::<f64, ()>(self_obj, "MTKView", "setContentScaleFactor:", scale);
+    mtk_super1::<f64, ()>(self_obj, "setContentScaleFactor:", scale);
     mtk_resize_drawable(self_obj);
 }
 
@@ -474,7 +494,7 @@ extern "C" fn mtk_deferred_draw(ctx: *mut c_void) {
 // With enableSetNeedsDisplay the view draws once per setNeedsDisplay, on the
 // next main-queue turn (coalesced), instead of from the display link.
 unsafe extern "C" fn mtk_set_needs_display(self_obj: Id, _cmd: Sel) {
-    msg_super0::<()>(self_obj, "MTKView", "setNeedsDisplay");
+    mtk_super0::<()>(self_obj, "setNeedsDisplay");
     let Some(s) = mtk_state(self_obj) else { return };
     if s.enable_set_needs_display && !s.needs_display {
         s.needs_display = true;
@@ -633,10 +653,7 @@ unsafe extern "C" fn mtk_current_render_pass_descriptor(self_obj: Id, _cmd: Sel)
 #[no_mangle]
 pub extern "C" fn pear_metalkit_register_classes() {
     unsafe {
-        let mtk_cls: Class = cls("MTKView");
-        if mtk_cls.is_null() {
-            return;
-        }
+        let mtk_cls = mtk_class();
         let meta: Class = object_getClass(mtk_cls);
         add_method(meta, "layerClass", mtk_layer_class as Imp, "#@:");
 

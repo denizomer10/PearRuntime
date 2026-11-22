@@ -42,6 +42,8 @@ rm -rf "$OUT_DIR/obj" # objects of earlier builds (Objective-C sources)
 # re-exported: apps see UIKit's own symbols plus UIFoundation's text system,
 # as on iOS (host/UIFoundation.tbd, tools/host-reexport-census.py).
 "${LD[@]}" -dynamiclib -Wl,-force_load,"$RUST_UIKIT_LIB" -o "$OUT_DIR/UIKit.framework/UIKit" \
+  "$ROOT/host/guest-dlopen.c" "$ROOT/host/cloudkit-unavailable.m" "$ROOT/host/client-credential.m" \
+  -fobjc-arc -Wno-deprecated-declarations \
   -install_name @rpath/UIKit.framework/UIKit -compatibility_version 1.0.0 -current_version 6209.0.0 \
   -framework Foundation -framework AppKit -Wl,-reexport_library,"$ROOT/host/UIFoundation.tbd" -framework QuartzCore -framework CoreGraphics -framework CoreText -framework ImageIO -framework IOKit -framework Security -lc++
 echo ">> $OUT_DIR/UIKit.framework/UIKit"

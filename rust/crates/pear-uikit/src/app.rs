@@ -12,6 +12,7 @@ use pear_objc::{
     sel, CGPoint, CGRect, CGSize, Class, Id, Imp, NSRange, Sel, UIEdgeInsets, NIL,
     OBJC_ASSOCIATION_RETAIN,
 };
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CString};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
@@ -217,7 +218,44 @@ unsafe extern "C" fn app_set_idle(s: Id, _c: Sel, d: bool) {
     assoc_set(s, &APP_IDLE_KEY, nsnumber_bool(d));
     pear_host::host().set_idle_timer_disabled(d);
 }
-unsafe extern "C" fn app_orient(_s: Id, _c: Sel) -> isize { 4 }
+unsafe extern "C" fn app_orient(_s: Id, _c: Sel) -> isize {
+    crate::view::window_orientation(PearUIKitKeyWindow())
+}
+
+thread_local! {
+    static QUERYING_ORIENTATION_DELEGATE: Cell<bool> = const { Cell::new(false) };
+}
+
+unsafe extern "C" fn app_supported_orientations(app: Id, _cmd: Sel, window: Id) -> usize {
+    let delegate: Id = msg0(app, "delegate");
+    let callback = "application:supportedInterfaceOrientationsForWindow:";
+    if let Some(mask) = QUERYING_ORIENTATION_DELEGATE.with(|querying| {
+        if querying.get() || !responds_to(delegate, callback) {
+            return None;
+        }
+        querying.set(true);
+        let mask = msg2(delegate, callback, app, window);
+        querying.set(false);
+        Some(mask)
+    }) {
+        return mask;
+    }
+    // A delegate may query UIApplication for the bundle's permitted
+    // orientations while computing its own mask.
+    let info: Id = msg0(msg0(cls("NSBundle"), "mainBundle"), "infoDictionary");
+    let orientations: Id = msg1(info, "objectForKey:", nsstring("UISupportedInterfaceOrientations"));
+    let mut mask = 0;
+    for index in 0..nsarray_count(orientations) {
+        mask |= match nsstring_to_string(nsarray_object_at(orientations, index)).as_deref() {
+            Some("UIInterfaceOrientationPortrait") => 1 << 1,
+            Some("UIInterfaceOrientationPortraitUpsideDown") => 1 << 2,
+            Some("UIInterfaceOrientationLandscapeLeft") => 1 << 3,
+            Some("UIInterfaceOrientationLandscapeRight") => 1 << 4,
+            _ => 0,
+        };
+    }
+    if mask == 0 { (1 << 3) | (1 << 4) } else { mask }
+}
 unsafe extern "C" fn app_bg_refresh_status(_self_obj: Id, _cmd: Sel) -> isize { 2 }
 unsafe extern "C" fn app_noop(_s: Id, _c: Sel) {}
 unsafe extern "C" fn app_noop_b(_s: Id, _c: Sel, _b: bool) {}
@@ -728,6 +766,7 @@ static TV_DEL_KEY: u8 = 0;
 static TV_FLAGS_KEY: u8 = 0;
 static TV_COLOR_KEY: u8 = 0;
 static TV_FONT_KEY: u8 = 0;
+static TV_INPUT_ACCESSORY_KEY: u8 = 0;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -879,6 +918,45 @@ unsafe extern "C" fn tv_secure(s: Id, _c: Sel) -> bool { tv_flags(s).secure }
 unsafe extern "C" fn tv_set_secure(s: Id, _c: Sel, b: bool) { let mut f = tv_flags(s); f.secure = b; set_tv_flags(s, f); }
 
 unsafe extern "C" fn tv_can_become_first(s: Id, _c: Sel) -> bool { tv_flags(s).editable }
+
+unsafe extern "C" fn tv_input_accessory(view: Id, _cmd: Sel) -> Id {
+    assoc_get(view, &TV_INPUT_ACCESSORY_KEY)
+}
+
+unsafe fn tv_update_input_accessory(view: Id, show: bool) {
+    let accessory = tv_input_accessory(view, sel("inputAccessoryView"));
+    let window: Id = msg0(view, "window");
+    if accessory.is_null() || window.is_null() {
+        return;
+    }
+    let parent: Id = msg0(accessory, "superview");
+    if !show {
+        if parent == window {
+            msg0::<()>(accessory, "removeFromSuperview");
+        }
+        return;
+    }
+    let bounds: CGRect = msg0(window, "bounds");
+    let frame: CGRect = msg0(accessory, "frame");
+    let height = frame.size.height.min(bounds.size.height);
+    msg1::<CGRect, ()>(accessory, "setFrame:", CGRect {
+        origin: CGPoint { x: 0.0, y: bounds.size.height - height },
+        size: CGSize { width: bounds.size.width, height },
+    });
+    msg1::<usize, ()>(accessory, "setAutoresizingMask:", (1 << 1) | (1 << 3));
+    msg1::<Id, ()>(window, "addSubview:", accessory);
+}
+
+unsafe extern "C" fn tv_set_input_accessory(view: Id, _cmd: Sel, accessory: Id) {
+    if tv_input_accessory(view, sel("inputAccessoryView")) == accessory || accessory == view {
+        return;
+    }
+    let editing = tv_flags(view).editing;
+    if editing { tv_update_input_accessory(view, false); }
+    assoc_set(view, &TV_INPUT_ACCESSORY_KEY, accessory);
+    if editing { tv_update_input_accessory(view, true); }
+}
+
 unsafe extern "C" fn tv_become_first(s: Id, _c: Sel) -> bool {
     if tv_flags(s).editing { return true; }
     let d = pear_objc::assoc_get_weak(s, &TV_DEL_KEY);
@@ -891,6 +969,7 @@ unsafe extern "C" fn tv_become_first(s: Id, _c: Sel) -> bool {
     let mut f = tv_flags(s);
     f.editing = true;
     set_tv_flags(s, f);
+    tv_update_input_accessory(s, true);
     post_keyboard(true);
     if !d.is_null() && responds_to(d, "textViewDidBeginEditing:") {
         msg1::<Id, ()>(d, "textViewDidBeginEditing:", s);
@@ -911,6 +990,7 @@ unsafe extern "C" fn tv_resign_first(s: Id, _c: Sel) -> bool {
     let mut f = tv_flags(s);
     f.editing = false;
     set_tv_flags(s, f);
+    tv_update_input_accessory(s, false);
     if !d.is_null() && responds_to(d, "textViewDidEndEditing:") {
         msg1::<Id, ()>(d, "textViewDidEndEditing:", s);
     }
@@ -1711,6 +1791,7 @@ pub unsafe fn register_classes() {
         add_method(app, "isIdleTimerDisabled", app_idle as Imp, "B@:");
         add_method(app, "setIdleTimerDisabled:", app_set_idle as Imp, "v@:B");
         add_method(app, "statusBarOrientation", app_orient as Imp, "q@:");
+        add_method(app, "supportedInterfaceOrientationsForWindow:", app_supported_orientations as Imp, "Q@:@");
         add_method(app, "isStatusBarHidden", app_true as Imp, "B@:");
         add_method(app, "setStatusBarHidden:", app_noop_b as Imp, "v@:B");
         add_method(app, "setStatusBarHidden:withAnimation:", app_noop_bi as Imp, "v@:Bq");
@@ -1776,6 +1857,8 @@ pub unsafe fn register_classes() {
         add_method(tv, "initWithCoder:", tv_init_coder as Imp, "@@:@");
         add_method(tv, "delegate", tv_del as Imp, "@@:");
         add_method(tv, "setDelegate:", tv_set_del as Imp, "v@:@");
+        add_method(tv, "inputAccessoryView", tv_input_accessory as Imp, "@@:");
+        add_method(tv, "setInputAccessoryView:", tv_set_input_accessory as Imp, "v@:@");
         add_method(tv, "text", tv_text as Imp, "@@:");
         add_method(tv, "setText:", tv_set_text as Imp, "v@:@");
         add_method(tv, "attributedText", tv_attr_text as Imp, "@@:");

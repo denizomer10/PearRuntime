@@ -1,4 +1,5 @@
-//! UIColor, UIImage, UIImagePNGRepresentation/JPEGRepresentation, UIGraphics*, UIFont, UILabel, UIProgressView.
+//! UIColor, UIImage, UIImageView, UIImagePNGRepresentation/JPEGRepresentation,
+//! UIGraphics*, UIFont, UILabel, UIProgressView.
 
 use pear_objc::{
     assoc_get, assoc_i64, assoc_set, assoc_set_i64, autoreleased, class_respondsToSelector, cls,
@@ -537,6 +538,62 @@ unsafe extern "C" fn image_draw_in_rect(self_obj: Id, _cmd: Sel, rect: CGRect) {
         st.cg_image,
     );
     CGContextRestoreGState(ctx);
+}
+
+static IMAGE_VIEW_IMAGE_KEY: u8 = 0;
+static IMAGE_VIEW_MODE_KEY: u8 = 0;
+
+unsafe extern "C" fn image_view_init_frame(view: Id, _cmd: Sel, frame: CGRect) -> Id {
+    let view: Id = msg_super1(view, "UIImageView", "initWithFrame:", frame);
+    msg1::<bool, ()>(view, "setUserInteractionEnabled:", false);
+    view
+}
+
+unsafe extern "C" fn image_view_init_image(view: Id, _cmd: Sel, image: Id) -> Id {
+    let size = if image.is_null() { CGSize::default() } else { msg0(image, "size") };
+    let view: Id = msg1(view, "initWithFrame:", CGRect { origin: CGPoint::default(), size });
+    msg1::<Id, ()>(view, "setImage:", image);
+    view
+}
+
+unsafe extern "C" fn image_view_image(view: Id, _cmd: Sel) -> Id {
+    assoc_get(view, &IMAGE_VIEW_IMAGE_KEY)
+}
+
+unsafe extern "C" fn image_view_set_image(view: Id, _cmd: Sel, image: Id) {
+    assoc_set(view, &IMAGE_VIEW_IMAGE_KEY, image);
+    let layer: Id = msg0(view, "layer");
+    let cg_image: Id = if image.is_null() { NIL } else { msg0(image, "CGImage") };
+    msg1::<Id, ()>(layer, "setContents:", cg_image);
+}
+
+unsafe extern "C" fn image_view_content_size(view: Id, _cmd: Sel) -> CGSize {
+    let image = image_view_image(view, sel("image"));
+    if image.is_null() { CGSize::default() } else { msg0(image, "size") }
+}
+
+unsafe extern "C" fn image_view_mode(view: Id, _cmd: Sel) -> isize {
+    assoc_i64(view, &IMAGE_VIEW_MODE_KEY, 0) as isize
+}
+
+unsafe extern "C" fn image_view_set_mode(view: Id, _cmd: Sel, mode: isize) {
+    assoc_set_i64(view, &IMAGE_VIEW_MODE_KEY, mode as i64);
+    let gravity = match mode {
+        1 => "resizeAspect",
+        2 => "resizeAspectFill",
+        4 => "center",
+        5 => "top",
+        6 => "bottom",
+        7 => "left",
+        8 => "right",
+        9 => "topLeft",
+        10 => "topRight",
+        11 => "bottomLeft",
+        12 => "bottomRight",
+        _ => "resize",
+    };
+    let layer: Id = msg0(view, "layer");
+    msg1::<Id, ()>(layer, "setContentsGravity:", nsstring(gravity));
 }
 
 unsafe fn encode_image(image: Id, uti: &str, props: *mut c_void) -> Id {
@@ -1653,6 +1710,17 @@ pub unsafe fn register() {
         add_method(img, "imageWithRenderingMode:", image_with_rendering_mode as Imp, "@@:q");
         add_method(img, "resizableImageWithCapInsets:", image_resizable as Imp, "@@:{UIEdgeInsets=dddd}");
         add_method(img, "drawInRect:", image_draw_in_rect as Imp, "v@:{CGRect={CGPoint=dd}{CGSize=dd}}");
+    }
+
+    let image_view = cls("UIImageView");
+    if !image_view.is_null() {
+        add_method(image_view, "initWithFrame:", image_view_init_frame as Imp, "@@:{CGRect={CGPoint=dd}{CGSize=dd}}");
+        add_method(image_view, "initWithImage:", image_view_init_image as Imp, "@@:@");
+        add_method(image_view, "image", image_view_image as Imp, "@@:");
+        add_method(image_view, "setImage:", image_view_set_image as Imp, "v@:@");
+        add_method(image_view, "intrinsicContentSize", image_view_content_size as Imp, "{CGSize=dd}@:");
+        add_method(image_view, "contentMode", image_view_mode as Imp, "q@:");
+        add_method(image_view, "setContentMode:", image_view_set_mode as Imp, "v@:q");
     }
 
     let fnt = uifont_cls();

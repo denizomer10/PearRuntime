@@ -1013,6 +1013,8 @@ void DisplayMtl::initializeExtensions() const
 
     mNativeExtensions.texture3DOES = true;
 
+    // Expose Metal's depth comparison sampling to GLSL ES 1.00 shaders.
+    mNativeExtensions.shadowSamplersEXT = true;
     mNativeExtensions.textureShadowLodEXT = true;
 
     if ([mMetalDevice areProgrammableSamplePositionsSupported])

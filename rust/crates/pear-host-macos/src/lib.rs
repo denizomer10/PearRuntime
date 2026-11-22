@@ -12,18 +12,25 @@
 
 #![allow(non_snake_case, clippy::missing_safety_doc)]
 
+mod guest_framework_path;
+
+extern "C" {
+    fn PearInstallUnavailableCloudKit();
+    fn PearInstallClientCredentialCompatibility();
+}
+
 use pear_host::{
     events, DocumentRequest, EditCommand, GuestObject, GuestSelector, HostPlatform, KeyEvent, LayerRef, Lifecycle,
     NativeSurface, PasteboardItem, Rect, ScreenInfo, Size, SurfaceInfo, TouchPhase, WindowHandle, UTI_FILE_URL, UTI_TEXT, UTI_URL,
 };
 use pear_objc::{
-    cls, is_kind_of, msg0, msg1, msg2, msg3, msg4, nsarray_count, nsarray_from_ids, nsarray_object_at,
+    class_respondsToSelector, cls, is_kind_of, msg0, msg1, msg2, msg3, msg4, nsarray_count, nsarray_from_ids, nsarray_object_at,
     nsdata_from_bytes, nsdata_to_vec, nsnumber_i64, nsstring, nsstring_to_string,
     objc_getAssociatedObject, objc_release, objc_setAssociatedObject, replace_method as add_method,
     responds_to, sel, CGPoint, CGRect, CGSize, Class, Id, Imp, Sel, NIL, OBJC_ASSOCIATION_RETAIN,
 };
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 /// UIScreen facts as the C ABI (`PearBackendScreenInfo`) returns them.
@@ -49,6 +56,7 @@ extern "C" {
     fn objc_allocateClassPair(superclass: Class, name: *const c_char, extraBytes: usize) -> Class;
     fn objc_registerClassPair(cls: Class);
     fn class_replaceMethod(cls: Class, name: Sel, imp: Imp, types: *const c_char) -> Imp;
+    fn class_getMethodImplementation(cls: Class, name: Sel) -> Imp;
     fn object_getClass(obj: Id) -> Class;
     fn class_getName(cls: Class) -> *const c_char;
     fn sel_getName(sel: Sel) -> *const c_char;
@@ -114,6 +122,7 @@ pub fn install() {
 
 static G_NATIVE_WINDOWS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 static G_PRIMARY_VIEW: AtomicUsize = AtomicUsize::new(0);
+static FIXED_GAME_SCREEN: AtomicBool = AtomicBool::new(false);
 static G_SCREEN: Mutex<PearHostScreenInfo> = Mutex::new(PearHostScreenInfo {
     point_size: CGSize { width: 0.0, height: 0.0 },
     scale: 2.0,
@@ -149,6 +158,16 @@ unsafe fn default_point_size() -> CGSize {
     CGSize { width, height }
 }
 
+const DR_DRIVING_SCREEN: CGSize = CGSize { width: 460.0, height: 320.0 };
+
+fn fitted_scale(size: CGSize, available: CGSize) -> f64 {
+    (available.width / size.width).min(available.height / size.height)
+}
+
+fn fixed_game_screen() -> bool {
+    FIXED_GAME_SCREEN.load(Ordering::Relaxed)
+}
+
 #[no_mangle]
 pub extern "C" fn PearBackendInitialize() {
     unsafe {
@@ -158,13 +177,20 @@ pub extern "C" fn PearBackendInitialize() {
         let main_scr: Id = msg0(cls("NSScreen"), "mainScreen");
         let scale: f64 = if main_scr.is_null() { 2.0 } else { msg0(main_scr, "backingScaleFactor") };
         let max_fps: isize = if main_scr.is_null() { 60 } else { msg0(main_scr, "maximumFramesPerSecond") };
+        let bundle: Id = msg0(cls("NSBundle"), "mainBundle");
+        let identifier: Id = msg0(bundle, "bundleIdentifier");
+        let fixed_screen = nsstring_to_string(identifier).as_deref() == Some("com.ansangha.drdriving");
+        FIXED_GAME_SCREEN.store(fixed_screen, Ordering::Relaxed);
         let info = PearHostScreenInfo {
-            point_size: default_point_size(),
-            scale: if scale > 0.0 { scale } else { 2.0 },
+            point_size: if fixed_screen { DR_DRIVING_SCREEN } else { default_point_size() },
+            scale: if fixed_screen || scale <= 0.0 { 2.0 } else { scale },
             max_fps: if max_fps > 0 { max_fps } else { 60 },
         };
         *G_SCREEN.lock().unwrap() = info;
         PearBackendInstallQuartzCoreCompat();
+        install_webkit_compat();
+        PearInstallUnavailableCloudKit();
+        PearInstallClientCredentialCompatibility();
 
         let obs: Id = msg0(cls("PearHostAppObserver"), "new");
         let nc: Id = msg0(cls("NSNotificationCenter"), "defaultCenter");
@@ -190,13 +216,22 @@ pub extern "C" fn PearBackendScreenInfo() -> PearHostScreenInfo {
 }
 
 static HV_UIWIN_KEY: u8 = 0;
+static HV_GUEST_LAYER_KEY: u8 = 0;
+static HV_PRESENTATION_LAYER_KEY: u8 = 0;
+static HV_NATIVE_OVERLAY_KEY: u8 = 0;
 static WD_UIWIN_KEY: u8 = 0;
 static W_DEL_KEY: u8 = 0;
 
 #[no_mangle]
 pub extern "C" fn PearBackendCreateWindow(ui_window: Id, frame: CGRect) -> *mut c_void {
     unsafe {
-        let content = CGRect { origin: CGPoint::default(), size: frame.size };
+        let size = if fixed_game_screen() {
+            let scale = fitted_scale(frame.size, default_point_size());
+            CGSize { width: frame.size.width * scale, height: frame.size.height * scale }
+        } else {
+            frame.size
+        };
+        let content = CGRect { origin: CGPoint::default(), size };
         let w: Id = msg4(
             msg0(cls("NSWindow"), "alloc"),
             "initWithContentRect:styleMask:backing:defer:",
@@ -238,6 +273,35 @@ pub extern "C" fn PearBackendCreateWindow(ui_window: Id, frame: CGRect) -> *mut 
     }
 }
 
+#[repr(C)]
+struct LayerAffineTransform {
+    a: f64, b: f64, c: f64, d: f64, tx: f64, ty: f64,
+}
+
+unsafe fn fit_guest_presentation(view: Id, presentation: Id, available: CGRect) {
+    let logical: CGRect = msg0(presentation, "bounds");
+    let scale = fitted_scale(logical.size, available.size);
+    let size = CGSize { width: logical.size.width * scale, height: logical.size.height * scale };
+    let center = CGPoint {
+        x: available.origin.x + available.size.width / 2.0,
+        y: available.origin.y + available.size.height / 2.0,
+    };
+    let ca = cls("CATransaction");
+    msg0::<()>(ca, "begin");
+    msg1::<bool, ()>(ca, "setDisableActions:", true);
+    msg1::<CGPoint, ()>(presentation, "setPosition:", center);
+    msg1::<LayerAffineTransform, ()>(presentation, "setAffineTransform:", LayerAffineTransform {
+        a: scale, b: 0.0, c: 0.0, d: scale, tx: 0.0, ty: 0.0,
+    });
+    let overlay = assoc_get(view, &HV_NATIVE_OVERLAY_KEY);
+    msg1::<CGRect, ()>(overlay, "setFrame:", CGRect {
+        origin: CGPoint { x: center.x - size.width / 2.0, y: center.y - size.height / 2.0 },
+        size,
+    });
+    msg1::<CGRect, ()>(overlay, "setBounds:", logical);
+    msg0::<()>(ca, "commit");
+}
+
 #[no_mangle]
 pub extern "C" fn PearBackendSetRootLayer(handle: *mut c_void, layer: Id) {
     unsafe {
@@ -245,10 +309,37 @@ pub extern "C" fn PearBackendSetRootLayer(handle: *mut c_void, layer: Id) {
         let w = handle as Id;
         let v: Id = msg0(w, "contentView");
         if v.is_null() { return; }
-        msg1::<Id, ()>(v, "setLayer:", layer);
-        msg1::<bool, ()>(v, "setWantsLayer:", true);
+        // AppKit resizes its backing layer before notifying the window delegate.
+        // Host the guest on a sublayer so UIKit still sees its previous bounds
+        // and can resize its views and drawables when the notification arrives.
+        let backing: Id = msg0(cls("CALayer"), "layer");
+        let bounds: CGRect = msg0(v, "bounds");
         let scale: f64 = msg0(w, "backingScaleFactor");
-        msg1::<f64, ()>(layer, "setContentsScale:", scale);
+        msg1::<CGRect, ()>(backing, "setFrame:", bounds);
+        msg1::<bool, ()>(backing, "setMasksToBounds:", true);
+        msg1::<f64, ()>(backing, "setContentsScale:", scale);
+        assoc_set(v, &HV_GUEST_LAYER_KEY, layer);
+        msg1::<Id, ()>(v, "setLayer:", backing);
+        msg1::<bool, ()>(v, "setWantsLayer:", true);
+        if fixed_game_screen() {
+            // Dr. Driving uses a 920x640 viewport regardless of drawable size.
+            // Give it fixed UIKit bounds and scale the whole scene in AppKit.
+            let presentation: Id = msg0(cls("CALayer"), "layer");
+            msg1::<CGRect, ()>(presentation, "setBounds:", msg0(layer, "bounds"));
+            msg1::<bool, ()>(presentation, "setMasksToBounds:", true);
+            msg1::<Id, ()>(presentation, "addSublayer:", layer);
+            msg1::<Id, ()>(backing, "addSublayer:", presentation);
+            assoc_set(v, &HV_PRESENTATION_LAYER_KEY, presentation);
+            let overlay: Id = msg1(msg0(cls("PearWebContainerView"), "alloc"), "initWithFrame:", bounds);
+            msg1::<bool, ()>(overlay, "setClipsToBounds:", true);
+            msg1::<Id, ()>(v, "addSubview:", overlay);
+            assoc_set(v, &HV_NATIVE_OVERLAY_KEY, overlay);
+            objc_release(overlay);
+            fit_guest_presentation(v, presentation, bounds);
+        } else {
+            msg1::<Id, ()>(backing, "addSublayer:", layer);
+            msg1::<f64, ()>(layer, "setContentsScale:", scale);
+        }
     }
 }
 
@@ -318,10 +409,11 @@ pub extern "C" fn PearBackendInstallQuartzCoreCompat() {
             PearMissingReport(1, c1.as_ptr(), c2.as_ptr(), std::ptr::null());
             return;
         }
-        if !responds_to(dl_cls as Id, "displayLinkWithTarget:selector:") {
-            add_class_method(dl_cls, "displayLinkWithTarget:selector:", dl_factory as Imp, "@@:@:");
-            log_msg("host", "+[CADisplayLink displayLinkWithTarget:selector:] provided by the host");
-        }
+        // The iOS factory can be present in macOS QuartzCore without creating
+        // a link driven by an AppKit display. Bind guest links to a real view
+        // or screen even when QuartzCore responds to the selector.
+        add_class_method(dl_cls, "displayLinkWithTarget:selector:", dl_factory as Imp, "@@:@:");
+        log_msg("host", "+[CADisplayLink displayLinkWithTarget:selector:] provided by the host");
         let scr: Id = msg0(cls("NSScreen"), "mainScreen");
         if scr.is_null() { return; }
         let probe: Id = msg2(scr, "displayLinkWithTarget:selector:", msg0::<Id>(cls("NSNull"), "null"), sel("classForCoder"));
@@ -344,6 +436,226 @@ pub extern "C" fn PearBackendInstallQuartzCoreCompat() {
             }
         }
         msg0::<()>(probe, "invalidate");
+    }
+}
+
+unsafe extern "C" fn web_allows_inline_media(configuration: Id, _cmd: Sel) -> bool {
+    let preferences: Id = msg0(configuration, "preferences");
+    !responds_to(preferences, "_allowsInlineMediaPlayback")
+        || msg0(preferences, "_allowsInlineMediaPlayback")
+}
+
+unsafe extern "C" fn web_set_allows_inline_media(configuration: Id, _cmd: Sel, allow: bool) {
+    let preferences: Id = msg0(configuration, "preferences");
+    if responds_to(preferences, "_setAllowsInlineMediaPlayback:") {
+        msg1::<bool, ()>(preferences, "_setAllowsInlineMediaPlayback:", allow);
+    }
+}
+
+static WEB_SCROLL_KEY: u8 = 0;
+static WEB_DATA_DETECTORS_KEY: u8 = 0;
+static WEB_SCROLL_OWNER_KEY: u8 = 0;
+static WEB_SCROLL_ENABLED_KEY: u8 = 0;
+static WEB_SCROLL_DELEGATE_KEY: u8 = 0;
+static WEB_SCROLL_WHEEL_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
+static WEB_CONTAINER_KEY: u8 = 0;
+static WEB_EDGE_EFFECT_KEYS: [u8; 4] = [0; 4];
+static WEB_EDGE_EFFECT_HIDDEN_KEY: u8 = 0;
+
+unsafe extern "C" fn web_scroll_view(web: Id, _cmd: Sel) -> Id {
+    let existing = assoc_get(web, &WEB_SCROLL_KEY);
+    if !existing.is_null() { return existing; }
+    let scroll: Id = msg0(cls("PearWebScrollView"), "new");
+    pear_objc::assoc_set_weak(scroll, &WEB_SCROLL_OWNER_KEY, web);
+    assoc_set(web, &WEB_SCROLL_KEY, scroll);
+    objc_release(scroll);
+    scroll
+}
+
+unsafe extern "C" fn web_scroll_set_bounces(scroll: Id, _cmd: Sel, enabled: bool) {
+    let web = pear_objc::assoc_get_weak(scroll, &WEB_SCROLL_OWNER_KEY);
+    if responds_to(web, "_setRubberBandingEnabled:") {
+        msg1::<bool, ()>(web, "_setRubberBandingEnabled:", enabled);
+    }
+}
+
+unsafe extern "C" fn web_scroll_enabled(scroll: Id, _cmd: Sel) -> bool {
+    let enabled = assoc_get(scroll, &WEB_SCROLL_ENABLED_KEY);
+    enabled.is_null() || msg0(enabled, "boolValue")
+}
+
+unsafe extern "C" fn web_scroll_set_enabled(scroll: Id, _cmd: Sel, enabled: bool) {
+    assoc_set(scroll, &WEB_SCROLL_ENABLED_KEY, pear_objc::nsnumber_bool(enabled));
+}
+
+unsafe extern "C" fn web_scroll_delegate(scroll: Id, _cmd: Sel) -> Id {
+    pear_objc::assoc_get_weak(scroll, &WEB_SCROLL_DELEGATE_KEY)
+}
+
+unsafe extern "C" fn web_scroll_set_delegate(scroll: Id, _cmd: Sel, delegate: Id) {
+    pear_objc::assoc_set_weak(scroll, &WEB_SCROLL_DELEGATE_KEY, delegate);
+}
+
+unsafe extern "C" fn web_scroll_wheel(web: Id, cmd: Sel, event: Id) {
+    if !web_scroll_enabled(assoc_get(web, &WEB_SCROLL_KEY), cmd) { return; }
+    let original = WEB_SCROLL_WHEEL_ORIGINAL.load(Ordering::Acquire);
+    if original != 0 {
+        let original: unsafe extern "C" fn(Id, Sel, Id) = std::mem::transmute(original);
+        original(web, cmd, event);
+    }
+}
+
+unsafe extern "C" fn web_scroll_set_insets(scroll: Id, _cmd: Sel, behavior: isize) {
+    let web = pear_objc::assoc_get_weak(scroll, &WEB_SCROLL_OWNER_KEY);
+    if responds_to(web, "_setAutomaticallyAdjustsContentInsets:") {
+        msg1::<bool, ()>(web, "_setAutomaticallyAdjustsContentInsets:", behavior != 2);
+    }
+}
+
+unsafe extern "C" fn web_scroll_edge_effect(scroll: Id, cmd: Sel) -> Id {
+    let edge = if cmd == sel("topEdgeEffect") { 0 }
+        else if cmd == sel("bottomEdgeEffect") { 1 }
+        else if cmd == sel("leftEdgeEffect") { 2 }
+        else { 3 };
+    let key = &WEB_EDGE_EFFECT_KEYS[edge];
+    let existing = assoc_get(scroll, key);
+    if !existing.is_null() { return existing; }
+    let effect: Id = msg0(cls("PearWebScrollEdgeEffect"), "new");
+    assoc_set(scroll, key, effect);
+    objc_release(effect);
+    effect
+}
+
+unsafe extern "C" fn web_edge_effect_hidden(effect: Id, _cmd: Sel) -> bool {
+    msg0(assoc_get(effect, &WEB_EDGE_EFFECT_HIDDEN_KEY), "boolValue")
+}
+
+unsafe extern "C" fn web_set_edge_effect_hidden(effect: Id, _cmd: Sel, hidden: bool) {
+    // Desktop WebKit does not draw the UIKit scroll edge effect. Preserve
+    // the preference so guest callers can configure and inspect each edge.
+    assoc_set(effect, &WEB_EDGE_EFFECT_HIDDEN_KEY, pear_objc::nsnumber_bool(hidden));
+}
+
+unsafe extern "C" fn web_set_opaque(web: Id, _cmd: Sel, opaque: bool) {
+    if responds_to(web, "_setDrawsBackground:") {
+        msg1::<bool, ()>(web, "_setDrawsBackground:", opaque);
+    }
+}
+
+unsafe extern "C" fn web_container_hit_test(container: Id, _cmd: Sel, point: CGPoint) -> Id {
+    let hit: Id = pear_objc::msg_super1(container, "PearWebContainerView", "hitTest:", point);
+    if hit == container { NIL } else { hit }
+}
+
+unsafe extern "C" fn web_mount(web: Id, _cmd: Sel, window: Id, frame: CGRect, hidden: bool) {
+    let mut container = pear_objc::assoc_get_weak(web, &WEB_CONTAINER_KEY);
+    if window.is_null() {
+        msg0::<()>(container, "removeFromSuperview");
+        return;
+    }
+    let content: Id = msg0(window, "contentView");
+    let overlay = assoc_get(content, &HV_NATIVE_OVERLAY_KEY);
+    let parent = if overlay.is_null() { content } else { overlay };
+    if container.is_null() {
+        container = msg1(msg0(cls("PearWebContainerView"), "alloc"), "initWithFrame:", frame);
+        // The AppKit hierarchy owns the container. The association must not
+        // keep it alive, since the container retains its web view.
+        pear_objc::assoc_set_weak(web, &WEB_CONTAINER_KEY, container);
+        msg1::<Id, ()>(parent, "addSubview:", container);
+        msg1::<Id, ()>(container, "addSubview:", web);
+        objc_release(container);
+    } else {
+        if msg0::<Id>(container, "superview") != parent {
+            msg1::<Id, ()>(parent, "addSubview:", container);
+        }
+        msg1::<CGRect, ()>(container, "setFrame:", frame);
+    }
+    msg1::<bool, ()>(container, "setHidden:", hidden);
+}
+
+unsafe fn install_webkit_compat() {
+    let configuration = cls("WKWebViewConfiguration");
+    if configuration.is_null() {
+        return;
+    }
+    // Desktop WebKit exposes inline playback on WKPreferences instead of
+    // the iOS WKWebViewConfiguration API. Keep the native preference effective.
+    for (selector, imp, types) in [
+        ("allowsInlineMediaPlayback", web_allows_inline_media as Imp, "B@:"),
+        ("setAllowsInlineMediaPlayback:", web_set_allows_inline_media as Imp, "v@:B"),
+        ("dataDetectorTypes", web_data_detectors as Imp, "Q@:"),
+        ("setDataDetectorTypes:", web_set_data_detectors as Imp, "v@:Q"),
+    ] {
+        if !class_respondsToSelector(configuration, sel(selector)) {
+            add_method(configuration, selector, imp, types);
+        }
+    }
+
+    for (name, superclass, methods) in [
+        ("PearWebScrollView", "NSObject", &[
+            ("delegate", web_scroll_delegate as Imp, "@@:"),
+            ("setDelegate:", web_scroll_set_delegate as Imp, "v@:@"),
+            ("setBounces:", web_scroll_set_bounces as Imp, "v@:B"),
+            ("isScrollEnabled", web_scroll_enabled as Imp, "B@:"),
+            ("setScrollEnabled:", web_scroll_set_enabled as Imp, "v@:B"),
+            ("setContentInsetAdjustmentBehavior:", web_scroll_set_insets as Imp, "v@:q"),
+            ("topEdgeEffect", web_scroll_edge_effect as Imp, "@@:"),
+            ("bottomEdgeEffect", web_scroll_edge_effect as Imp, "@@:"),
+            ("leftEdgeEffect", web_scroll_edge_effect as Imp, "@@:"),
+            ("rightEdgeEffect", web_scroll_edge_effect as Imp, "@@:"),
+        ][..]),
+        ("PearWebScrollEdgeEffect", "NSObject", &[
+            ("isHidden", web_edge_effect_hidden as Imp, "B@:"),
+            ("setHidden:", web_set_edge_effect_hidden as Imp, "v@:B"),
+        ][..]),
+        ("PearWebContainerView", "NSView", &[
+            ("isFlipped", hv_true as Imp, "B@:"),
+            ("hitTest:", web_container_hit_test as Imp, "@@:{CGPoint=dd}"),
+        ][..]),
+    ] {
+        if cls(name).is_null() {
+            let name = CString::new(name).unwrap();
+            let c = objc_allocateClassPair(cls(superclass), name.as_ptr(), 0);
+            if c.is_null() { continue; }
+            for &(selector, imp, types) in methods {
+                add_method(c, selector, imp, types);
+            }
+            objc_registerClassPair(c);
+        }
+    }
+
+    let web = cls("WKWebView");
+    if !web.is_null() {
+        let wheel = sel("scrollWheel:");
+        if WEB_SCROLL_WHEEL_ORIGINAL.load(Ordering::Acquire) == 0
+            && class_respondsToSelector(web, wheel)
+        {
+            let original = class_getMethodImplementation(web, wheel);
+            WEB_SCROLL_WHEEL_ORIGINAL.store(original as usize, Ordering::Release);
+            add_method(web, "scrollWheel:", web_scroll_wheel as Imp, "v@:@");
+        }
+        for (selector, imp, types) in [
+            ("scrollView", web_scroll_view as Imp, "@@:"),
+            ("setOpaque:", web_set_opaque as Imp, "v@:B"),
+            ("pear_mountInHostWindow:frame:hidden:", web_mount as Imp, "v@:@{CGRect={CGPoint=dd}{CGSize=dd}}B"),
+        ] {
+            if !class_respondsToSelector(web, sel(selector)) {
+                add_method(web, selector, imp, types);
+            }
+        }
+    }
+}
+
+unsafe extern "C" fn web_data_detectors(configuration: Id, _cmd: Sel) -> usize {
+    msg0(assoc_get(configuration, &WEB_DATA_DETECTORS_KEY), "unsignedIntegerValue")
+}
+
+unsafe extern "C" fn web_set_data_detectors(configuration: Id, _cmd: Sel, detectors: usize) {
+    let value: Id = msg1(cls("NSNumber"), "numberWithUnsignedInteger:", detectors);
+    assoc_set(configuration, &WEB_DATA_DETECTORS_KEY, value);
+    let preferences: Id = msg0(configuration, "preferences");
+    if responds_to(preferences, "_setTelephoneNumberDetectionIsEnabled:") {
+        msg1::<bool, ()>(preferences, "_setTelephoneNumberDetectionIsEnabled:", detectors & 1 != 0);
     }
 }
 
@@ -483,8 +795,25 @@ unsafe extern "C" fn app_del_did_finish(_s: Id, _c: Sel, _n: Id) {
 }
 unsafe extern "C" fn app_del_should_term(_s: Id, _c: Sel, _app: Id) -> bool { true }
 unsafe extern "C" fn obs_active(_s: Id, _c: Sel, _n: Id) { events().lifecycle(Lifecycle::DidBecomeActive); }
-unsafe extern "C" fn obs_resign(_s: Id, _c: Sel, _n: Id) { events().lifecycle(Lifecycle::WillResignActive); }
-unsafe extern "C" fn obs_hide(_s: Id, _c: Sel, _n: Id) { events().lifecycle(Lifecycle::DidEnterBackground); }
+unsafe fn keeps_running_when_unfocused() -> bool {
+    let bundle: Id = msg0(cls("NSBundle"), "mainBundle");
+    let identifier: Id = msg0(bundle, "bundleIdentifier");
+    nsstring_to_string(identifier).as_deref() == Some("com.HoYoverse.Nap")
+}
+
+unsafe extern "C" fn obs_resign(_s: Id, _c: Sel, _n: Id) {
+    // Unity in Zenless Zone Zero pauses startup work on this event, and can
+    // leave the download or shader warmup stalled when a Mac window loses focus.
+    if !keeps_running_when_unfocused() {
+        events().lifecycle(Lifecycle::WillResignActive);
+    }
+}
+unsafe extern "C" fn obs_hide(_s: Id, _c: Sel, _n: Id) {
+    if keeps_running_when_unfocused() {
+        events().lifecycle(Lifecycle::WillResignActive);
+    }
+    events().lifecycle(Lifecycle::DidEnterBackground);
+}
 unsafe extern "C" fn obs_unhide(_s: Id, _c: Sel, _n: Id) { events().lifecycle(Lifecycle::WillEnterForeground); }
 unsafe extern "C" fn obs_term(_s: Id, _c: Sel, _n: Id) { events().lifecycle(Lifecycle::WillTerminate); }
 
@@ -495,6 +824,12 @@ unsafe extern "C" fn wd_did_resize(s: Id, _c: Sel, notif: Id) {
     let cv: Id = msg0(w, "contentView");
     if cv.is_null() { return; }
     let b: CGRect = msg0(cv, "bounds");
+    if b.size.width <= 0.0 || b.size.height <= 0.0 { return; }
+    let presentation = assoc_get(cv, &HV_PRESENTATION_LAYER_KEY);
+    if !presentation.is_null() {
+        fit_guest_presentation(cv, presentation, b);
+        return;
+    }
     let scale: f64 = msg0(w, "backingScaleFactor");
     events().window_resized(GuestObject(ui), Size { width: b.size.width, height: b.size.height }, scale);
 }
@@ -509,12 +844,27 @@ unsafe fn hv_pointer(view: Id, event: Id, phase: isize) {
     let p: CGPoint = msg2(view, "convertPoint:fromView:", loc, NIL);
     let w = assoc_get(view, &HV_UIWIN_KEY);
     if w.is_null() { return; }
-    let wb: CGRect = msg0(w, "bounds");
-    let vb: CGRect = msg0(view, "bounds");
-    let ui = CGPoint {
-        x: p.x * wb.size.width / vb.size.width.max(1.0),
-        y: p.y * wb.size.height / vb.size.height.max(1.0),
+    let layer = assoc_get(view, &HV_GUEST_LAYER_KEY);
+    let ui = if layer.is_null() {
+        let wb: CGRect = msg0(w, "bounds");
+        let vb: CGRect = msg0(view, "bounds");
+        CGPoint {
+            x: p.x * wb.size.width / vb.size.width.max(1.0),
+            y: p.y * wb.size.height / vb.size.height.max(1.0),
+        }
+    } else {
+        let backing: Id = msg0(view, "layer");
+        msg2(layer, "convertPoint:fromLayer:", p, backing)
     };
+    if phase == 0 && !assoc_get(view, &HV_PRESENTATION_LAYER_KEY).is_null() {
+        let bounds: CGRect = msg0(w, "bounds");
+        if ui.x < bounds.origin.x || ui.y < bounds.origin.y
+            || ui.x >= bounds.origin.x + bounds.size.width
+            || ui.y >= bounds.origin.y + bounds.size.height
+        {
+            return;
+        }
+    }
     let ts: f64 = msg0(event, "timestamp");
     events().pointer(GuestObject(w), self::phase(phase), ui.x, ui.y, ts);
 }
@@ -700,6 +1050,33 @@ impl HostPlatform for MacHost {
 
     fn show_window(&self, window: WindowHandle, key: bool) {
         PearBackendShowWindow(window.0, key);
+    }
+
+    fn screen_edr_headroom(&self) -> (f64, f64) {
+        unsafe {
+            let view = G_PRIMARY_VIEW.load(Ordering::Acquire) as Id;
+            let window: Id = if view.is_null() { NIL } else { msg0(view, "window") };
+            let mut screen: Id = if window.is_null() { NIL } else { msg0(window, "screen") };
+            if screen.is_null() {
+                screen = msg0(cls("NSScreen"), "mainScreen");
+            }
+            let current = msg0::<f64>(screen, "maximumExtendedDynamicRangeColorComponentValue");
+            let potential = msg0::<f64>(screen, "maximumPotentialExtendedDynamicRangeColorComponentValue");
+            (current.max(1.0), potential.max(1.0))
+        }
+    }
+
+    fn orient_window(&self, window: WindowHandle, size: Size) {
+        unsafe {
+            let window = window.0 as Id;
+            let requested = CGSize { width: size.width, height: size.height };
+            let fitted = fitted_scale(requested, default_point_size()).min(1.0);
+            msg1::<CGSize, ()>(window, "setContentAspectRatio:", requested);
+            msg1::<CGSize, ()>(window, "setContentSize:", CGSize {
+                width: (size.width * fitted).round(),
+                height: (size.height * fitted).round(),
+            });
+        }
     }
 
     fn surface(&self, layer: LayerRef) -> Option<SurfaceInfo> {

@@ -69,6 +69,7 @@ chmod +x "$DST/$EXE"  # zip archives may drop the execute bit
 for item in "$SRC"/Frameworks/*; do
   [[ -e "$item" ]] || continue  # apps without a Frameworks folder
   name="$(basename "$item")"
+  [[ "$name" == *.framework && -d "$HOST/$name" ]] && continue
   case "$name" in
     libPearRuntime.dylib|libPearOpenGLES.dylib|libswiftUIKit.dylib|libcxxcompat.dylib|PearANGLE|MarketplaceKit.framework) ;;
     *) cp -R "$item" "$DST/Frameworks/" ;;
@@ -140,8 +141,9 @@ retarget "$DST/$EXE"
 # frameworks (older titles) carry no @executable_path/Frameworks rpath.
 if ! otool -l "$DST/$EXE" | grep -A2 'cmd LC_RPATH' | grep -q '@executable_path/Frameworks'; then
   install_name_tool -add_rpath @executable_path/Frameworks "$DST/$EXE" 2>/dev/null
-  codesign -f -s - "$DST/$EXE" 2>/dev/null
 fi
+python3 -I "$ROOT/tools/host-dedupe-dylibs.py" --load-uikit "$DST/$EXE"
+codesign -f -s - "$DST/$EXE" 2>/dev/null
 while IFS= read -r -d '' bin; do
   if file "$bin" | grep -q 'Mach-O'; then retarget "$bin"; fi
 done < <(find "$DST/Frameworks" -type f ! -name "*.plist" ! -path "*/_CodeSignature/*" -print0)
