@@ -1,0 +1,12 @@
+[package]
+name = "pear-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "pear_core"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+pear-objc = { path = "../pear-objc" }

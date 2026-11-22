@@ -1,0 +1,13 @@
+[package]
+name = "pear-libobjc"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "PearRuntime's own Objective-C runtime (Apple 64-bit ABI) for images loaded by pear-dyld"
+
+[lib]
+name = "pear_libobjc"
+crate-type = ["rlib"]
+
+[dependencies]
+pear-dyld = { path = "../pear-dyld" }

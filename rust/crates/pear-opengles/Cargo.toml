@@ -1,0 +1,22 @@
+[package]
+name = "pear-opengles"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+build = "build.rs"
+
+[lib]
+name = "pear_opengles"
+# libPearOpenGLES.dylib (Mac Catalyst): linked by runtime/build-angle-bridge.sh,
+# re-exporting libPearRuntime.dylib.
+crate-type = ["staticlib"]
+test = false
+doctest = false
+
+[features]
+# Mac Catalyst (libPearOpenGLES.dylib): the EAGL C ABI below and failures
+# traced through the runtime's PearANGLETrace. PearHost's OpenGLES.framework
+# takes only the forwarders (--no-default-features): pear-gles supplies EAGL
+# and PearANGLEGameSymbol, and failures go to PearHostLogMessage.
+default = ["catalyst"]
+catalyst = []

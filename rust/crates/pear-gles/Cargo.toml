@@ -1,0 +1,23 @@
+[package]
+name = "pear-gles"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+build = "build.rs"
+
+[lib]
+name = "pear_gles"
+crate-type = ["staticlib", "rlib"]
+# Only links inside its framework (symbols from UIKit.framework and the ObjC
+# ABI shims); behavior is tested against the built frameworks.
+test = false
+doctest = false
+
+[dependencies]
+pear-objc = { path = "../pear-objc" }
+pear-host = { path = "../pear-host" }
+
+[lints.rust]
+# The shared forwarders (pear-opengles/src/forwarders.rs) check pear-opengles'
+# `catalyst` feature, which this crate never has.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("catalyst"))'] }

@@ -1,0 +1,25 @@
+[package]
+name = "pear-uikit"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "pear_uikit"
+crate-type = ["staticlib", "rlib"]
+# Only links inside its framework (symbols from UIKit.framework and the ObjC
+# ABI shims); behavior is tested against the built frameworks.
+test = false
+doctest = false
+
+[dependencies]
+pear-core = { path = "../pear-core" }
+pear-nib = { path = "../pear-nib" }
+pear-objc = { path = "../pear-objc" }
+pear-host = { path = "../pear-host" }
+pear-image = { path = "../pear-image" }
+pear-keychain = { path = "../pear-keychain" }
+
+# The host for this OS (pear-host's HostPlatform); other OSes get their own.
+[target.'cfg(target_os = "macos")'.dependencies]
+pear-host-macos = { path = "../pear-host-macos" }

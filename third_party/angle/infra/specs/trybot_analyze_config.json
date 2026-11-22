@@ -1,0 +1,11 @@
+{
+    "angle": {
+        "exclusions": [
+            "DEPS",
+            "infra/config/generated/builders/.*",
+            "infra/config/generated/testing/.*",
+            "vpython.toml",
+            "vpython.toml.uv.lock"
+        ]
+    }
+}

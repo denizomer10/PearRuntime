@@ -1,0 +1,20 @@
+[package]
+name = "pear-keychain"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Keychain API (SecItem*/SecKey*) over a local file store, shared by PearHost and the Catalyst runtime"
+
+[lib]
+name = "pear_keychain"
+crate-type = ["rlib"]
+test = false
+doctest = false
+
+[features]
+# Test seams for scripts/keychain-smoke.*: no active interpose table,
+# replaceable Security entry points, and C entry points into the store.
+smoke = []
+
+[dependencies]
+pear-objc = { path = "../pear-objc" }

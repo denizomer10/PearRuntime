@@ -1,0 +1,16 @@
+[package]
+name = "pear-metalkit"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "pear_metalkit"
+crate-type = ["staticlib", "rlib"]
+# Only links inside its framework (symbols from UIKit.framework and the ObjC
+# ABI shims); behavior is tested against the built frameworks.
+test = false
+doctest = false
+
+[dependencies]
+pear-objc = { path = "../pear-objc" }

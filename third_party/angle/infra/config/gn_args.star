@@ -1,0 +1,365 @@
+# Copyright 2026 The Chromium Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+"""ANGLE GN arg definitions."""
+
+load("@chromium-luci//gn_args.star", "gn_args")
+load("//representative_traces.star", "REPRESENTATIVE_TRACES", "SMOKE_TRACES")
+
+gn_args.config(
+    name = "android",
+    args = {
+        "target_os": "android",
+    },
+)
+
+gn_args.config(
+    name = "android_clang",
+    configs = [
+        "android",
+        "clang",
+        "siso",
+    ],
+)
+
+gn_args.config(
+    name = "android_static_analysis",
+    args = {
+        "android_static_analysis": "on",
+    },
+)
+
+gn_args.config(
+    name = "angle_ir",
+    args = {
+        "angle_ir": True,
+        "enable_rust_clippy": True,
+    },
+)
+
+gn_args.config(
+    name = "arm",
+    args = {
+        "target_cpu": "arm",
+    },
+)
+
+gn_args.config(
+    name = "arm64",
+    args = {
+        "target_cpu": "arm64",
+    },
+)
+
+gn_args.config(
+    name = "asan",
+    args = {
+        "is_asan": True,
+    },
+)
+
+gn_args.config(
+    name = "capture",
+    args = {
+        "angle_with_capture_by_default": True,
+    },
+)
+
+gn_args.config(
+    name = "clang",
+    args = {
+        "is_clang": True,
+    },
+)
+
+gn_args.config(
+    name = "component",
+    args = {
+        "is_component_build": True,
+    },
+)
+
+gn_args.config(
+    name = "dcheck_off",
+    args = {
+        "dcheck_always_on": False,
+    },
+)
+
+gn_args.config(
+    name = "debug",
+    args = {
+        "is_debug": True,
+    },
+)
+
+gn_args.config(
+    name = "linux",
+    args = {
+        "target_os": "linux",
+    },
+)
+
+gn_args.config(
+    name = "linux_clang",
+    configs = [
+        "clang",
+        "linux",
+        "siso",
+    ],
+)
+
+gn_args.config(
+    name = "lsan",
+    args = {
+        "is_lsan": True,
+    },
+)
+
+gn_args.config(
+    name = "mac",
+    args = {
+        "target_os": "mac",
+    },
+)
+
+gn_args.config(
+    name = "mac_clang",
+    configs = [
+        "clang",
+        "mac",
+        "siso",
+    ],
+)
+
+gn_args.config(
+    name = "minimal_symbols",
+    args = {
+        "symbol_level": 1,
+    },
+)
+
+gn_args.config(
+    name = "msvc",
+    args = {
+        "is_clang": False,
+        "use_custom_libcxx": False,
+    },
+)
+
+gn_args.config(
+    name = "opencl",
+    args = {
+        "angle_enable_cl": True,
+    },
+)
+
+gn_args.config(
+    name = "release",
+    args = {
+        "is_debug": False,
+    },
+    configs = [
+        "minimal_symbols",
+    ],
+)
+
+gn_args.config(
+    name = "release_with_dchecks",
+    args = {
+        "dcheck_always_on": True,
+    },
+    configs = [
+        "release",
+    ],
+)
+
+gn_args.config(
+    name = "siso",
+    args = {
+        "use_remoteexec": True,
+        "use_siso": True,
+    },
+)
+
+gn_args.config(
+    name = "smoke_traces",
+    args = {
+        "angle_restricted_traces": SMOKE_TRACES,
+    },
+)
+
+gn_args.config(
+    name = "representative_traces",
+    args = {
+        "angle_restricted_traces": REPRESENTATIVE_TRACES,
+    },
+)
+
+gn_args.config(
+    name = "tsan",
+    args = {
+        "is_tsan": True,
+    },
+)
+
+gn_args.config(
+    name = "ubsan",
+    args = {
+        "is_ubsan": True,
+    },
+)
+
+gn_args.config(
+    name = "uwp",
+    args = {
+        "target_os": "winuwp",
+    },
+)
+
+gn_args.config(
+    name = "win",
+    args = {
+        "target_os": "win",
+    },
+)
+
+gn_args.config(
+    name = "win_clang",
+    configs = [
+        "clang",
+        "siso",
+        "win",
+    ],
+)
+
+gn_args.config(
+    name = "win_msvc",
+    configs = [
+        "msvc",
+        "siso",
+        "win",
+    ],
+)
+
+gn_args.config(
+    name = "win_uwp",
+    configs = [
+        "msvc",
+        "siso",
+        "uwp",
+    ],
+)
+
+gn_args.config(
+    name = "x64",
+    args = {
+        "target_cpu": "x64",
+    },
+)
+
+gn_args.config(
+    name = "x86",
+    args = {
+        "target_cpu": "x86",
+    },
+)
+
+gn_args.config(
+    name = "android_arm64_builder_rel",
+    configs = [
+        "android_clang",
+        "android_static_analysis",
+        "arm64",
+        "capture",
+        "opencl",
+        "release_with_dchecks",
+    ],
+)
+
+gn_args.config(
+    name = "android_cq_arm64_builder_rel",
+    configs = [
+        "android_arm64_builder_rel",
+        "representative_traces",
+    ],
+)
+
+gn_args.config(
+    name = "linux_x64_builder_rel",
+    configs = [
+        "capture",
+        "component",
+        "linux_clang",
+        "opencl",
+        "release_with_dchecks",
+        "x64",
+    ],
+)
+
+gn_args.config(
+    name = "linux_cq_x64_builder_rel",
+    configs = [
+        "linux_x64_builder_rel",
+        "representative_traces",
+    ],
+)
+
+gn_args.config(
+    name = "win_x64_builder_rel",
+    configs = [
+        "capture",
+        "component",
+        "opencl",
+        "release_with_dchecks",
+        "win_clang",
+        "x64",
+    ],
+)
+
+gn_args.config(
+    name = "win_cq_x64_builder_rel",
+    configs = [
+        "win_x64_builder_rel",
+        "representative_traces",
+    ],
+)
+
+gn_args.config(
+    name = "mac_arm64_builder_rel",
+    configs = [
+        "arm64",
+        "capture",
+        "component",
+        "mac_clang",
+        "release_with_dchecks",
+    ],
+)
+
+gn_args.config(
+    name = "mac_cq_arm64_builder_rel",
+    configs = [
+        "mac_arm64_builder_rel",
+        "representative_traces",
+    ],
+)
+
+gn_args.config(
+    name = "mac_x64_builder_rel",
+    configs = [
+        "capture",
+        "component",
+        "mac_clang",
+        "release_with_dchecks",
+        "x64",
+    ],
+)
+
+gn_args.config(
+    name = "mac_cq_x64_builder_rel",
+    configs = [
+        "mac_x64_builder_rel",
+        "representative_traces",
+    ],
+)

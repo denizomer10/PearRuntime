@@ -1,0 +1,10 @@
+{"event":"first","kind":"objc-instance","api":"-[UITextView setDelegate:]","caller":"minecraftpe+0x1a338","thread_main":true}
+{"event":"first","kind":"objc-instance","api":"-[UITextView setAutocorrectionType:]","caller":"minecraftpe+0x1a358","thread_main":true}
+{"event":"first","kind":"objc-instance","api":"-[UITextView setAutocapitalizationType:]","caller":"minecraftpe+0x1a374","thread_main":true}
+{"event":"first","kind":"objc-instance","api":"-[UITextView setSmartQuotesType:]","caller":"minecraftpe+0x1a390","thread_main":true}
+{"event":"first","kind":"c-function","api":"UIAccessibilityIsVoiceOverRunning()","caller":"minecraftpe+0x11b24","thread_main":true}
+{"event":"summary","kind":"c-function","api":"UIAccessibilityIsVoiceOverRunning()","count":3,"first_caller":"minecraftpe+0x11b24"}
+{"event":"summary","kind":"objc-instance","api":"-[UITextView setSmartQuotesType:]","count":1,"first_caller":"minecraftpe+0x1a390"}
+{"event":"summary","kind":"objc-instance","api":"-[UITextView setAutocapitalizationType:]","count":1,"first_caller":"minecraftpe+0x1a374"}
+{"event":"summary","kind":"objc-instance","api":"-[UITextView setAutocorrectionType:]","count":1,"first_caller":"minecraftpe+0x1a358"}
+{"event":"summary","kind":"objc-instance","api":"-[UITextView setDelegate:]","count":1,"first_caller":"minecraftpe+0x1a338"}

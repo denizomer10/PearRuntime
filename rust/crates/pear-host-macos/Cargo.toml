@@ -1,0 +1,18 @@
+[package]
+name = "pear-host-macos"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "PearRuntime's macOS host: pear-host's HostPlatform on AppKit, QuartzCore and IOKit"
+
+[lib]
+name = "pear_host_macos"
+crate-type = ["rlib"]
+# Only links inside PearHost's UIKit.framework (it delivers events to the
+# UIKit layer's exported PearUIKit* functions); behaviour is tested there.
+test = false
+doctest = false
+
+[dependencies]
+pear-objc = { path = "../pear-objc" }
+pear-host = { path = "../pear-host" }

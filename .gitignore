@@ -1,0 +1,9 @@
+build/
+*.o
+compile_commands.json
+.DS_Store
+rust/target/
+debug/.build/
+third_party/angle/out/
+third_party/legacy-engine/target/
+third_party/legacy-jit/build/

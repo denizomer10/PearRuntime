@@ -1,0 +1,9 @@
+[package]
+name = "pear-nib"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "pear_nib"
+crate-type = ["rlib"]

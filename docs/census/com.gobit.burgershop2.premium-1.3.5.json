@@ -1,0 +1,5325 @@
+{
+ "libraries": {
+  "libSystem": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [],
+   "symbols": [
+    "_OSAtomicAdd32",
+    "__Block_object_assign",
+    "__Block_object_dispose",
+    "__DefaultRuneLocale",
+    "__NSConcreteGlobalBlock",
+    "__NSConcreteStackBlock",
+    "__NSGetExecutablePath",
+    "__Unwind_Resume",
+    "___chkstk_darwin",
+    "___cxa_atexit",
+    "___error",
+    "___exp10",
+    "___maskrune",
+    "___memcpy_chk",
+    "___sincos_stret",
+    "___sincosf_stret",
+    "___stack_chk_fail",
+    "___stack_chk_guard",
+    "___stderrp",
+    "___stdinp",
+    "___stdoutp",
+    "___sysctl",
+    "___tolower",
+    "___toupper",
+    "__dispatch_main_q",
+    "__dispatch_source_type_timer",
+    "__dyld_get_image_name",
+    "__dyld_image_count",
+    "__dyld_register_func_for_add_image",
+    "__exit",
+    "__os_log_default",
+    "__os_log_impl",
+    "__os_signpost_emit_with_name_impl",
+    "__tlv_bootstrap",
+    "_abort",
+    "_access",
+    "_acos",
+    "_acosf",
+    "_acoshf",
+    "_arc4random",
+    "_asinf",
+    "_asinhf",
+    "_atan",
+    "_atan2f",
+    "_atanf",
+    "_atanhf",
+    "_atexit",
+    "_atof",
+    "_atoi",
+    "_backtrace",
+    "_backtrace_symbols_fd",
+    "_bzero",
+    "_calloc",
+    "_chdir",
+    "_chmod",
+    "_clock_gettime",
+    "_clock_gettime_nsec_np",
+    "_close",
+    "_closedir",
+    "_connect",
+    "_cos",
+    "_cosf",
+    "_coshf",
+    "_creat",
+    "_csops",
+    "_difftime",
+    "_dispatch_after",
+    "_dispatch_async",
+    "_dispatch_get_global_queue",
+    "_dispatch_once",
+    "_dispatch_once_f",
+    "_dispatch_queue_create",
+    "_dispatch_resume",
+    "_dispatch_semaphore_create",
+    "_dispatch_semaphore_signal",
+    "_dispatch_semaphore_wait",
+    "_dispatch_source_cancel",
+    "_dispatch_source_create",
+    "_dispatch_source_set_event_handler",
+    "_dispatch_source_set_timer",
+    "_dispatch_time",
+    "_dladdr",
+    "_dlclose",
+    "_dlerror",
+    "_dlopen",
+    "_dlsym",
+    "_exit",
+    "_exp",
+    "_exp2",
+    "_exp2f",
+    "_expf",
+    "_faccessat",
+    "_fchmod",
+    "_fchmodat",
+    "_fclose",
+    "_fcntl",
+    "_feof",
+    "_fflush",
+    "_fgetc",
+    "_fgets",
+    "_fileno",
+    "_fmodf",
+    "_fopen",
+    "_fork",
+    "_fprintf",
+    "_fputc",
+    "_fread",
+    "_free",
+    "_fscanf",
+    "_fseek",
+    "_fseeko",
+    "_fstat",
+    "_fstatat",
+    "_ftell",
+    "_ftello",
+    "_fwrite",
+    "_getcwd",
+    "_getenv",
+    "_geteuid",
+    "_getgrgid",
+    "_getifaddrs",
+    "_getpagesize",
+    "_getpeereid",
+    "_getpid",
+    "_getpwuid",
+    "_getsockopt",
+    "_gettimeofday",
+    "_getuid",
+    "_host_page_size",
+    "_host_statistics64",
+    "_hypotf",
+    "_isatty",
+    "_kill",
+    "_ldexp",
+    "_ldexpf",
+    "_localtime",
+    "_log",
+    "_log10",
+    "_logf",
+    "_longjmp",
+    "_lseek",
+    "_lstat",
+    "_mach_absolute_time",
+    "_mach_host_self",
+    "_mach_port_deallocate",
+    "_mach_task_self_",
+    "_mach_timebase_info",
+    "_mach_vm_protect",
+    "_mach_vm_region",
+    "_malloc",
+    "_memchr",
+    "_memcmp",
+    "_memcpy",
+    "_memmove",
+    "_memset",
+    "_memset_pattern16",
+    "_mkdir",
+    "_mlock",
+    "_mmap",
+    "_modff",
+    "_munlock",
+    "_munmap",
+    "_open",
+    "_openat",
+    "_opendir",
+    "_os_log_create",
+    "_os_log_type_enabled",
+    "_os_proc_available_memory",
+    "_os_signpost_enabled",
+    "_os_unfair_lock_lock",
+    "_os_unfair_lock_unlock",
+    "_poll",
+    "_popen",
+    "_posix_memalign",
+    "_pow",
+    "_powf",
+    "_pthread_attr_destroy",
+    "_pthread_attr_get_qos_class_np",
+    "_pthread_attr_getinheritsched",
+    "_pthread_attr_init",
+    "_pthread_attr_set_qos_class_np",
+    "_pthread_attr_setdetachstate",
+    "_pthread_cond_broadcast",
+    "_pthread_cond_destroy",
+    "_pthread_cond_init",
+    "_pthread_cond_signal",
+    "_pthread_cond_timedwait",
+    "_pthread_cond_wait",
+    "_pthread_create",
+    "_pthread_detach",
+    "_pthread_equal",
+    "_pthread_getname_np",
+    "_pthread_getspecific",
+    "_pthread_join",
+    "_pthread_key_create",
+    "_pthread_key_delete",
+    "_pthread_mach_thread_np",
+    "_pthread_mutex_destroy",
+    "_pthread_mutex_init",
+    "_pthread_mutex_lock",
+    "_pthread_mutex_trylock",
+    "_pthread_mutex_unlock",
+    "_pthread_mutexattr_destroy",
+    "_pthread_mutexattr_init",
+    "_pthread_mutexattr_settype",
+    "_pthread_once",
+    "_pthread_rwlock_destroy",
+    "_pthread_rwlock_init",
+    "_pthread_rwlock_rdlock",
+    "_pthread_rwlock_tryrdlock",
+    "_pthread_rwlock_trywrlock",
+    "_pthread_rwlock_unlock",
+    "_pthread_rwlock_wrlock",
+    "_pthread_self",
+    "_pthread_set_qos_class_self_np",
+    "_pthread_setname_np",
+    "_pthread_setspecific",
+    "_pthread_sigmask",
+    "_pthread_threadid_np",
+    "_qsort",
+    "_raise",
+    "_rand",
+    "_read",
+    "_readdir",
+    "_readlink",
+    "_realloc",
+    "_realpath$DARWIN_EXTSN",
+    "_recv",
+    "_remove",
+    "_rename",
+    "_rewind",
+    "_sched_yield",
+    "_send",
+    "_setbuf",
+    "_setjmp",
+    "_setsockopt",
+    "_sigaction",
+    "_sin",
+    "_sinf",
+    "_sinhf",
+    "_snprintf",
+    "_socket",
+    "_sprintf",
+    "_srand",
+    "_sscanf",
+    "_stat",
+    "_statfs",
+    "_strcasecmp",
+    "_strcasestr",
+    "_strcat",
+    "_strchr",
+    "_strcmp",
+    "_strcpy",
+    "_strdup",
+    "_strerror",
+    "_strftime",
+    "_strlcat",
+    "_strlcpy",
+    "_strlen",
+    "_strncasecmp",
+    "_strncmp",
+    "_strnlen",
+    "_strpbrk",
+    "_strrchr",
+    "_strstr",
+    "_strtod",
+    "_strtok",
+    "_strtol",
+    "_strtoul",
+    "_syscall",
+    "_sysctlbyname",
+    "_tanf",
+    "_tanhf",
+    "_task_info",
+    "_thread_policy_set",
+    "_time",
+    "_umask",
+    "_uname",
+    "_ungetc",
+    "_unsetenv",
+    "_usleep",
+    "_utime",
+    "_vfprintf",
+    "_vsnprintf",
+    "_wmemchr",
+    "_write",
+    "dyld_stub_binder"
+   ]
+  },
+  "libc++": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [],
+   "symbols": [
+    "__ZNKSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE4findEcm",
+    "__ZNKSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE5rfindEcm",
+    "__ZNKSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE7compareEPKc",
+    "__ZNKSt3__119__shared_weak_count13__get_deleterERKSt9type_info",
+    "__ZNKSt3__16locale9has_facetERNS0_2idE",
+    "__ZNKSt3__16locale9use_facetERNS0_2idE",
+    "__ZNKSt3__18ios_base6getlocEv",
+    "__ZNKSt9exception4whatEv",
+    "__ZNSt11logic_errorC2EPKc",
+    "__ZNSt12length_errorD1Ev",
+    "__ZNSt12out_of_rangeD1Ev",
+    "__ZNSt20bad_array_new_lengthC1Ev",
+    "__ZNSt20bad_array_new_lengthD1Ev",
+    "__ZNSt3__111__call_onceERVmPvPFvS2_E",
+    "__ZNSt3__111this_thread9sleep_forERKNS_6chrono8durationIxNS_5ratioILl1ELl1000000000EEEEE",
+    "__ZNSt3__112__next_primeEm",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE21__grow_by_and_replaceEmmmmmmPKc",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE5eraseEmm",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6appendEPKc",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6appendEPKcm",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6appendERKS5_mm",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6assignEPKc",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6assignEPKcm",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6assignEmc",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6insertEmPKc",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6insertEmPKcm",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6resizeEmc",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE7replaceEmmPKcm",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE7reserveEm",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE9__grow_byEmmmmmm",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE9push_backEc",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEC2ERKS5_mmRKS4_",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEED1Ev",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEaSERKS5_",
+    "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEaSEc",
+    "__ZNSt3__113basic_istreamIcNS_11char_traitsIcEEE4readEPcl",
+    "__ZNSt3__113basic_istreamIcNS_11char_traitsIcEEE5seekgExNS_8ios_base7seekdirE",
+    "__ZNSt3__113basic_istreamIcNS_11char_traitsIcEEE5tellgEv",
+    "__ZNSt3__113basic_istreamIcNS_11char_traitsIcEEED0Ev",
+    "__ZNSt3__113basic_istreamIcNS_11char_traitsIcEEED1Ev",
+    "__ZNSt3__113basic_istreamIcNS_11char_traitsIcEEED2Ev",
+    "__ZNSt3__113basic_istreamIcNS_11char_traitsIcEEErsERi",
+    "__ZNSt3__113basic_istreamIcNS_11char_traitsIcEEErsERj",
+    "__ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEE3putEc",
+    "__ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEE5flushEv",
+    "__ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEE5writeEPKcl",
+    "__ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEE6sentryC1ERS3_",
+    "__ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEE6sentryD1Ev",
+    "__ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEED0Ev",
+    "__ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEED1Ev",
+    "__ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEED2Ev",
+    "__ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEElsEb",
+    "__ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEElsEf",
+    "__ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEElsEi",
+    "__ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEElsEj",
+    "__ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEElsEm",
+    "__ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEElsEt",
+    "__ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEElsEy",
+    "__ZNSt3__113random_deviceC1ERKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEE",
+    "__ZNSt3__113random_deviceD1Ev",
+    "__ZNSt3__113random_deviceclEv",
+    "__ZNSt3__114basic_iostreamIcNS_11char_traitsIcEEED0Ev",
+    "__ZNSt3__114basic_iostreamIcNS_11char_traitsIcEEED1Ev",
+    "__ZNSt3__114basic_iostreamIcNS_11char_traitsIcEEED2Ev",
+    "__ZNSt3__115__thread_structC1Ev",
+    "__ZNSt3__115__thread_structD1Ev",
+    "__ZNSt3__115basic_streambufIcNS_11char_traitsIcEEE4syncEv",
+    "__ZNSt3__115basic_streambufIcNS_11char_traitsIcEEE5imbueERKNS_6localeE",
+    "__ZNSt3__115basic_streambufIcNS_11char_traitsIcEEE5uflowEv",
+    "__ZNSt3__115basic_streambufIcNS_11char_traitsIcEEE6setbufEPcl",
+    "__ZNSt3__115basic_streambufIcNS_11char_traitsIcEEE6xsgetnEPcl",
+    "__ZNSt3__115basic_streambufIcNS_11char_traitsIcEEE6xsputnEPKcl",
+    "__ZNSt3__115basic_streambufIcNS_11char_traitsIcEEE9showmanycEv",
+    "__ZNSt3__115recursive_mutex4lockEv",
+    "__ZNSt3__115recursive_mutex6unlockEv",
+    "__ZNSt3__115recursive_mutexC1Ev",
+    "__ZNSt3__115recursive_mutexD1Ev",
+    "__ZNSt3__118condition_variable10notify_allEv",
+    "__ZNSt3__118condition_variable10notify_oneEv",
+    "__ZNSt3__118condition_variable15__do_timed_waitERNS_11unique_lockINS_5mutexEEENS_6chrono10time_pointINS5_12system_clockENS5_8durationIxNS_5ratioILl1ELl1000000000EEEEEEE",
+    "__ZNSt3__118condition_variable4waitERNS_11unique_lockINS_5mutexEEE",
+    "__ZNSt3__118condition_variableD1Ev",
+    "__ZNSt3__119__shared_weak_count14__release_weakEv",
+    "__ZNSt3__119__shared_weak_count4lockEv",
+    "__ZNSt3__119__shared_weak_countD2Ev",
+    "__ZNSt3__119__thread_local_dataEv",
+    "__ZNSt3__120__throw_system_errorEiPKc",
+    "__ZNSt3__14stoiERKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEEPmi",
+    "__ZNSt3__15ctypeIcE2idE",
+    "__ZNSt3__15mutex4lockEv",
+    "__ZNSt3__15mutex6unlockEv",
+    "__ZNSt3__15mutex8try_lockEv",
+    "__ZNSt3__15mutexD1Ev",
+    "__ZNSt3__16__sortIRNS_6__lessIiiEEPiEEvT0_S5_T_",
+    "__ZNSt3__16chrono12steady_clock3nowEv",
+    "__ZNSt3__16chrono12system_clock3nowEv",
+    "__ZNSt3__16locale7classicEv",
+    "__ZNSt3__16localeC1ERKS0_",
+    "__ZNSt3__16localeC1Ev",
+    "__ZNSt3__16localeD1Ev",
+    "__ZNSt3__16localeaSERKS0_",
+    "__ZNSt3__16thread20hardware_concurrencyEv",
+    "__ZNSt3__16thread4joinEv",
+    "__ZNSt3__16threadD1Ev",
+    "__ZNSt3__17codecvtIcc11__mbstate_tE2idE",
+    "__ZNSt3__18ios_base4initEPv",
+    "__ZNSt3__18ios_base5clearEj",
+    "__ZNSt3__18ios_base5imbueERKNS_6localeE",
+    "__ZNSt3__19basic_iosIcNS_11char_traitsIcEEED2Ev",
+    "__ZNSt3__19to_stringEi",
+    "__ZNSt3__19to_stringEm",
+    "__ZNSt3__19to_stringEx",
+    "__ZNSt3__1plIcNS_11char_traitsIcEENS_9allocatorIcEEEENS_12basic_stringIT_T0_T1_EEPKS6_RKS9_",
+    "__ZNSt9exceptionD2Ev",
+    "__ZSt7nothrow",
+    "__ZSt9terminatev",
+    "__ZTISt12length_error",
+    "__ZTISt12out_of_range",
+    "__ZTISt20bad_array_new_length",
+    "__ZTISt9exception",
+    "__ZTVN10__cxxabiv117__class_type_infoE",
+    "__ZTVN10__cxxabiv120__si_class_type_infoE",
+    "__ZTVN10__cxxabiv121__vmi_class_type_infoE",
+    "__ZTVNSt3__115basic_streambufIcNS_11char_traitsIcEEEE",
+    "__ZTVSt12length_error",
+    "__ZTVSt12out_of_range",
+    "__ZThn16_NSt3__114basic_iostreamIcNS_11char_traitsIcEEED0Ev",
+    "__ZThn16_NSt3__114basic_iostreamIcNS_11char_traitsIcEEED1Ev",
+    "__ZTv0_n24_NSt3__113basic_istreamIcNS_11char_traitsIcEEED0Ev",
+    "__ZTv0_n24_NSt3__113basic_istreamIcNS_11char_traitsIcEEED1Ev",
+    "__ZTv0_n24_NSt3__113basic_ostreamIcNS_11char_traitsIcEEED0Ev",
+    "__ZTv0_n24_NSt3__113basic_ostreamIcNS_11char_traitsIcEEED1Ev",
+    "__ZTv0_n24_NSt3__114basic_iostreamIcNS_11char_traitsIcEEED0Ev",
+    "__ZTv0_n24_NSt3__114basic_iostreamIcNS_11char_traitsIcEEED1Ev",
+    "__ZdaPv",
+    "__ZdlPv",
+    "__Znam",
+    "__Znwm",
+    "___cxa_allocate_exception",
+    "___cxa_begin_catch",
+    "___cxa_end_catch",
+    "___cxa_free_exception",
+    "___cxa_get_exception_ptr",
+    "___cxa_guard_abort",
+    "___cxa_guard_acquire",
+    "___cxa_guard_release",
+    "___cxa_pure_virtual",
+    "___cxa_rethrow",
+    "___cxa_throw",
+    "___dynamic_cast",
+    "___gxx_personality_v0"
+   ]
+  },
+  "GameController": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [
+    "GCController",
+    "GCKeyboard",
+    "GCMouse",
+    "GCVirtualController",
+    "GCVirtualControllerConfiguration"
+   ],
+   "symbols": [
+    "_GCControllerDidConnectNotification",
+    "_GCControllerDidDisconnectNotification",
+    "_GCInputButtonA",
+    "_GCInputButtonB",
+    "_GCInputButtonMenu",
+    "_GCInputButtonOptions",
+    "_GCInputButtonX",
+    "_GCInputButtonY",
+    "_GCInputDirectionPad",
+    "_GCInputLeftShoulder",
+    "_GCInputLeftThumbstick",
+    "_GCInputLeftThumbstickButton",
+    "_GCInputLeftTrigger",
+    "_GCInputRightShoulder",
+    "_GCInputRightThumbstick",
+    "_GCInputRightThumbstickButton",
+    "_GCInputRightTrigger",
+    "_GCKeyCodeBackslash",
+    "_GCKeyCodeCapsLock",
+    "_GCKeyCodeCloseBracket",
+    "_GCKeyCodeComma",
+    "_GCKeyCodeDeleteForward",
+    "_GCKeyCodeDeleteOrBackspace",
+    "_GCKeyCodeDownArrow",
+    "_GCKeyCodeEnd",
+    "_GCKeyCodeEqualSign",
+    "_GCKeyCodeEscape",
+    "_GCKeyCodeF1",
+    "_GCKeyCodeF10",
+    "_GCKeyCodeF11",
+    "_GCKeyCodeF12",
+    "_GCKeyCodeF13",
+    "_GCKeyCodeF14",
+    "_GCKeyCodeF15",
+    "_GCKeyCodeF16",
+    "_GCKeyCodeF17",
+    "_GCKeyCodeF18",
+    "_GCKeyCodeF19",
+    "_GCKeyCodeF2",
+    "_GCKeyCodeF20",
+    "_GCKeyCodeF3",
+    "_GCKeyCodeF4",
+    "_GCKeyCodeF5",
+    "_GCKeyCodeF6",
+    "_GCKeyCodeF7",
+    "_GCKeyCodeF8",
+    "_GCKeyCodeF9",
+    "_GCKeyCodeGraveAccentAndTilde",
+    "_GCKeyCodeHome",
+    "_GCKeyCodeHyphen",
+    "_GCKeyCodeInsert",
+    "_GCKeyCodeKeyA",
+    "_GCKeyCodeKeyD",
+    "_GCKeyCodeKeyE",
+    "_GCKeyCodeKeyF",
+    "_GCKeyCodeKeyQ",
+    "_GCKeyCodeKeyS",
+    "_GCKeyCodeKeyW",
+    "_GCKeyCodeKeyZ",
+    "_GCKeyCodeKeypad0",
+    "_GCKeyCodeKeypad1",
+    "_GCKeyCodeKeypad2",
+    "_GCKeyCodeKeypad3",
+    "_GCKeyCodeKeypad4",
+    "_GCKeyCodeKeypad5",
+    "_GCKeyCodeKeypad6",
+    "_GCKeyCodeKeypad7",
+    "_GCKeyCodeKeypad8",
+    "_GCKeyCodeKeypad9",
+    "_GCKeyCodeKeypadAsterisk",
+    "_GCKeyCodeKeypadEnter",
+    "_GCKeyCodeKeypadEqualSign",
+    "_GCKeyCodeKeypadHyphen",
+    "_GCKeyCodeKeypadPeriod",
+    "_GCKeyCodeKeypadPlus",
+    "_GCKeyCodeKeypadSlash",
+    "_GCKeyCodeLeftAlt",
+    "_GCKeyCodeLeftArrow",
+    "_GCKeyCodeLeftControl",
+    "_GCKeyCodeLeftGUI",
+    "_GCKeyCodeLeftShift",
+    "_GCKeyCodeNine",
+    "_GCKeyCodeNonUSBackslash",
+    "_GCKeyCodeNonUSPound",
+    "_GCKeyCodeOne",
+    "_GCKeyCodeOpenBracket",
+    "_GCKeyCodePageDown",
+    "_GCKeyCodePageUp",
+    "_GCKeyCodePeriod",
+    "_GCKeyCodeQuote",
+    "_GCKeyCodeReturnOrEnter",
+    "_GCKeyCodeRightAlt",
+    "_GCKeyCodeRightArrow",
+    "_GCKeyCodeRightControl",
+    "_GCKeyCodeRightGUI",
+    "_GCKeyCodeRightShift",
+    "_GCKeyCodeSemicolon",
+    "_GCKeyCodeSlash",
+    "_GCKeyCodeSpacebar",
+    "_GCKeyCodeTab",
+    "_GCKeyCodeUpArrow",
+    "_GCKeyCodeZero",
+    "_GCKeyboardDidConnectNotification",
+    "_GCMouseDidConnectNotification"
+   ]
+  },
+  "CoreFoundation": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [
+    "NSArray",
+    "NSConstantArray",
+    "NSConstantDictionary",
+    "NSData",
+    "NSDate",
+    "NSDictionary",
+    "NSLocale",
+    "NSMutableArray",
+    "NSMutableData",
+    "NSMutableDictionary",
+    "NSMutableOrderedSet",
+    "NSMutableSet",
+    "NSNull",
+    "NSRunLoop",
+    "NSSet",
+    "NSTimer",
+    "NSURL",
+    "NSUserDefaults"
+   ],
+   "symbols": [
+    "_CFAbsoluteTimeGetCurrent",
+    "_CFArrayAppendValue",
+    "_CFArrayCreateMutable",
+    "_CFArrayGetCount",
+    "_CFArrayGetTypeID",
+    "_CFArrayGetValueAtIndex",
+    "_CFBooleanGetTypeID",
+    "_CFBundleGetFunctionPointerForName",
+    "_CFDataCreate",
+    "_CFDataGetBytePtr",
+    "_CFDataGetLength",
+    "_CFDictionaryCreate",
+    "_CFDictionaryCreateMutable",
+    "_CFDictionaryGetValue",
+    "_CFDictionarySetValue",
+    "_CFEqual",
+    "_CFGetTypeID",
+    "_CFNumberCreate",
+    "_CFNumberGetValue",
+    "_CFNumberIsFloatType",
+    "_CFPropertyListCreateDeepCopy",
+    "_CFReadStreamClose",
+    "_CFReadStreamCopyProperty",
+    "_CFReadStreamGetStatus",
+    "_CFReadStreamHasBytesAvailable",
+    "_CFReadStreamOpen",
+    "_CFReadStreamRead",
+    "_CFReadStreamScheduleWithRunLoop",
+    "_CFReadStreamSetProperty",
+    "_CFRelease",
+    "_CFRetain",
+    "_CFRunLoopGetMain",
+    "_CFStringCreateWithCString",
+    "_CFStringCreateWithFormat",
+    "_CFStringGetCString",
+    "_CFStringGetLength",
+    "_CFStringGetMaximumSizeForEncoding",
+    "_CFStringGetTypeID",
+    "_CFURLCopyPassword",
+    "_CFURLCopyUserName",
+    "_CFURLCreateWithBytes",
+    "_NSDefaultRunLoopMode",
+    "_NSLocaleCountryCode",
+    "_NSRunLoopCommonModes",
+    "_NSURLContentModificationDateKey",
+    "_OBJC_EHTYPE_$_NSException",
+    "___CFConstantStringClassReference",
+    "___NSArray0__struct",
+    "___NSDictionary0__",
+    "___NSDictionary0__struct",
+    "___kCFBooleanFalse",
+    "___kCFBooleanTrue",
+    "_kCFAllocatorDefault",
+    "_kCFBooleanFalse",
+    "_kCFBooleanTrue",
+    "_kCFRunLoopCommonModes",
+    "_kCFStreamPropertySocketNativeHandle",
+    "_kCFTypeArrayCallBacks",
+    "_kCFTypeDictionaryKeyCallBacks",
+    "_kCFTypeDictionaryValueCallBacks"
+   ]
+  },
+  "libobjc": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [
+    "NSObject"
+   ],
+   "symbols": [
+    "___objc_personality_v0",
+    "__objc_empty_cache",
+    "_class_addMethod",
+    "_class_copyIvarList",
+    "_class_copyMethodList",
+    "_class_getClassMethod",
+    "_class_getImageName",
+    "_class_getInstanceMethod",
+    "_class_getInstanceVariable",
+    "_class_getMethodImplementation",
+    "_class_getName",
+    "_class_getSuperclass",
+    "_class_replaceMethod",
+    "_imp_implementationWithBlock",
+    "_ivar_getName",
+    "_ivar_getOffset",
+    "_ivar_getTypeEncoding",
+    "_method_getImplementation",
+    "_method_getName",
+    "_method_getNumberOfArguments",
+    "_method_getTypeEncoding",
+    "_method_setImplementation",
+    "_objc_alloc",
+    "_objc_allocWithZone",
+    "_objc_alloc_init",
+    "_objc_allocateClassPair",
+    "_objc_autorelease",
+    "_objc_autoreleasePoolPop",
+    "_objc_autoreleasePoolPush",
+    "_objc_autoreleaseReturnValue",
+    "_objc_begin_catch",
+    "_objc_copyClassList",
+    "_objc_copyWeak",
+    "_objc_destroyWeak",
+    "_objc_end_catch",
+    "_objc_enumerationMutation",
+    "_objc_exception_rethrow",
+    "_objc_getAssociatedObject",
+    "_objc_getClass",
+    "_objc_getMetaClass",
+    "_objc_getProperty",
+    "_objc_initWeak",
+    "_objc_loadWeakRetained",
+    "_objc_lookUpClass",
+    "_objc_msgSend",
+    "_objc_msgSendSuper2",
+    "_objc_opt_class",
+    "_objc_opt_isKindOfClass",
+    "_objc_opt_new",
+    "_objc_opt_respondsToSelector",
+    "_objc_registerClassPair",
+    "_objc_release",
+    "_objc_retain",
+    "_objc_retainAutorelease",
+    "_objc_retainAutoreleaseReturnValue",
+    "_objc_retainAutoreleasedReturnValue",
+    "_objc_retainBlock",
+    "_objc_setAssociatedObject",
+    "_objc_setProperty_atomic",
+    "_objc_setProperty_nonatomic",
+    "_objc_setProperty_nonatomic_copy",
+    "_objc_storeStrong",
+    "_objc_storeWeak",
+    "_objc_sync_enter",
+    "_objc_sync_exit",
+    "_objc_unsafeClaimAutoreleasedReturnValue",
+    "_object_getClass",
+    "_sel_getName"
+   ]
+  },
+  "libswiftCore": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [],
+   "symbols": [
+    "_$s15_ObjectiveCTypes01_A11CBridgeablePTl",
+    "_$s8RawValueSYTl",
+    "_$sBi64_WV",
+    "_$sSH13_rawHashValue4seedS2i_tFTq",
+    "_$sSH4hash4intoys6HasherVz_tFTq",
+    "_$sSH9hashValueSivgTq",
+    "_$sSHMp",
+    "_$sSHSQTb",
+    "_$sSL1goiySbx_xtFZTq",
+    "_$sSL1loiySbx_xtFZTj",
+    "_$sSL1loiySbx_xtFZTq",
+    "_$sSL2geoiySbx_xtFZTq",
+    "_$sSL2leoiySbx_xtFZTq",
+    "_$sSLMp",
+    "_$sSLSQTb",
+    "_$sSLsE1goiySbx_xtFZ",
+    "_$sSLsE2geoiySbx_xtFZ",
+    "_$sSLsE2leoiySbx_xtFZ",
+    "_$sSQ2eeoiySbx_xtFZTq",
+    "_$sSQMp",
+    "_$sSS21_builtinStringLiteral17utf8CodeUnitCount7isASCIISSBp_BwBi1_tcfC",
+    "_$sSS9hasPrefixySbSSF",
+    "_$sSY8rawValue03RawB0QzvgTj",
+    "_$sSY8rawValue03RawB0QzvgTq",
+    "_$sSY8rawValuexSg03RawB0Qz_tcfCTj",
+    "_$sSY8rawValuexSg03RawB0Qz_tcfCTq",
+    "_$sSYMp",
+    "_$sSYTL",
+    "_$sSaMa",
+    "_$sSiN",
+    "_$sSjMp",
+    "_$sSqMa",
+    "_$ss17_assertionFailure__4file4line5flagss5NeverOs12StaticStringV_A2HSus6UInt32VtF",
+    "_$ss18AdditiveArithmeticP1poiyxx_xtFZTj",
+    "_$ss18AdditiveArithmeticP1soiyxx_xtFZTj",
+    "_$ss20_SwiftNewtypeWrapperMp",
+    "_$ss20_SwiftNewtypeWrapperPSYTb",
+    "_$ss20_SwiftNewtypeWrapperPs35_HasCustomAnyHashableRepresentationTb",
+    "_$ss20_SwiftNewtypeWrapperPsSHRzSH8RawValueSYRpzrlE04hashE0Sivg",
+    "_$ss20_SwiftNewtypeWrapperPsSHRzSH8RawValueSYRpzrlE08_rawHashE04seedS2i_tF",
+    "_$ss20_SwiftNewtypeWrapperPsSHRzSH8RawValueSYRpzrlE20_toCustomAnyHashables0hI0VSgyF",
+    "_$ss20_SwiftNewtypeWrapperPsSHRzSH8RawValueSYRpzrlE4hash4intoys6HasherVz_tF",
+    "_$ss20_SwiftNewtypeWrapperPss21_ObjectiveCBridgeable8RawValueRpzrlE016_forceBridgeFromD1C_6resultyAD_01_D5CTypeQZ_xSgztFZ",
+    "_$ss20_SwiftNewtypeWrapperPss21_ObjectiveCBridgeable8RawValueRpzrlE024_conditionallyBridgeFromD1C_6resultSbAD_01_D5CTypeQZ_xSgztFZ",
+    "_$ss20_SwiftNewtypeWrapperPss21_ObjectiveCBridgeable8RawValueRpzrlE026_unconditionallyBridgeFromD1CyxAD_01_D5CTypeQZSgFZ",
+    "_$ss20_SwiftNewtypeWrapperPss21_ObjectiveCBridgeable8RawValueRpzrlE09_bridgeToD1CAD_01_D5CTypeQZyF",
+    "_$ss21_ObjectiveCBridgeableMp",
+    "_$ss21_ObjectiveCBridgeableP016_forceBridgeFromA1C_6resulty01_A5CTypeQz_xSgztFZTq",
+    "_$ss21_ObjectiveCBridgeableP024_conditionallyBridgeFromA1C_6resultSb01_A5CTypeQz_xSgztFZTq",
+    "_$ss21_ObjectiveCBridgeableP026_unconditionallyBridgeFromA1Cyx01_A5CTypeQzSgFZTq",
+    "_$ss21_ObjectiveCBridgeableP09_bridgeToA1C01_A5CTypeQzyFTq",
+    "_$ss27_allocateUninitializedArrayySayxG_BptBwlF",
+    "_$ss27_bridgeAnythingToObjectiveCyyXlxlF",
+    "_$ss2eeoiySbx_xtSYRzSQ8RawValueRpzlF",
+    "_$ss35_HasCustomAnyHashableRepresentationMp",
+    "_$ss35_HasCustomAnyHashableRepresentationP03_tobcD0s0cD0VSgyFTq",
+    "__swift_stdlib_operatingSystemVersion",
+    "_swift_bridgeObjectRelease",
+    "_swift_bridgeObjectRetain",
+    "_swift_errorRetain",
+    "_swift_getAssociatedConformanceWitness",
+    "_swift_getAssociatedTypeWitness",
+    "_swift_getForeignTypeMetadata",
+    "_swift_getObjCClassFromMetadata",
+    "_swift_getWitnessTable",
+    "_swift_once",
+    "_swift_release",
+    "_swift_unknownObjectRelease"
+   ]
+  },
+  "Foundation": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [
+    "NSAssertionHandler",
+    "NSAutoreleasePool",
+    "NSBundle",
+    "NSCharacterSet",
+    "NSConstantDoubleNumber",
+    "NSConstantIntegerNumber",
+    "NSError",
+    "NSFileCoordinator",
+    "NSFileManager",
+    "NSFileVersion",
+    "NSHashTable",
+    "NSJSONSerialization",
+    "NSKeyedUnarchiver",
+    "NSMetadataQuery",
+    "NSMutableString",
+    "NSMutableURLRequest",
+    "NSNotification",
+    "NSNotificationCenter",
+    "NSNumber",
+    "NSNumberFormatter",
+    "NSOperationQueue",
+    "NSPredicate",
+    "NSProcessInfo",
+    "NSProgress",
+    "NSPropertyListSerialization",
+    "NSString",
+    "NSThread",
+    "NSURLSession",
+    "NSURLSessionConfiguration",
+    "NSUUID",
+    "NSValue"
+   ],
+   "symbols": [
+    "_NSClassFromString",
+    "_NSCocoaErrorDomain",
+    "_NSHomeDirectory",
+    "_NSLocalizedDescriptionKey",
+    "_NSLog",
+    "_NSMetadataItemFSNameKey",
+    "_NSMetadataQueryDidFinishGatheringNotification",
+    "_NSMetadataQueryUbiquitousDataScope",
+    "_NSPointInRect",
+    "_NSSearchPathForDirectoriesInDomains",
+    "_NSSelectorFromString",
+    "_NSSetUncaughtExceptionHandler",
+    "_NSStringFromClass",
+    "_NSStringFromRect",
+    "_NSStringFromSelector",
+    "_NSTemporaryDirectory",
+    "_NSUbiquityIdentityDidChangeNotification",
+    "_NSZeroRect"
+   ]
+  },
+  "libPearOpenGLES": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [
+    "EAGLContext"
+   ],
+   "symbols": [
+    "_glBindFramebufferOES",
+    "_glBindRenderbufferOES",
+    "_glBindTexture",
+    "_glBlendFunc",
+    "_glCheckFramebufferStatusOES",
+    "_glClear",
+    "_glClearColor",
+    "_glColor4ub",
+    "_glColorPointer",
+    "_glDeleteFramebuffersOES",
+    "_glDeleteRenderbuffersOES",
+    "_glDeleteTextures",
+    "_glDisable",
+    "_glDisableClientState",
+    "_glDrawArrays",
+    "_glEnable",
+    "_glEnableClientState",
+    "_glFinish",
+    "_glFramebufferRenderbufferOES",
+    "_glFramebufferTexture2DOES",
+    "_glGenFramebuffersOES",
+    "_glGenRenderbuffersOES",
+    "_glGenTextures",
+    "_glGetError",
+    "_glGetFloatv",
+    "_glGetIntegerv",
+    "_glGetRenderbufferParameterivOES",
+    "_glGetString",
+    "_glLoadIdentity",
+    "_glLoadMatrixf",
+    "_glMatrixMode",
+    "_glOrthof",
+    "_glPixelStorei",
+    "_glPopMatrix",
+    "_glPushMatrix",
+    "_glReadPixels",
+    "_glShadeModel",
+    "_glTexCoordPointer",
+    "_glTexEnvf",
+    "_glTexImage2D",
+    "_glTexParameteri",
+    "_glTexSubImage2D",
+    "_glVertexPointer",
+    "_glViewport",
+    "_kEAGLColorFormatRGBA8",
+    "_kEAGLDrawablePropertyColorFormat",
+    "_kEAGLDrawablePropertyRetainedBacking"
+   ]
+  },
+  "Security": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [],
+   "symbols": [
+    "_SecIdentityCopyCertificate",
+    "_SecIdentityCopyPrivateKey",
+    "_SecItemAdd",
+    "_SecItemCopyMatching",
+    "_SecItemDelete",
+    "_SecItemUpdate",
+    "_SecKeyCopyAttributes",
+    "_SecKeyCopyExternalRepresentation",
+    "_SecKeyCreateRandomKey",
+    "_SecKeyCreateWithData",
+    "_SecKeyGeneratePair",
+    "_SecKeyGetTypeID",
+    "_kSecAttrAccessControl",
+    "_kSecAttrAccessGroup",
+    "_kSecAttrApplicationTag",
+    "_kSecAttrIsPermanent",
+    "_kSecAttrKeyClass",
+    "_kSecAttrKeyClassPrivate",
+    "_kSecAttrKeyClassPublic",
+    "_kSecAttrKeySizeInBits",
+    "_kSecAttrKeyType",
+    "_kSecAttrSynchronizable",
+    "_kSecAttrSynchronizableAny",
+    "_kSecAttrTokenID",
+    "_kSecClass",
+    "_kSecClassKey",
+    "_kSecMatchLimit",
+    "_kSecMatchLimitAll",
+    "_kSecPrivateKeyAttrs",
+    "_kSecPublicKeyAttrs",
+    "_kSecReturnAttributes",
+    "_kSecReturnData",
+    "_kSecReturnPersistentRef",
+    "_kSecReturnRef",
+    "_kSecUseAuthenticationContext",
+    "_kSecUseAuthenticationUI",
+    "_kSecUseDataProtectionKeychain",
+    "_kSecValueData",
+    "_kSecValuePersistentRef",
+    "_kSecValueRef"
+   ]
+  },
+  "UIKit": {
+   "kind": "iOS-only",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [
+    "UIAccelerometer",
+    "UIActivityViewController",
+    "UIAlertView",
+    "UIApplication",
+    "UIColor",
+    "UIControl",
+    "UIDevice",
+    "UIDocument",
+    "UIEvent",
+    "UIImage",
+    "UILongPressGestureRecognizer",
+    "UIScreen",
+    "UIScrollView",
+    "UITextField",
+    "UITouch",
+    "UIView",
+    "UIViewController",
+    "UIWindow",
+    "UIWindowScene"
+   ],
+   "symbols": [
+    "_NSStringFromCGAffineTransform",
+    "_NSStringFromCGPoint",
+    "_NSStringFromCGRect",
+    "_NSStringFromCGSize",
+    "_UIActivityTypeAddToReadingList",
+    "_UIActivityTypeAirDrop",
+    "_UIActivityTypeAssignToContact",
+    "_UIActivityTypeMessage",
+    "_UIActivityTypePrint",
+    "_UIActivityTypeSaveToCameraRoll",
+    "_UIApplicationDidBecomeActiveNotification",
+    "_UIApplicationDidChangeStatusBarOrientationNotification",
+    "_UIApplicationDidFinishLaunchingNotification",
+    "_UIApplicationMain",
+    "_UIApplicationWillResignActiveNotification",
+    "_UIApplicationWillTerminateNotification",
+    "_UIDeviceOrientationDidChangeNotification",
+    "_UIKeyboardWillHideNotification",
+    "_UISceneDidActivateNotification",
+    "_UIWindowDidBecomeKeyNotification"
+   ]
+  },
+  "AudioToolbox": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [],
+   "symbols": [
+    "_AudioComponentFindNext",
+    "_AudioComponentGetDescription",
+    "_AudioComponentInstanceDispose",
+    "_AudioComponentInstanceGetComponent",
+    "_AudioComponentInstanceNew",
+    "_AudioConverterDispose",
+    "_AudioConverterFillComplexBuffer",
+    "_AudioConverterGetProperty",
+    "_AudioConverterNew",
+    "_AudioConverterReset",
+    "_AudioConverterSetProperty",
+    "_AudioFileClose",
+    "_AudioFileGetGlobalInfo",
+    "_AudioFileGetProperty",
+    "_AudioFileGetPropertyInfo",
+    "_AudioFileOpenWithCallbacks",
+    "_AudioFileReadPackets",
+    "_AudioFormatGetProperty",
+    "_AudioOutputUnitStart",
+    "_AudioOutputUnitStop",
+    "_AudioSessionInitialize",
+    "_AudioSessionSetActive",
+    "_AudioSessionSetProperty",
+    "_AudioUnitAddPropertyListener",
+    "_AudioUnitGetProperty",
+    "_AudioUnitInitialize",
+    "_AudioUnitSetProperty",
+    "_AudioUnitUninitialize",
+    "_ExtAudioFileDispose",
+    "_ExtAudioFileGetProperty",
+    "_ExtAudioFileOpenURL",
+    "_ExtAudioFileRead",
+    "_ExtAudioFileSeek",
+    "_ExtAudioFileSetProperty"
+   ]
+  },
+  "CoreGraphics": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [],
+   "symbols": [
+    "_CGAssociateMouseAndMouseCursorPosition",
+    "_CGDisplayHideCursor",
+    "_CGDisplayShowCursor",
+    "_CGEventCreate",
+    "_CGEventCreateMouseEvent",
+    "_CGEventGetLocation",
+    "_CGEventPost",
+    "_CGEventPostToPid",
+    "_CGMainDisplayID",
+    "_CGPointZero",
+    "_CGRectContainsPoint",
+    "_CGRectEqualToRect",
+    "_CGRectGetMaxX",
+    "_CGRectGetMaxY",
+    "_CGRectGetMidX",
+    "_CGRectGetMidY",
+    "_CGRectGetMinX",
+    "_CGRectGetMinY",
+    "_CGRectInset",
+    "_CGRectIntersection",
+    "_CGRectIsEmpty",
+    "_CGRectIsInfinite",
+    "_CGRectIsNull",
+    "_CGRectZero",
+    "_CGSizeZero",
+    "_CGWarpMouseCursorPosition",
+    "_CGWindowListCopyWindowInfo",
+    "_kCGWindowBounds",
+    "_kCGWindowOwnerPID"
+   ]
+  },
+  "CFNetwork": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [],
+   "symbols": [
+    "_CFHTTPMessageAddAuthentication",
+    "_CFHTTPMessageAppendBytes",
+    "_CFHTTPMessageCopySerializedMessage",
+    "_CFHTTPMessageCreateRequest",
+    "_CFHTTPMessageSetHeaderFieldValue",
+    "_CFNetworkCopySystemProxySettings",
+    "_CFReadStreamCreateForHTTPRequest",
+    "_CFReadStreamCreateWithFTPURL",
+    "_kCFHTTPAuthenticationSchemeBasic",
+    "_kCFHTTPVersion1_0",
+    "_kCFStreamPropertyFTPFetchResourceInfo",
+    "_kCFStreamPropertyFTPFileTransferOffset",
+    "_kCFStreamPropertyFTPProxy",
+    "_kCFStreamPropertyFTPResourceSize",
+    "_kCFStreamPropertyFTPUsePassiveMode",
+    "_kCFStreamPropertyHTTPProxy",
+    "_kCFStreamPropertyHTTPResponseHeader",
+    "_kCFStreamPropertySSLSettings",
+    "_kCFStreamSSLValidatesCertificateChain"
+   ]
+  },
+  "QuartzCore": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [
+    "CADisplayLink",
+    "CAEAGLLayer",
+    "CALayer",
+    "CAMetalLayer",
+    "CATransaction"
+   ],
+   "symbols": [
+    "_CACurrentMediaTime",
+    "_CATransform3DIsIdentity",
+    "_CATransform3DMakeScale",
+    "_kCAFilterLinear",
+    "_kCAGravityResize"
+   ]
+  },
+  "<flat-namespace>": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [],
+   "symbols": [
+    "_AudioObjectGetPropertyData",
+    "_AudioObjectSetPropertyData",
+    "_IOPSCopyPowerSourcesInfo",
+    "_IORegistryEntryCreateCFProperties",
+    "_IORegistryEntryCreateCFProperty",
+    "_IORegistryEntrySearchCFProperty",
+    "_IOServiceGetMatchingServices"
+   ]
+  },
+  "<weak-def-coalesce>": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [],
+   "symbols": [
+    "__ZdaPv",
+    "__ZdlPv",
+    "__ZdlPvm",
+    "__Znam",
+    "__ZnamRKSt9nothrow_t",
+    "__Znwm",
+    "__ZnwmRKSt9nothrow_t"
+   ]
+  },
+  "libswiftFoundation": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [],
+   "symbols": [
+    "_$s10Foundation9IndexPathV7indexesACSaySiG_tcfC",
+    "_$s10Foundation9IndexPathVyS2icig",
+    "_$s12CoreGraphics7CGFloatVs21_ObjectiveCBridgeable10FoundationMc",
+    "_$sSS10FoundationE19_bridgeToObjectiveCSo8NSStringCyF",
+    "_$sSS10FoundationE36_unconditionallyBridgeFromObjectiveCySSSo8NSStringCSgFZ"
+   ]
+  },
+  "IOKit": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [],
+   "symbols": [
+    "_IOObjectRelease",
+    "_IORegistryEntryCreateCFProperty",
+    "_IOServiceGetMatchingService",
+    "_IOServiceMatching",
+    "_kIOMainPortDefault"
+   ]
+  },
+  "IOSurface": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [],
+   "symbols": [
+    "_IOSurfaceGetBytesPerElementOfPlane",
+    "_IOSurfaceGetHeightOfPlane",
+    "_IOSurfaceGetPixelFormat",
+    "_IOSurfaceGetPlaneCount",
+    "_IOSurfaceGetWidthOfPlane"
+   ]
+  },
+  "StoreKit": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [
+    "SKPayment",
+    "SKPaymentQueue",
+    "SKProductsRequest"
+   ],
+   "symbols": [
+    "_SKErrorDomain"
+   ]
+  },
+  "Metal": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [
+    "MTLRenderPassDescriptor",
+    "MTLTextureDescriptor"
+   ],
+   "symbols": [
+    "_MTLCreateSystemDefaultDevice"
+   ]
+  },
+  "SystemConfiguration": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [],
+   "symbols": [
+    "_SCNetworkReachabilityCreateWithAddress",
+    "_SCNetworkReachabilityGetFlags"
+   ]
+  },
+  "libPearRuntime": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [],
+   "symbols": [
+    "__Z14PearANGLETracePKcz",
+    "__Z19PearANGLEGameSymbolPKc"
+   ]
+  },
+  "AppKit": {
+   "kind": "macOS-has-it",
+   "apps": [
+    "com.gobit.burgershop2.premium.app"
+   ],
+   "classes": [],
+   "symbols": [
+    "_NSBeep"
+   ]
+  }
+ },
+ "selectors": {
+  ".cxx_construct": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  ".cxx_destruct": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "API": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "CGColor": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "GPUEndTime": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "GPUStartTime": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "HTTPAdditionalHeaders": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "HTTPMethod": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "IOBufferDuration": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "JSONObjectWithData:options:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "JSONObjectWithStream:options:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "ReferenceMe": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T#,R": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"CALayer\",&,N,V_layer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"NSError\",&,V_lastError": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"NSMutableArray\",&,N,V_members": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"NSMutableDictionary\",&,N,V_storage": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"NSString\",?,R,C": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"NSString\",C,N,V_debugLabel": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"NSString\",C,N,V_key": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"NSString\",R,C": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"PearANGLEContext\",R,N,V_angleContext": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"PearANGLESharegroup\",&,N,V_angleGroup": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"PearANGLESharegroup\",R,N,V_sharegroup": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"PearEAGLContext\",&,N,V_context": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"PearEAGLSharegroup\",R,N,V_sharegroup": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"PearLegacyTouch\",&,N,V_pearTouch": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"UIView\",W,N,V_pearView": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"UIWindow\",&,N,Vwindow": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"UIWindow\",?,&,N": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@\"UIWindow\",W,N,V_pearWindow": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T@,W,N,V_delegate": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "TB,N,GisMultiThreaded,V_multiThreaded": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "TB,N,GisPaused,V_paused": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "TB,N,V_enableSetNeedsDisplay": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "TB,N,V_pauseOnWillResignActive": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "TB,N,V_reportedPresentation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "TB,N,V_resumeOnDidBecomeActive": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "TB,N,V_retained": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "TB,R,N": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "TB,V_needsReallocation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "TB,V_sharedAcrossThreads": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "TI,N,V_framebuffer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "TQ,N,V_generation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "TQ,R": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "TQ,R,N": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "TQ,R,N,V_API": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Td,N,V_pearTimestamp": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Td,N,V_radius": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Td,N,V_sensitivity": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Td,N,V_swipeDuration": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Td,R,N,V_timeSinceFirstResume": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Td,R,N,V_timeSinceLastDraw": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Td,R,N,V_timeSinceLastResume": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Td,R,N,V_timeSinceLastUpdate": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Tq,N,V_drawableColorFormat": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Tq,N,V_drawableDepthFormat": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Tq,N,V_drawableMultisample": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Tq,N,V_drawableStencilFormat": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Tq,N,V_kind": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Tq,N,V_pearPhase": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Tq,N,V_preferredFramesPerSecond": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Tq,N,V_source": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Tq,N,V_version": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Tq,R,N": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Tq,R,N,V_clientVersion": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "Tq,R,N,V_framesDisplayed": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T{?={CGRect={CGPoint=dd}{CGSize=dd}}{CGSize=dd}dQ},N,V_geometry": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T{CGPoint=dd},N,V_pearPoint": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T{CGPoint=dd},N,V_pearPrevious": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T{CGPoint=dd},N,V_point": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T{CGPoint=dd},N,V_swipeFrom": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T{CGPoint=dd},N,V_swipeTo": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "T{CGRect={CGPoint=dd}{CGSize=dd}},N,V_region": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "URL": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "URLForUbiquityContainerIdentifier:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "URLWithString:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "URLWithString:relativeToURL:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "UTF8String": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "UUID": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "UUIDString": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_API": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_allocatedPixels": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_angleContext": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_angleGroup": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_clientVersion": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_color": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_config": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_context": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_debugLabel": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_debugMessagesInstalled": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_delegate": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_depth": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_displayScheduled": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_drawableBounds": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_drawableColorFormat": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_drawableDepthFormat": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_drawableLayer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_drawableMultisample": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_drawableScale": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_drawableStencilFormat": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_enableSetNeedsDisplay": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_firstResume": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_framebuffer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_framesDisplayed": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_generation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_geometry": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_hasOwner": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_height": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_key": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_kind": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_lastDraw": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_lastError": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_lastResume": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_lastUpdate": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_layer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_link": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_members": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_multiThreaded": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_needsReallocation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_observers": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_ownerThread": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_pauseOnWillResignActive": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_paused": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_pearPhase": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_pearPoint": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_pearPrevious": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_pearTimestamp": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_pearTouch": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_pearView": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_pearWindow": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_point": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_preferredFramesPerSecond": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_radius": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_region": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_reportedPresentation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_resumeOnDidBecomeActive": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_retained": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_sensitivity": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_serializedThreadSharing": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_sharedAcrossThreads": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_sharegroup": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_source": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_storage": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_surface": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_swipeDuration": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_swipeFrom": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_swipeTo": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_threadBindings": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_timeSinceFirstResume": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_timeSinceLastDraw": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_timeSinceLastResume": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_timeSinceLastUpdate": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_version": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "_width": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "absoluteString": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "acceleration": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "accelerometer:didAccelerate:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "accelerometerData": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "acceptDrawableLayer:fromOtherThreadWithError:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "acceptShareMetadata:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "accountStatusWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "activationState": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "activeProcessorCount": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "activityViewController:dataTypeIdentifierForActivityType:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "activityViewController:itemForActivityType:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "activityViewController:subjectForActivityType:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "activityViewController:thumbnailImageForActivityType:suggestedSize:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "activityViewControllerLinkMetadata:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "activityViewControllerPlaceholderItem:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "activityViewControllerShareRecipients:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "adapterError:message:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "addCompletedHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "addEntriesFromDictionary:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "addGestureRecognizer:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "addObject:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "addObjectsFromArray:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "addObserver:selector:name:object:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "addObserverForName:object:queue:usingBlock:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "addOperation:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "addOperationWithBlock:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "addPayment:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "addScheduledHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "addSublayer:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "addSubview:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "addToRunLoop:forMode:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "addTransactionObserver:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "addUserScript:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "advertisingIdentifier": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "alertControllerWithTitle:message:preferredStyle:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "alertView:clickedButtonAtIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "alertView:didDismissWithButtonIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "alertView:willDismissWithButtonIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "alertViewCancel:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "alertViewShouldEnableFirstOtherButton:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "alias": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "allHTTPHeaderFields": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "allKeys": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "allTouches": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "allValues": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "alloc": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "allocateBoundRenderbuffer:fromLayer:colorFormat:retainedBacking:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "alpha": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "anchorPoint": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "angleContext": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "angleGroup": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "anyObject": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "appendData:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "appendFormat:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "appendString:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:configurationForConnectingSceneSession:options:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:continueUserActivity:restorationHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:didChangeStatusBarFrame:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:didChangeStatusBarOrientation:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:didDecodeRestorableStateWithCoder:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:didDiscardSceneSessions:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:didFailToContinueUserActivityWithType:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:didFailToRegisterForRemoteNotificationsWithError:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:didFinishLaunchingWithOptions:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:didReceiveLocalNotification:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:didReceiveRemoteNotification:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:didReceiveRemoteNotification:fetchCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:didRegisterForRemoteNotificationsWithDeviceToken:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:didRegisterUserNotificationSettings:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:didUpdateUserActivity:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:handleActionWithIdentifier:forLocalNotification:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:handleActionWithIdentifier:forLocalNotification:withResponseInfo:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:handleActionWithIdentifier:forRemoteNotification:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:handleActionWithIdentifier:forRemoteNotification:withResponseInfo:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:handleEventsForBackgroundURLSession:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:handleIntent:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:handleOpenURL:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:handleWatchKitExtensionRequest:reply:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:handlerForIntent:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:openURL:options:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:openURL:sourceApplication:annotation:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:performActionForShortcutItem:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:performFetchWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:shouldAllowExtensionPointIdentifier:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:shouldRestoreApplicationState:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:shouldRestoreSecureApplicationState:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:shouldSaveApplicationState:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:shouldSaveSecureApplicationState:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:supportedInterfaceOrientationsForWindow:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:userDidAcceptCloudKitShareWithMetadata:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:viewControllerWithRestorationIdentifierPath:coder:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:willChangeStatusBarFrame:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:willChangeStatusBarOrientation:duration:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:willContinueUserActivityWithType:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:willEncodeRestorableStateWithCoder:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "application:willFinishLaunchingWithOptions:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "applicationDidBecomeActive:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "applicationDidEnterBackground:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "applicationDidFinishLaunching:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "applicationDidReceiveMemoryWarning:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "applicationProtectedDataDidBecomeAvailable:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "applicationProtectedDataWillBecomeUnavailable:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "applicationShouldAutomaticallyLocalizeKeyCommands:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "applicationShouldRequestHealthAuthorization:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "applicationSignificantTimeChange:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "applicationState": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "applicationWillEnterForeground:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "applicationWillResignActive:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "applicationWillTerminate:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "areProgrammableSamplePositionsSupported": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "areRasterOrderGroupsSupported": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "array": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "arrayLength": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "arrayWithCapacity:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "arrayWithObject:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "arrayWithObjects:count:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "attestKey:clientDataHash:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "attributes": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "authenticateHandler": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "authenticateWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "authenticated": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "autorelease": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "batteryLevel": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "batteryState": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "becomeFirstResponder": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "begin": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "beginAccessingResourcesWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "beginActivityWithOptions:reason:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "beginBackgroundTaskWithExpirationHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "beginBackgroundTaskWithName:expirationHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "bindDrawable": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "bindDrawableLayer:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "biometryType": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "blackColor": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "blitCommandEncoder": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "boolValue": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "bootstrap": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "bounds": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "bundle": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "bundleIdentifier": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "bundlePath": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "bundleWithPath:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "buttonA": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "buttonB": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "buttonMenu": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "buttonNumber": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "buttonOptions": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "buttonX": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "buttonY": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "bytes": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "cStringUsingEncoding:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "callStackSymbols": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "canBeConvertedToEncoding:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "canEvaluatePolicy:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "canMakePayments": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "canMakePaymentsUsingNetworks:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "canMakePaymentsUsingNetworks:capabilities:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "cancel": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "caseInsensitiveCompare:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "category": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "changeCurrentDirectoryPath:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "characterAtIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "charactersIgnoringModifiers": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "childViewControllers": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "class": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "classNamed:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "clientVersion": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "closeWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "coalescedKeyboard": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "code": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "colorAttachments": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "commandBuffer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "commit": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "compare:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "compare:options:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "completionBlock": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "componentsJoinedByString:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "componentsSeparatedByString:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "computeCommandEncoder": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "conditionallyBeginAccessingResourcesWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "configuration": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "conformsToProtocol:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "connectWithReplyHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "connectedScenes": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "containerIdentifier": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "containerWithIdentifier:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "containsObject:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "containsString:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "contentScaleFactor": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "contentView": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "contents": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "contentsForType:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "contentsOfDirectoryAtPath:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "contentsScale": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "context": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "controller": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "controllers": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "convertPoint:fromLayer:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "convertPoint:fromView:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "convertPoint:toLayer:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "convertPoint:toView:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "convertRect:fromLayer:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "coordinateSpace": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "coordinateWritingItemAtURL:options:error:byAccessor:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "copy": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "copyDrawableGeometry:forRenderbuffer:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:options:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "copyItemAtPath:toPath:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "count": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "countByEnumeratingWithState:objects:count:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "countryCode": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "createDirectoryAtPath:withIntermediateDirectories:attributes:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "createFramebuffer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "createSymbolicLinkAtPath:withDestinationPath:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "credentialWithIdentity:certificates:persistence:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "current": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "currentContext": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "currentDevice": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "currentDirectoryPath": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "currentHandler": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "currentLocale": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "currentQueue": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "currentRadioAccessTechnology": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "currentRunLoop": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "currentSubscription": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "currentVersionOfItemAtURL:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dataTaskWithRequest:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dataTaskWithRequest:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dataUsingEncoding:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dataUsingEncoding:allowLossyConversion:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dataWithBytes:length:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dataWithContentsOfFile:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dataWithContentsOfFile:options:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dataWithLength:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dataWithPropertyList:format:options:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "databaseScope": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "date": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dateWithTimeIntervalSinceNow:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dealloc": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "debugDescription": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "debugLabel": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "decimalDigitCharacterSet": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "defaultCenter": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "defaultContainer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "defaultManager": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "defaultQueue": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "defaultSessionConfiguration": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "delegate": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "deleteDrawable": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "deleteFramebuffer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "deleteRecordWithID:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "deleteRecordZoneWithID:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "deleteSavedGamesWithName:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "deleteSubscriptionWithID:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "deltaX": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "deltaY": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "depth": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "depthAttachment": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "depthAttachmentPixelFormat": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "description": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "detachDrawableLayerWithError:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "device": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dictionary": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dictionaryRepresentation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dictionaryWithContentsOfFile:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dictionaryWithObjects:forKeys:count:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dictionaryWithObjectsAndKeys:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "didModifyRange:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "didPresentAlertView:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "didReceiveMemoryWarning": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "discoverAllContactUserInfosWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "discoverUserIdentityWithEmailAddress:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "discoverUserIdentityWithPhoneNumber:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dismissWithClickedButtonIndex:animated:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dispatchThreadgroups:threadsPerThreadgroup:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dispatchThreads:threadsPerThreadgroup:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "display": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "displayLinkWithTarget:selector:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "displayName": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "displayScale": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "doMemoryWarning": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "doSexyTouchEvent:withTouch:withPoint:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "documentState": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "domain": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "doubleValue": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "down": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "downloadTaskWithRequest:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "downloadTaskWithRequest:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "dpad": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "drawPrimitives:vertexStart:vertexCount:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "drawPrimitives:vertexStart:vertexCount:instanceCount:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "drawRect:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "drawView:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "drawableColorFormat": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "drawableDepthFormat": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "drawableHeight": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "drawableMultisample": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "drawableProperties": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "drawableSize": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "drawableStencilFormat": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "drawableWidth": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "enableSetNeedsDisplay": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "encodeSignalEvent:value:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "encodeWaitForEvent:value:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "encodedLength": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "endAccessingResources": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "endBackgroundTask:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "endEncoding": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "enqueue": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "enumerateObjectsUsingBlock:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "environment": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "ephemeralSessionConfiguration": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "error": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "errorWithDomain:code:userInfo:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "evaluatePolicy:localizedReason:reply:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "executablePath": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "extendedGamepad": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fetchAllLongLivedOperationIDsWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fetchAllRecordZonesWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fetchAllShareParticipantsWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fetchAllSubscriptionsWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fetchLongLivedOperationWithID:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fetchRecordWithID:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fetchRecordZoneWithID:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fetchSavedGamesWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fetchShareMetadataWithURL:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fetchSubscriptionWithID:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fetchUserRecordIDWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fileExistsAtPath:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fileExistsAtPath:isDirectory:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fileModificationDate": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fileSystemRepresentation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fileURL": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fileURLWithPath:isDirectory:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "fillBuffer:range:value:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "finishTransaction:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "firstObject": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "firstOtherButtonIndex": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "floatValue": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "force": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "forgetDrawableRenderbuffers:count:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "frame": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "framebuffer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "framebufferOnly": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "framesDisplayed": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "framesPerSecond": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "gamePlayerID": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "generateAssertion:clientDataHash:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "generateKeyWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "generateMipmapsForTexture:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "generateTokenWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "generation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "geometry": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "gestureRecognizers": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "getBytes:bytesPerRow:bytesPerImage:fromRegion:mipmapLevel:slice:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "getData": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "getResourceValue:forKey:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "getTextField": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "getURL": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "glkView:drawInRect:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "glkViewControllerUpdate:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "gyroData": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "handleFailureInFunction:file:lineNumber:description:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "handleLongPressGesture:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "hasPrefix:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "hasSuffix:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "hasUnifiedMemory": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "hasWindowSurface": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "hash": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "height": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "hitTest:withEvent:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "hostName": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "identifierForVendor": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "imageNamed:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "imageNamed:inBundle:compatibleWithTraitCollection:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "imageWithContentsOfFile:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "imageWithData:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "imageWithData:scale:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "impactOccurred": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "impactOccurredWithIntensity:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "indexOfObject:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "infoDictionary": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "init": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "init:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initForReadingFromData:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initForReadingWithData:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithAPI:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithAPI:sharegroup:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithActivityItems:applicationActivities:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithBytes:length:encoding:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithBytesNoCopy:length:encoding:freeWhenDone:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithClientVersion:sharegroup:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithClientVersion:sharegroup:serializedThreadSharing:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithCoder:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithConfiguration:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithData:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithFilePresenter:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithFileURL:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithFormat:arguments:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithFrame:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithFrame:configuration:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithFrame:context:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithIdentity:certificates:persistence:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithImage:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithNibName:bundle:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithProductIdentifiers:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithSource:injectionTime:forMainFrameOnly:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithTarget:action:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithText:andSubject:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithTitle:message:delegate:cancelButtonTitle:otherButtonTitles:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithTitle:style:target:action:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithURL:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithUUIDBytes:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initWithUUIDString:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "initialize": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "inputNumberOfChannels": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "insertDebugSignpost:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "insertSublayer:atIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "instance": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "instancesRespondToSelector:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "integerValue": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "interfaceOrientation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "invalidProductIdentifiers": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "invalidate": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "invertedSet": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "iosurface": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isAbsolutePath": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isAccelerometerAvailable": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isActive": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isAdvertisingTrackingEnabled": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isAuthenticated": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isBatteryMonitoringEnabled": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isDepth24Stencil8PixelFormatSupported": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isDescendantOfView:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isEqual:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isEqualToNumber:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isEqualToString:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isFileURL": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isFirstResponder": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isFlipped": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isGathering": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isGyroAvailable": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isHeadless": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isHealthDataAvailable": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isHidden": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isKeyWindow": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isKindOfClass:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isLowPower": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isMainThread": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isMemberOfClass:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isMiniaturized": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isMultiThreaded": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isMultiplayerGamingRestricted": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isMultitaskingSupported": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isOpaque": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isOperatingSystemAtLeastVersion:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isOtherAudioPlaying": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isPassLibraryAvailable": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isPaused": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isPersonalizedCommunicationRestricted": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isPressed": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isProxy": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isRasterizationEnabled": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isRemovable": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isSupported": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isUnderage": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isUserInteractionEnabled": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isViewLoaded": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "isVisible": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "key": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "keyCode": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "keyboardInput": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "keyboardWasHidden:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "kind": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "languageVersion": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "lastError": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "lastObject": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "lastPathComponent": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "launch": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "layer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "layerClass": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "layoutSubviews": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "layouts": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "left": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "leftShoulder": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "leftThumbstick": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "leftTrigger": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "length": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "lengthOfBytesUsingEncoding:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "loadAchievementsWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "loadAction": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "loadCategoriesWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "loadFriendsAuthorizationStatus:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "loadFriendsWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "loadFromContents:ofType:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "loadLeaderboardsWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "loadPlayersForIdentifiers:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "loadRecentPlayersWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "loadView": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "localPlayer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "localizedDescription": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "localizedModel": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "localizedTitle": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "locationInView:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "locationInWindow": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "longLongValue": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "lowercaseString": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mAnimating": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mAnimationTimer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mCloudURL": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mContext": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mController": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mCurIdentityToken": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mData": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mDisplayLink": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mDisplayLinkSupported": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mFramebuffer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mFramebufferHeight": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mFramebufferWidth": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mHeight": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mImage": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mMgr": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mQuery": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mRenderbuffer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mSubject": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mText": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mTextField": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mURL": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mWidth": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mainBundle": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mainQueue": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mainRunLoop": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mainScreen": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "makeKeyAndOrderFront:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "makeKeyAndVisible": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "makeKeyWindow": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mapLayerPoint:forRenderbuffer:generation:toPixel:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "maxBufferLength": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "maxTotalThreadsPerThreadgroup": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "maximumFramesPerSecond": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "maximumPossibleForce": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "members": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "memoryBarrierWithResources:count:afterStages:beforeStages:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "memoryBarrierWithScope:afterStages:beforeStages:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "microGamepad": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "minusSet:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mipmapLevelCount": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mode": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "model": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "modificationDate": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "modifierFlags": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mouseInput": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "multiThreaded": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mutableBytes": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "mutableCopy": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "myView": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "name": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "nativeBounds": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "nativeScale": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "needsReallocation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "new": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newArgumentEncoderWithBufferIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newBufferWithLength:options:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newCommandQueue": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newComputePipelineStateWithFunction:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newDepthStencilStateWithDescriptor:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newEvent": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newFunctionWithName:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newFunctionWithName:constantValues:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newLibraryWithData:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newLibraryWithSource:options:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newRenderPipelineStateWithDescriptor:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newSamplerStateWithDescriptor:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newSharedEvent": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newTextureViewWithPixelFormat:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newTextureViewWithPixelFormat:textureType:levels:slices:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newTextureWithDescriptor:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newTextureWithDescriptor:iosurface:plane:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "newTextureWithDescriptor:offset:bytesPerRow:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "nextDrawable": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "nextObject": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "nibName": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "notificationOccurred:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "notificationWithName:object:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "notifyListener:atValue:block:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "numberWithBool:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "numberWithDouble:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "numberWithInt:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "numberWithInteger:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "numberWithLong:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "numberWithLongLong:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "numberWithUnsignedInt:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "object": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "objectAtIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "objectAtIndexedSubscript:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "objectEnumerator": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "objectForInfoDictionaryKey:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "objectForKey:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "objectForKeyedSubscript:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "onICloudUserChanged:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "onMetaQueryResult:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "opacity": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "openURL:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "openURL:options:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "openWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "operatingSystemVersion": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "operatingSystemVersionString": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "orderedSet": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "orientation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "outputNumberOfChannels": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "parentRelativeLevel": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "parentRelativeSlice": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "parentTexture": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "path": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pathExtension": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pauseApp": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pauseOnWillResignActive": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "paused": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "payment": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "paymentQueue:didRevokeEntitlementsForProductIdentifiers:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "paymentQueue:removedTransactions:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "paymentQueue:restoreCompletedTransactionsFailedWithError:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "paymentQueue:shouldAddStorePayment:forProduct:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "paymentQueue:updatedDownloads:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "paymentQueue:updatedTransactions:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "paymentQueueDidChangeStorefront:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "paymentQueueRestoreCompletedTransactionsFinished:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "paymentWithProduct:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pearEnsureDrawable": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pearMakeCurrent": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pearPhase": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pearPoint": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pearPrevious": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pearSetup": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pearStart": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pearStop": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pearTick:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pearTimestamp": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pearTouch": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pearView": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pearWantedPixels": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pearWindow": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "performQuery:inZoneWithID:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "performSelector:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "performSelector:withObject:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "performSelector:withObject:withObject:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "phase": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "physicalMemory": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pixelFormat": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pixelHeight": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pixelWidth": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "playerID": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "point": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pointerValue": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "popDebugGroup": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "popoverPresentationController": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "position": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "postNotificationName:object:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "preciseLocationInView:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "precisePreviousLocationInView:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "predicateWithFormat:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "preferredFramesPerSecond": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "preferredLanguages": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "preferredScreenEdgesDeferringSystemGestures": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "prefersHomeIndicatorAutoHidden": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "prepare": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "presentBoundRenderbuffer:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "presentDrawable:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "presentDrawableFromOtherThreadWithError:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "presentFramebuffer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "presentFramebuffer:width:height:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "presentRenderbuffer:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "presentRenderbuffer:afterMinimumDuration:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "presentRenderbuffer:atTime:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "presentViewController:animated:completion:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "presentedViewController": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "preservationPriorityForTag:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "previousLocationInView:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "price": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "priceLocale": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "privateCloudDatabase": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "privateFrameworksPath": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "processInfo": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "processorCount": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "productCategory": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "productIdentifier": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "products": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "productsRequest:didReceiveResponse:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "progress": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "progressWithTotalUnitCount:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "propertyList:isValidForFormat:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "propertyListWithData:options:format:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "publicCloudDatabase": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "pushDebugGroup:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "radius": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "rangeOfCharacterFromSet:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "rangeOfData:options:range:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "rangeOfString:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "rasterSampleCount": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "readWriteTextureSupport": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "readingAvailable": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "reason": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "redrawApp": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "redrawView": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "region": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "registerForRemoteNotificationTypes:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "registerForRemoteNotifications": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "registryID": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "release": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "releaseNativeSurfaceForSharedThreadUse": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "removeAllObjects": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "removeFile:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "removeFromSuperlayer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "removeItemAtPath:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "removeItemAtURL:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "removeLastObject": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "removeObject:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "removeObjectForKey:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "removeObserver:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "removeOtherVersionsOfItemAtURL:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "renderCommandEncoderWithDescriptor:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "renderPassDescriptor": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "renderbufferStorage:fromDrawable:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "replaceItemAtURL:options:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "reportAchievements:withCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "reportScores:withCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "reportedPresentation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "request:didFailWithError:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "requestApplicationPermission:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "requestDidFinish:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "requestReview": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "requestReviewInScene:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "requestTrackingAuthorizationWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "requestWithURL:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "reset": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "resetAchievementsWithCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "resignFirstResponder": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "resizePixelWidth:height:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "resolveConflictingSavedGames:withData:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "resolveTexture": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "resourcePath": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "respondsToSelector:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "restoreCompletedTransactions": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "resultAtIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "resultCount": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "resumeOnDidBecomeActive": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "retain": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "retainCount": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "retained": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "revertToContentsOfURL:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "right": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "rightShoulder": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "rightThumbstick": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "rightTrigger": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "rootViewController": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "rotationRate": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "runMetaQuery": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "runMode:beforeDate:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "safeAreaInsets": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "sampleCount": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "sampleRate": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "saveGameData:withName:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "saveRecord:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "saveRecordZone:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "saveSubscription:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "saveToURL:forSaveOperation:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "scale": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "scopedIDsArePersistent": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "secondaryAudioShouldBeSilencedHint": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "selectionChanged": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "self": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "sendEvent:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "sensitivity": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "serviceCurrentRadioAccessTechnology": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "serviceSubscriberCellularProviders": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "set": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setActive:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setActive:withOptions:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setAllHTTPHeaderFields:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setAllowsNextDrawableTimeout:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setAlphaBlendOperation:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setAlphaToCoverageEnabled:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setAngleGroup:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setArgumentBuffer:offset:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setArrayLength:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setAuthenticateHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setAutocapitalizationType:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setAutocorrectionType:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setAutoresizingMask:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setBackFaceStencil:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setBackgroundColor:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setBlendColorRed:green:blue:alpha:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setBlendingEnabled:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setBounds:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setBuffer:offset:atIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setBufferIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setBytes:length:atIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setCancelsTouchesInView:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setCategory:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setCategory:mode:options:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setCategory:withOptions:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setClearColor:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setClearDepth:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setClearStencil:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setCompareFunction:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setCompletedUnitCount:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setCompletionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setComputePipelineState:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setConstantValue:type:withName:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setContentScaleFactor:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setContentSize:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setContentsGravity:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setContentsRect:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setContentsScale:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setContext:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setCullMode:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setCurrentContext:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setCurrentContext:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setCurrentSubscription:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setData:length:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDebugLabel:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDefaultRasterSampleCount:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDelaysTouchesBegan:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDelaysTouchesEnded:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDelegate:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDepth:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDepthAttachmentPixelFormat:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDepthBias:slopeScale:clamp:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDepthClipMode:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDepthCompareFunction:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDepthFailureOperation:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDepthPlane:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDepthStencilPassOperation:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDepthStencilState:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDepthWriteEnabled:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDestinationAlphaBlendFactor:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDestinationRGBBlendFactor:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDevice:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDisableActions:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDisplaySyncEnabled:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDrawableColorFormat:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDrawableDepthFormat:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDrawableMultisample:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDrawableProperties:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDrawableSize:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setDrawableStencilFormat:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setElements:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setEnableSetNeedsDisplay:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setEnablesReturnKeyAutomatically:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setExcludedActivityTypes:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFastMathEnabled:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFormat:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFormatterBehavior:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFragmentBuffer:offset:atIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFragmentBufferOffset:atIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFragmentBytes:length:atIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFragmentFunction:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFragmentTexture:atIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFrame:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFrame:display:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFrameInterval:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFramebuffer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFramebuffer:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFramebufferOnly:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFrontFaceStencil:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setFrontFacingWinding:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setGeneration:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setGeometry:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setHTTPAdditionalHeaders:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setHeight:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setHidden:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setImage:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setInputPrimitiveTopology:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setKey:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setKeyChangedHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setKeyboardAppearance:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setKeyboardType:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setKind:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setLabel:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setLanguageVersion:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setLastError:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setLayer:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setLevel:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setLoadAction:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setLocale:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setMagFilter:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setMagnificationFilter:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setMathFloatingPointFunctions:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setMathMode:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setMaxAnisotropy:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setMembers:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setMenu:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setMinFilter:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setMinimumPressDuration:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setMipFilter:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setMipmapLevelCount:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setMode:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setMouseMovedHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setMovableByWindowBackground:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setMultiThreaded:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setMultipleTouchEnabled:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setName:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setNeedsDisplay": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setNeedsReallocation:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setNeedsUpdateOfHomeIndicatorAutoHidden": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setNeedsUpdateOfScreenEdgesDeferringSystemGestures": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setNumberStyle:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setObject:atIndexedSubscript:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setObject:forKey:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setObject:forKeyedSubscript:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setOffset:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setOpaque:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPauseOnWillResignActive:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPaused:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPearPhase:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPearPoint:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPearPrevious:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPearTimestamp:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPearTouch:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPearView:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPearWindow:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPixelFormat:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPoint:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPosition:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPosition:forDirectionPadElement:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPredicate:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPreferredFramesPerSecond:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPreferredIOBufferDuration:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPreferredInputNumberOfChannels:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPreferredSampleRate:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPreprocessorMacros:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPreservationPriority:forTags:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPreserveInvariance:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPrimaryAction:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setPurgeableState:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setRAddressMode:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setRadius:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setRasterSampleCount:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setRasterizationEnabled:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setReadMask:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setRegion:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setRenderPipelineState:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setRenderTargetHeight:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setRenderTargetWidth:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setReportedPresentation:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setResolveDepthPlane:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setResolveLevel:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setResolveSlice:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setResolveTexture:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setResolved:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setResourceOptions:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setResumeOnDidBecomeActive:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setRetained:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setReturnKeyType:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setRgbBlendOperation:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setRootViewController:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setSAddressMode:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setSampleCount:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setScissorRect:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setSearchScopes:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setSecureTextEntry:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setSensitivity:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setSharedAcrossThreads:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setSlice:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setSource:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setSourceAlphaBlendFactor:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setSourceRGBBlendFactor:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setSourceRect:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setSourceView:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setStencilAttachmentPixelFormat:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setStencilCompareFunction:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setStencilFailureOperation:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setStencilFrontReferenceValue:backReferenceValue:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setStencilReferenceValue:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setStepFunction:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setStepRate:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setStorage:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setStoreAction:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setStoreActionOptions:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setStride:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setSwipeDuration:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setSwipeFrom:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setSwipeTo:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setTAddressMode:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setText:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setTexture:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setTexture:atIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setTextureType:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setTransform:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setTriangleFillMode:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setUsage:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setUserContentController:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setValue:forButtonElement:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setValue:forHTTPHeaderField:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setValueChangedHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setVersion:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setVertexBuffer:offset:atIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setVertexBufferOffset:atIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setVertexBytes:length:atIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setVertexDescriptor:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setVertexFunction:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setVertexTexture:atIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setView:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setViewport:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setVisibilityResultBuffer:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setVisibilityResultMode:offset:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setWantsLayer:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setWidth:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setWindow:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setWithArray:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setWithObject:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setWithObjects:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setWriteMask:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "setZPosition:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "sharedAcrossThreads": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "sharedApplication": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "sharedCloudDatabase": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "sharedInstance": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "sharedSession": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "sharegroup": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "shouldAutorotate": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "shouldAutorotateToInterfaceOrientation:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "show": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "showKeyboard:withProps:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "shutdown": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "signaledValue": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "snapshot": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "sortUsingSelector:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "source": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "standardUserDefaults": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "start": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "startAccelerometerUpdates": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "startAnimation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "startGyroUpdates": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "startQuery": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "state": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "statusBarOrientation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "statusForApplicationPermission:completionHandler:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stencilAttachment": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stencilAttachmentPixelFormat": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stop": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stopAnimation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stopQuery": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "storage": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "storageMode": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "storeAction": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "string": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stringByAppendingFormat:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stringByAppendingPathComponent:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stringByAppendingPathExtension:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stringByAppendingString:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stringByExpandingTildeInPath": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stringByReplacingOccurrencesOfString:withString:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stringByStandardizingPath": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stringForKey:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stringFromNumber:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stringWithCString:encoding:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stringWithCharacters:length:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stringWithFormat:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "stringWithUTF8String:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "styleMask": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "subarrayWithRange:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "sublayers": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "subscriberCellularProvider": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "substringFromIndex:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "subviews": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "superclass": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "superlayer": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "superview": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "supportedInterfaceOrientations": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "supports32BitFloatFiltering": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "supportsBCTextureCompression": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "supportsFamily:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "supportsPullModelInterpolation": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "supportsTextureSampleCount:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "swipeDuration": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "swipeFrom": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "swipeTo": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "synchronize": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "synchronizeResource:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "systemName": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "systemUptime": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "systemVersion": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "tags": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "tapCount": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "teamPlayerID": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textField:editMenuForCharactersInRange:suggestedActions:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textField:editMenuForCharactersInRanges:suggestedActions:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textField:insertInputSuggestion:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textField:shouldChangeCharactersInRange:replacementString:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textField:shouldChangeCharactersInRanges:replacementString:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textField:willDismissEditMenuWithAnimator:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textField:willPresentEditMenuWithAnimator:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textFieldDidBeginEditing:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textFieldDidChangeSelection:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textFieldDidEndEditing:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textFieldDidEndEditing:reason:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textFieldShouldBeginEditing:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textFieldShouldClear:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textFieldShouldEndEditing:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textFieldShouldReturn:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "texture": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "texture2DDescriptorWithPixelFormat:width:height:mipmapped:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textureCubeDescriptorWithPixelFormat:size:mipmapped:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "textureType": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "threadExecutionWidth": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "threadExitedWithRetainedContext:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "timeIntervalSince1970": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "timeIntervalSinceReferenceDate": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "timeSinceFirstResume": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "timeSinceLastDraw": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "timeSinceLastResume": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "timeSinceLastUpdate": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "timestamp": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "touchesBegan:withEvent:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "touchesCancelled:withEvent:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "touchesEnded:withEvent:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "touchesForView:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "touchesForWindow:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "touchesMoved:withEvent:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "trackingAuthorizationStatus": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "traitCollection": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "traitCollectionWithUserInterfaceIdiom:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "transactionState": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "transform": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "type": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "ubiquityIdentityToken": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "unarchivedObjectOfClass:fromData:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "unarchivedObjectOfClasses:fromData:error:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "unregisterForRemoteNotifications": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "unresolvedConflictVersionsOfItemAtURL:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "unsignedIntValue": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "unsignedIntegerValue": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "up": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "update": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "updateChangeCount:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "uploadTaskWithRequest:fromData:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "uploadTaskWithRequest:fromFile:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "usage": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "useResource:usage:stages:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "userContentController": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "userInfo": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "userInterfaceIdiom": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "value": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "valueForAttribute:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "valueForKey:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "valueWithNonretainedObject:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "valueWithPointer:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "vendorName": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "version": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "vertexDescriptor": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "view": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "viewDidAppear:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "viewDidDisappear:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "viewDidLoad": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "viewDidUnload": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "viewSafeAreaInsetsDidChange": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "waitUntilCompleted": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "waitUntilScheduled": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "weakObjectsHashTable": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "width": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "willPresentAlertView:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "willRotateToInterfaceOrientation:duration:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "window": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "windowLevel": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "windows": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "writeState": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "writeToFile:atomically:": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "x": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "xAxis": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "y": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "yAxis": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "z": [
+   "com.gobit.burgershop2.premium.app"
+  ],
+  "zone": [
+   "com.gobit.burgershop2.premium.app"
+  ]
+ }
+}

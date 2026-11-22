@@ -1,0 +1,10 @@
+[package]
+name = "pear-legacy-host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pear-host = { path = "../pear-host" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+pear-host-linux = { path = "../pear-host-linux" }

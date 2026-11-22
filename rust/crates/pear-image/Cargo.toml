@@ -1,0 +1,10 @@
+[package]
+name = "pear-image"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "PearRuntime's own image decoders (PNG with Apple's CgBI variant, JPEG) to RGBA, in portable Rust"
+
+[lib]
+name = "pear_image"
+crate-type = ["rlib"]

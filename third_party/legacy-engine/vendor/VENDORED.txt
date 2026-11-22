@@ -1,0 +1,21 @@
+Libraries the engine bundles, and where each comes from.
+
+In the PearLegacyEngine repository these were git submodules (.gitmodules).
+Inside PearRuntime they are plain files (or sibling directories), so this file
+records the upstream repository and the exact commit of each copy.
+
+vendor/SDL          https://github.com/libsdl-org/SDL.git            07d0f51fa292895443f563f0cbde4cb3802d87fa
+vendor/stb          https://github.com/nothings/stb.git              9f1776a36d2a3d63c52f705c3a84b372cfed4340
+vendor/openal-soft  https://github.com/kcat/openal-soft              23c8a35505fe6ab7a5c87754911a133b23ac75cf
+vendor/PVRTDecompress  (part of the engine's own tree)
+
+Not copied here, used from PearRuntime instead:
+vendor/dynarmic     -> ../legacy-jit (PearLegacyJIT, a fork of https://github.com/touchHLE/dynarmic;
+                       the engine pinned e0f6bd9d0b48ed6e536672c0c9abbe87961be861 of that fork's upstream)
+vendor/angle        -> ../angle (PearANGLE; the engine pinned 686adbb2a39854ab687da009e534f6842a85f453)
+
+Files left out of the copies by .gitignore rules (Windows/MinGW/OS2/NaCl
+packaging only; not used by the macOS build): SDL's VisualC, mingw and Xcode
+pkg-support sdl2-config*.cmake, src/core/os2/geniconv/makefile,
+src/hidapi/windows/ddk_build/makefile, test/nacl/Makefile; openal-soft's
+build/.empty.

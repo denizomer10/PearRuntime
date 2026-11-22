@@ -1,0 +1,59 @@
+[submodule "build"]
+	path = build
+	url = https://chromium.googlesource.com/chromium/src/build
+	gclient-condition = not build_with_chromium
+[submodule "buildtools"]
+	path = buildtools
+	url = https://chromium.googlesource.com/chromium/src/buildtools
+	gclient-condition = not build_with_chromium
+[submodule "testing"]
+	path = testing
+	url = https://chromium.googlesource.com/chromium/src/testing
+	gclient-condition = not build_with_chromium
+[submodule "third_party/abseil-cpp"]
+	path = third_party/abseil-cpp
+	url = https://chromium.googlesource.com/chromium/src/third_party/abseil-cpp
+	gclient-condition = not build_with_chromium
+[submodule "third_party/astc-encoder/src"]
+	path = third_party/astc-encoder/src
+	url = https://chromium.googlesource.com/external/github.com/ARM-software/astc-encoder
+	gclient-condition = not build_with_chromium
+[submodule "third_party/depot_tools"]
+	path = third_party/depot_tools
+	url = https://chromium.googlesource.com/chromium/tools/depot_tools
+	gclient-condition = not build_with_chromium
+[submodule "third_party/jsoncpp"]
+	path = third_party/jsoncpp
+	url = https://chromium.googlesource.com/chromium/src/third_party/jsoncpp
+	gclient-condition = not build_with_chromium
+[submodule "third_party/llvm-libc/src"]
+	path = third_party/llvm-libc/src
+	url = https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc
+	gclient-condition = not build_with_chromium
+[submodule "third_party/rapidjson/src"]
+	path = third_party/rapidjson/src
+	url = https://chromium.googlesource.com/external/github.com/Tencent/rapidjson
+[submodule "third_party/rust"]
+	path = third_party/rust
+	url = https://chromium.googlesource.com/chromium/src/third_party/rust
+	gclient-condition = not build_with_chromium
+[submodule "third_party/spirv-headers/src"]
+	path = third_party/spirv-headers/src
+	url = https://chromium.googlesource.com/external/github.com/KhronosGroup/SPIRV-Headers
+	gclient-condition = not build_with_chromium
+[submodule "third_party/spirv-tools/src"]
+	path = third_party/spirv-tools/src
+	url = https://chromium.googlesource.com/external/github.com/KhronosGroup/SPIRV-Tools
+	gclient-condition = not build_with_chromium
+[submodule "third_party/zlib"]
+	path = third_party/zlib
+	url = https://chromium.googlesource.com/chromium/src/third_party/zlib
+	gclient-condition = not build_with_chromium
+[submodule "tools/clang"]
+	path = tools/clang
+	url = https://chromium.googlesource.com/chromium/src/tools/clang
+	gclient-condition = not build_with_chromium
+[submodule "tools/win"]
+	path = tools/win
+	url = https://chromium.googlesource.com/chromium/src/tools/win
+	gclient-condition = checkout_win and not build_with_chromium
