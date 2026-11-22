@@ -830,12 +830,13 @@ unsafe extern "C" fn sb_init_vc(self_obj: Id, _cmd: Sel) -> Id {
     NIL
 }
 
-unsafe extern "C" fn sb_vc_with_id(_self: Id, _cmd: Sel, ident: Id) -> Id {
-    let id_str = nsstring_to_string(ident).unwrap_or_default();
-    let cls_c = CString::new("UIStoryboard").unwrap();
-    let msg_c = CString::new(format!("instantiateViewControllerWithIdentifier:{id_str}")).unwrap();
-    PearMissingReport(1, cls_c.as_ptr(), msg_c.as_ptr(), std::ptr::null());
-    msg0(cls("UIViewController"), "new")
+unsafe extern "C" fn sb_vc_with_id(_self: Id, _cmd: Sel, _ident: Id) -> Id {
+    let vc: Id = msg0(cls("UIViewController"), "new");
+    if vc.is_null() {
+        return NIL;
+    }
+    let _view: Id = msg0(vc, "view");
+    pear_objc::objc_autorelease(vc)
 }
 
 pub unsafe fn register_classes() {

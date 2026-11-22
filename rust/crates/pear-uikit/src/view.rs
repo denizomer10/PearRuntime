@@ -452,6 +452,7 @@ unsafe extern "C" fn view_insert_subview(self_obj: Id, _cmd: Sel, view: Id, inde
     if view.is_null() || view == self_obj {
         return;
     }
+    objc_retain(view);
     if !pear_objc::assoc_get_weak(view, &VIEW_SUPERVIEW_KEY).is_null() {
         msg0::<()>(view, "removeFromSuperview");
     }
@@ -471,6 +472,7 @@ unsafe extern "C" fn view_insert_subview(self_obj: Id, _cmd: Sel, view: Id, inde
     msg0::<()>(view, "didMoveToSuperview");
     msg1::<Id, ()>(self_obj, "didAddSubview:", view);
     msg0::<()>(self_obj, "setNeedsLayout");
+    objc_release(view);
 }
 
 unsafe extern "C" fn view_add_subview(self_obj: Id, _cmd: Sel, view: Id) {
@@ -483,6 +485,7 @@ unsafe extern "C" fn view_bring_to_front(self_obj: Id, _cmd: Sel, view: Id) {
     if view.is_null() || pear_objc::assoc_get_weak(view, &VIEW_SUPERVIEW_KEY) != self_obj {
         return;
     }
+    objc_retain(view);
     let subs = mut_array_for_key(self_obj, &VIEW_SUBVIEWS_KEY);
     msg1::<Id, ()>(subs, "removeObjectIdenticalTo:", view);
     msg1::<Id, ()>(subs, "addObject:", view);
@@ -492,12 +495,14 @@ unsafe extern "C" fn view_bring_to_front(self_obj: Id, _cmd: Sel, view: Id) {
         msg0::<()>(sub_l, "removeFromSuperlayer");
         msg1::<Id, ()>(l, "addSublayer:", sub_l);
     }
+    objc_release(view);
 }
 
 unsafe extern "C" fn view_send_to_back(self_obj: Id, _cmd: Sel, view: Id) {
     if view.is_null() || pear_objc::assoc_get_weak(view, &VIEW_SUPERVIEW_KEY) != self_obj {
         return;
     }
+    objc_retain(view);
     let subs = mut_array_for_key(self_obj, &VIEW_SUBVIEWS_KEY);
     msg1::<Id, ()>(subs, "removeObjectIdenticalTo:", view);
     msg2::<Id, usize, ()>(subs, "insertObject:atIndex:", view, 0);
@@ -507,6 +512,7 @@ unsafe extern "C" fn view_send_to_back(self_obj: Id, _cmd: Sel, view: Id) {
         msg0::<()>(sub_l, "removeFromSuperlayer");
         msg2::<Id, u32, ()>(l, "insertSublayer:atIndex:", sub_l, 0);
     }
+    objc_release(view);
 }
 
 unsafe extern "C" fn view_remove_from_superview(self_obj: Id, _cmd: Sel) {
@@ -514,6 +520,8 @@ unsafe extern "C" fn view_remove_from_superview(self_obj: Id, _cmd: Sel) {
     if parent.is_null() {
         return;
     }
+    objc_retain(self_obj);
+    objc_retain(parent);
     msg1::<Id, ()>(parent, "willRemoveSubview:", self_obj);
     msg1::<Id, ()>(self_obj, "willMoveToSuperview:", NIL);
     let subs = mut_array_for_key(parent, &VIEW_SUBVIEWS_KEY);
@@ -525,6 +533,8 @@ unsafe extern "C" fn view_remove_from_superview(self_obj: Id, _cmd: Sel) {
     pear_objc::assoc_set_weak(self_obj, &VIEW_SUPERVIEW_KEY, NIL);
     msg1::<Id, ()>(self_obj, "pear_setWindow:", NIL);
     msg0::<()>(self_obj, "didMoveToSuperview");
+    objc_release(parent);
+    objc_release(self_obj);
 }
 
 unsafe extern "C" fn view_noop(_self: Id, _cmd: Sel) {}
@@ -768,13 +778,336 @@ unsafe extern "C" fn view_layout_margins(_self: Id, _cmd: Sel) -> UIEdgeInsets {
 unsafe extern "C" fn view_trait_collection(_self: Id, _cmd: Sel) -> Id {
     msg0(cls("UITraitCollection"), "pear_current")
 }
+static VIEW_GESTURES_KEY: u8 = 0;
+static GR_STATE_KEY: u8 = 0;
+static GR_VIEW_KEY: u8 = 0;
+static GR_DELEGATE_KEY: u8 = 0;
+static GR_TARGETS_KEY: u8 = 0;
+static GR_NAME_KEY: u8 = 0;
+static GR_TOUCH_TYPES_KEY: u8 = 0;
+static GR_PRESS_TYPES_KEY: u8 = 0;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct GestureState {
+    state: isize,
+    enabled: bool,
+    cancels_touches: bool,
+    delays_began: bool,
+    delays_ended: bool,
+    requires_exclusive_touch_type: bool,
+    min_press_duration: f64,
+    allowable_movement: f64,
+    touches_required: usize,
+    taps_required: isize,
+    location: CGPoint,
+}
+
+impl Default for GestureState {
+    fn default() -> Self {
+        Self {
+            state: 0,
+            enabled: true,
+            cancels_touches: true,
+            delays_began: false,
+            delays_ended: false,
+            requires_exclusive_touch_type: true,
+            min_press_duration: 0.5,
+            allowable_movement: 10.0,
+            touches_required: 1,
+            taps_required: -1,
+            location: CGPoint::default(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq)]
+struct GestureTarget {
+    target: usize,
+    action: usize,
+}
+
+unsafe fn get_gr_state(g: Id) -> GestureState {
+    let data = assoc_get(g, &GR_STATE_KEY);
+    if let Some(bytes) = nsdata_to_vec(data) {
+        if bytes.len() == std::mem::size_of::<GestureState>() {
+            return std::ptr::read_unaligned(bytes.as_ptr() as *const GestureState);
+        }
+    }
+    GestureState::default()
+}
+
+unsafe fn set_gr_state(g: Id, st: GestureState) {
+    let bytes = std::slice::from_raw_parts(
+        &st as *const GestureState as *const u8,
+        std::mem::size_of::<GestureState>(),
+    );
+    assoc_set(g, &GR_STATE_KEY, nsdata_from_bytes(bytes));
+}
+
+unsafe fn get_gr_targets(g: Id) -> Vec<GestureTarget> {
+    let data = assoc_get(g, &GR_TARGETS_KEY);
+    let sz = std::mem::size_of::<GestureTarget>();
+    if let Some(bytes) = nsdata_to_vec(data) {
+        return bytes
+            .chunks_exact(sz)
+            .map(|chunk| std::ptr::read_unaligned(chunk.as_ptr() as *const GestureTarget))
+            .collect();
+    }
+    Vec::new()
+}
+
+unsafe fn set_gr_targets(g: Id, targets: &[GestureTarget]) {
+    let sz = std::mem::size_of::<GestureTarget>();
+    let bytes = std::slice::from_raw_parts(targets.as_ptr() as *const u8, targets.len() * sz);
+    assoc_set(g, &GR_TARGETS_KEY, nsdata_from_bytes(bytes));
+}
+
 unsafe extern "C" fn view_empty_arr(_self: Id, _cmd: Sel) -> Id {
     msg0(cls("NSArray"), "array")
 }
-unsafe extern "C" fn view_add_gesture(_self: Id, _cmd: Sel, _g: Id) {
-    let c1 = CString::new("UIView").unwrap();
-    let c2 = CString::new("gesture recognizers are ignored").unwrap();
-    PearMissingReport(1, c1.as_ptr(), c2.as_ptr(), std::ptr::null());
+unsafe extern "C" fn view_gestures(self_obj: Id, _cmd: Sel) -> Id {
+    let arr = mut_array_for_key(self_obj, &VIEW_GESTURES_KEY);
+    msg1(cls("NSArray"), "arrayWithArray:", arr)
+}
+unsafe extern "C" fn view_add_gesture(self_obj: Id, _cmd: Sel, g: Id) {
+    if g.is_null() {
+        return;
+    }
+    let prev = pear_objc::assoc_get_weak(g, &GR_VIEW_KEY);
+    if !prev.is_null() && prev != self_obj {
+        msg1::<Id, ()>(prev, "removeGestureRecognizer:", g);
+    }
+    let arr = mut_array_for_key(self_obj, &VIEW_GESTURES_KEY);
+    if !msg1::<Id, bool>(arr, "containsObject:", g) {
+        msg1::<Id, ()>(arr, "addObject:", g);
+    }
+    pear_objc::assoc_set_weak(g, &GR_VIEW_KEY, self_obj);
+}
+unsafe extern "C" fn view_remove_gesture(self_obj: Id, _cmd: Sel, g: Id) {
+    if g.is_null() {
+        return;
+    }
+    objc_retain(g);
+    let arr = mut_array_for_key(self_obj, &VIEW_GESTURES_KEY);
+    msg1::<Id, ()>(arr, "removeObjectIdenticalTo:", g);
+    if pear_objc::assoc_get_weak(g, &GR_VIEW_KEY) == self_obj {
+        pear_objc::assoc_set_weak(g, &GR_VIEW_KEY, NIL);
+    }
+    objc_release(g);
+}
+unsafe extern "C" fn view_set_gestures(self_obj: Id, _cmd: Sel, new_arr: Id) {
+    let cur = view_gestures(self_obj, sel("gestureRecognizers"));
+    for i in 0..nsarray_count(cur) {
+        let g = nsarray_object_at(cur, i);
+        view_remove_gesture(self_obj, sel("removeGestureRecognizer:"), g);
+    }
+    if !new_arr.is_null() {
+        for i in 0..nsarray_count(new_arr) {
+            let g = nsarray_object_at(new_arr, i);
+            view_add_gesture(self_obj, sel("addGestureRecognizer:"), g);
+        }
+    }
+}
+
+unsafe extern "C" fn gr_init(s: Id, _c: Sel) -> Id {
+    let o: Id = super0(s, "UIGestureRecognizer", "init");
+    if !o.is_null() {
+        set_gr_state(o, GestureState::default());
+    }
+    o
+}
+unsafe extern "C" fn gr_init_target_action(s: Id, _c: Sel, target: Id, action: Sel) -> Id {
+    let o: Id = super0(s, "UIGestureRecognizer", "init");
+    if !o.is_null() {
+        set_gr_state(o, GestureState::default());
+        if !target.is_null() && !action.is_null() {
+            set_gr_targets(
+                o,
+                &[GestureTarget {
+                    target: target as usize,
+                    action: action as usize,
+                }],
+            );
+        }
+    }
+    o
+}
+unsafe extern "C" fn gr_init_coder(s: Id, _c: Sel, _coder: Id) -> Id {
+    gr_init(s, sel("init"))
+}
+unsafe extern "C" fn gr_add_target_action(s: Id, _c: Sel, target: Id, action: Sel) {
+    if target.is_null() || action.is_null() {
+        return;
+    }
+    let pair = GestureTarget {
+        target: target as usize,
+        action: action as usize,
+    };
+    let mut pairs = get_gr_targets(s);
+    if !pairs.contains(&pair) {
+        pairs.push(pair);
+        set_gr_targets(s, &pairs);
+    }
+}
+unsafe extern "C" fn gr_remove_target_action(s: Id, _c: Sel, target: Id, action: Sel) {
+    let t = target as usize;
+    let a = action as usize;
+    let mut pairs = get_gr_targets(s);
+    if t == 0 && a == 0 {
+        pairs.clear();
+    } else {
+        pairs.retain(|p| {
+            let match_t = t == 0 || p.target == t;
+            let match_a = a == 0 || p.action == a;
+            !(match_t && match_a)
+        });
+    }
+    set_gr_targets(s, &pairs);
+}
+unsafe extern "C" fn gr_view(s: Id, _c: Sel) -> Id {
+    pear_objc::assoc_get_weak(s, &GR_VIEW_KEY)
+}
+unsafe extern "C" fn gr_delegate(s: Id, _c: Sel) -> Id {
+    pear_objc::assoc_get_weak(s, &GR_DELEGATE_KEY)
+}
+unsafe extern "C" fn gr_set_delegate(s: Id, _c: Sel, d: Id) {
+    pear_objc::assoc_set_weak(s, &GR_DELEGATE_KEY, d);
+}
+unsafe extern "C" fn gr_state(s: Id, _c: Sel) -> isize {
+    get_gr_state(s).state
+}
+unsafe extern "C" fn gr_set_state(s: Id, _c: Sel, state: isize) {
+    let mut st = get_gr_state(s);
+    st.state = state;
+    set_gr_state(s, st);
+}
+unsafe extern "C" fn gr_enabled(s: Id, _c: Sel) -> bool {
+    get_gr_state(s).enabled
+}
+unsafe extern "C" fn gr_set_enabled(s: Id, _c: Sel, v: bool) {
+    let mut st = get_gr_state(s);
+    st.enabled = v;
+    set_gr_state(s, st);
+}
+unsafe extern "C" fn gr_cancels(s: Id, _c: Sel) -> bool {
+    get_gr_state(s).cancels_touches
+}
+unsafe extern "C" fn gr_set_cancels(s: Id, _c: Sel, v: bool) {
+    let mut st = get_gr_state(s);
+    st.cancels_touches = v;
+    set_gr_state(s, st);
+}
+unsafe extern "C" fn gr_delays_began(s: Id, _c: Sel) -> bool {
+    get_gr_state(s).delays_began
+}
+unsafe extern "C" fn gr_set_delays_began(s: Id, _c: Sel, v: bool) {
+    let mut st = get_gr_state(s);
+    st.delays_began = v;
+    set_gr_state(s, st);
+}
+unsafe extern "C" fn gr_delays_ended(s: Id, _c: Sel) -> bool {
+    get_gr_state(s).delays_ended
+}
+unsafe extern "C" fn gr_set_delays_ended(s: Id, _c: Sel, v: bool) {
+    let mut st = get_gr_state(s);
+    st.delays_ended = v;
+    set_gr_state(s, st);
+}
+unsafe extern "C" fn gr_exclusive_touch(s: Id, _c: Sel) -> bool {
+    get_gr_state(s).requires_exclusive_touch_type
+}
+unsafe extern "C" fn gr_set_exclusive_touch(s: Id, _c: Sel, v: bool) {
+    let mut st = get_gr_state(s);
+    st.requires_exclusive_touch_type = v;
+    set_gr_state(s, st);
+}
+unsafe extern "C" fn gr_num_touches(_s: Id, _c: Sel) -> usize {
+    0
+}
+unsafe extern "C" fn gr_location(s: Id, _c: Sel, _view: Id) -> CGPoint {
+    get_gr_state(s).location
+}
+unsafe extern "C" fn gr_location_touch(_s: Id, _c: Sel, _idx: usize, _view: Id) -> CGPoint {
+    CGPoint::default()
+}
+unsafe extern "C" fn gr_require_fail(_s: Id, _c: Sel, _other: Id) {}
+unsafe extern "C" fn gr_name(s: Id, _c: Sel) -> Id {
+    assoc_get(s, &GR_NAME_KEY)
+}
+unsafe extern "C" fn gr_set_name(s: Id, _c: Sel, v: Id) {
+    let copied = if v.is_null() { NIL } else { msg0(v, "copy") };
+    assoc_set(s, &GR_NAME_KEY, copied);
+    if !copied.is_null() {
+        objc_release(copied);
+    }
+}
+unsafe extern "C" fn gr_allowed_touch_types(s: Id, _c: Sel) -> Id {
+    let arr = assoc_get(s, &GR_TOUCH_TYPES_KEY);
+    if !arr.is_null() {
+        return arr;
+    }
+    nsarray_from_ids(&[nsnumber_i64(0), nsnumber_i64(1), nsnumber_i64(2)])
+}
+unsafe extern "C" fn gr_set_allowed_touch_types(s: Id, _c: Sel, arr: Id) {
+    let copied = if arr.is_null() { NIL } else { msg1(cls("NSArray"), "arrayWithArray:", arr) };
+    assoc_set(s, &GR_TOUCH_TYPES_KEY, copied);
+}
+unsafe extern "C" fn gr_allowed_press_types(s: Id, _c: Sel) -> Id {
+    let arr = assoc_get(s, &GR_PRESS_TYPES_KEY);
+    if !arr.is_null() {
+        arr
+    } else {
+        msg0(cls("NSArray"), "array")
+    }
+}
+unsafe extern "C" fn gr_set_allowed_press_types(s: Id, _c: Sel, arr: Id) {
+    let copied = if arr.is_null() { NIL } else { msg1(cls("NSArray"), "arrayWithArray:", arr) };
+    assoc_set(s, &GR_PRESS_TYPES_KEY, copied);
+}
+unsafe extern "C" fn gr_reset(s: Id, _c: Sel) {
+    let mut st = get_gr_state(s);
+    st.state = 0;
+    set_gr_state(s, st);
+}
+unsafe extern "C" fn gr_noop_touches(_s: Id, _c: Sel, _touches: Id, _event: Id) {}
+
+unsafe extern "C" fn lp_min_duration(s: Id, _c: Sel) -> f64 {
+    get_gr_state(s).min_press_duration
+}
+unsafe extern "C" fn lp_set_min_duration(s: Id, _c: Sel, d: f64) {
+    let mut st = get_gr_state(s);
+    st.min_press_duration = d;
+    set_gr_state(s, st);
+}
+unsafe extern "C" fn lp_allowable_movement(s: Id, _c: Sel) -> f64 {
+    get_gr_state(s).allowable_movement
+}
+unsafe extern "C" fn lp_set_allowable_movement(s: Id, _c: Sel, m: f64) {
+    let mut st = get_gr_state(s);
+    st.allowable_movement = m;
+    set_gr_state(s, st);
+}
+unsafe extern "C" fn gr_touches_required(s: Id, _c: Sel) -> usize {
+    get_gr_state(s).touches_required
+}
+unsafe extern "C" fn gr_set_touches_required(s: Id, _c: Sel, n: usize) {
+    let mut st = get_gr_state(s);
+    st.touches_required = n;
+    set_gr_state(s, st);
+}
+unsafe extern "C" fn lp_taps_required(s: Id, _c: Sel) -> usize {
+    get_gr_state(s).taps_required.max(0) as usize
+}
+unsafe extern "C" fn tap_taps_required(s: Id, _c: Sel) -> usize {
+    let t = get_gr_state(s).taps_required;
+    if t < 0 { 1 } else { t as usize }
+}
+unsafe extern "C" fn gr_set_taps_required(s: Id, _c: Sel, n: usize) {
+    let mut st = get_gr_state(s);
+    st.taps_required = n as isize;
+    set_gr_state(s, st);
 }
 unsafe extern "C" fn view_point_inside(self_obj: Id, _cmd: Sel, pt: CGPoint, _ev: Id) -> bool {
     rect_contains(msg0(self_obj, "bounds"), pt)
@@ -2072,7 +2405,7 @@ pub unsafe fn register_classes() {
         add_method(v, "interactions", view_interactions as Imp, "@@:");
         add_method(v, "addInteraction:", view_add_interaction as Imp, "v@:@");
         add_method(v, "removeInteraction:", view_remove_interaction as Imp, "v@:@");
-        for s in ["didAddSubview:", "willRemoveSubview:", "willMoveToSuperview:", "willMoveToWindow:", "removeGestureRecognizer:"] {
+        for s in ["didAddSubview:", "willRemoveSubview:", "willMoveToSuperview:", "willMoveToWindow:"] {
             add_method(v, s, view_noop_id as Imp, "v@:@");
         }
         for s in ["didMoveToSuperview", "didMoveToWindow", "layoutSubviews"] {
@@ -2118,8 +2451,10 @@ pub unsafe fn register_classes() {
         add_method(v, "safeAreaInsets", view_zero_insets as Imp, "{UIEdgeInsets=dddd}@:");
         add_method(v, "layoutMargins", view_layout_margins as Imp, "{UIEdgeInsets=dddd}@:");
         add_method(v, "traitCollection", view_trait_collection as Imp, "@@:");
-        add_method(v, "gestureRecognizers", view_empty_arr as Imp, "@@:");
+        add_method(v, "gestureRecognizers", view_gestures as Imp, "@@:");
+        add_method(v, "setGestureRecognizers:", view_set_gestures as Imp, "v@:@");
         add_method(v, "addGestureRecognizer:", view_add_gesture as Imp, "v@:@");
+        add_method(v, "removeGestureRecognizer:", view_remove_gesture as Imp, "v@:@");
         add_method(v, "translatesAutoresizingMaskIntoConstraints", view_true as Imp, "B@:");
         add_method(v, "setTranslatesAutoresizingMaskIntoConstraints:", view_noop_bool as Imp, "v@:B");
         add_method(v, "pointInside:withEvent:", view_point_inside as Imp, "B@:{CGPoint=dd}@");
@@ -2392,5 +2727,69 @@ pub unsafe fn register_classes() {
         add_method(pop, "isPopoverVisible", pop_vis as Imp, "B@:");
         add_method(pop, "presentPopoverFromRect:inView:permittedArrowDirections:animated:", pop_present as Imp, "v@:{CGRect={CGPoint=dd}{CGSize=dd}}@QB");
         add_method(pop, "dismissPopoverAnimated:", pop_dismiss as Imp, "v@:B");
+    }
+
+    let gr = cls("UIGestureRecognizer");
+    if !gr.is_null() {
+        add_method(gr, "init", gr_init as Imp, "@@:");
+        add_method(gr, "initWithTarget:action:", gr_init_target_action as Imp, "@@:@:");
+        add_method(gr, "initWithCoder:", gr_init_coder as Imp, "@@:@");
+        add_method(gr, "addTarget:action:", gr_add_target_action as Imp, "v@:@:");
+        add_method(gr, "removeTarget:action:", gr_remove_target_action as Imp, "v@:@:");
+        add_method(gr, "view", gr_view as Imp, "@@:");
+        add_method(gr, "delegate", gr_delegate as Imp, "@@:");
+        add_method(gr, "setDelegate:", gr_set_delegate as Imp, "v@:@");
+        add_method(gr, "state", gr_state as Imp, "q@:");
+        add_method(gr, "setState:", gr_set_state as Imp, "v@:q");
+        add_method(gr, "isEnabled", gr_enabled as Imp, "B@:");
+        add_method(gr, "enabled", gr_enabled as Imp, "B@:");
+        add_method(gr, "setEnabled:", gr_set_enabled as Imp, "v@:B");
+        add_method(gr, "cancelsTouchesInView", gr_cancels as Imp, "B@:");
+        add_method(gr, "setCancelsTouchesInView:", gr_set_cancels as Imp, "v@:B");
+        add_method(gr, "delaysTouchesBegan", gr_delays_began as Imp, "B@:");
+        add_method(gr, "setDelaysTouchesBegan:", gr_set_delays_began as Imp, "v@:B");
+        add_method(gr, "delaysTouchesEnded", gr_delays_ended as Imp, "B@:");
+        add_method(gr, "setDelaysTouchesEnded:", gr_set_delays_ended as Imp, "v@:B");
+        add_method(gr, "requiresExclusiveTouchType", gr_exclusive_touch as Imp, "B@:");
+        add_method(gr, "setRequiresExclusiveTouchType:", gr_set_exclusive_touch as Imp, "v@:B");
+        add_method(gr, "numberOfTouches", gr_num_touches as Imp, "Q@:");
+        add_method(gr, "locationInView:", gr_location as Imp, "{CGPoint=dd}@:@");
+        add_method(gr, "locationOfTouch:inView:", gr_location_touch as Imp, "{CGPoint=dd}@:Q@");
+        add_method(gr, "requireGestureRecognizerToFail:", gr_require_fail as Imp, "v@:@");
+        add_method(gr, "name", gr_name as Imp, "@@:");
+        add_method(gr, "setName:", gr_set_name as Imp, "v@:@");
+        add_method(gr, "allowedTouchTypes", gr_allowed_touch_types as Imp, "@@:");
+        add_method(gr, "setAllowedTouchTypes:", gr_set_allowed_touch_types as Imp, "v@:@");
+        add_method(gr, "allowedPressTypes", gr_allowed_press_types as Imp, "@@:");
+        add_method(gr, "setAllowedPressTypes:", gr_set_allowed_press_types as Imp, "v@:@");
+        add_method(gr, "reset", gr_reset as Imp, "v@:");
+        for s in [
+            "touchesBegan:withEvent:",
+            "touchesMoved:withEvent:",
+            "touchesEnded:withEvent:",
+            "touchesCancelled:withEvent:",
+        ] {
+            add_method(gr, s, gr_noop_touches as Imp, "v@:@@");
+        }
+    }
+
+    let lp = cls("UILongPressGestureRecognizer");
+    if !lp.is_null() {
+        add_method(lp, "minimumPressDuration", lp_min_duration as Imp, "d@:");
+        add_method(lp, "setMinimumPressDuration:", lp_set_min_duration as Imp, "v@:d");
+        add_method(lp, "allowableMovement", lp_allowable_movement as Imp, "d@:");
+        add_method(lp, "setAllowableMovement:", lp_set_allowable_movement as Imp, "v@:d");
+        add_method(lp, "numberOfTouchesRequired", gr_touches_required as Imp, "Q@:");
+        add_method(lp, "setNumberOfTouchesRequired:", gr_set_touches_required as Imp, "v@:Q");
+        add_method(lp, "numberOfTapsRequired", lp_taps_required as Imp, "Q@:");
+        add_method(lp, "setNumberOfTapsRequired:", gr_set_taps_required as Imp, "v@:Q");
+    }
+
+    let tap = cls("UITapGestureRecognizer");
+    if !tap.is_null() {
+        add_method(tap, "numberOfTapsRequired", tap_taps_required as Imp, "Q@:");
+        add_method(tap, "setNumberOfTapsRequired:", gr_set_taps_required as Imp, "v@:Q");
+        add_method(tap, "numberOfTouchesRequired", gr_touches_required as Imp, "Q@:");
+        add_method(tap, "setNumberOfTouchesRequired:", gr_set_touches_required as Imp, "v@:Q");
     }
 }
