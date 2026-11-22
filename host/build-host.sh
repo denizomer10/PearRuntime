@@ -33,6 +33,7 @@ sed 's/^/   /' "$OUT_DIR/stubs.log"
 PEAR_RUNTIME_VERSION="$VERSION" MACOSX_DEPLOYMENT_TARGET=26.0 cargo build --manifest-path "$ROOT/rust/Cargo.toml" --release --target aarch64-apple-darwin --target-dir "$OUT_DIR/rust-target"
 RUST_LIBS="$OUT_DIR/rust-target/aarch64-apple-darwin/release"
 RUST_GLES_LIB="$RUST_LIBS/libpear_gles.a"
+RUST_GLKIT_LIB="$RUST_LIBS/libpear_glkit.a"
 RUST_MTK_LIB="$RUST_LIBS/libpear_metalkit.a"
 RUST_UIKIT_LIB="$RUST_LIBS/libpear_uikit.a"
 
@@ -149,16 +150,20 @@ if [[ -f "$ANGLE_DIR/libGLESv2.dylib" ]]; then
   cp "$ROOT/third_party/angle/LICENSE" "$OUT_DIR/PearANGLE/LICENSE.ANGLE"
   # ANGLE's LICENSE covers ANGLE only; the libraries also contain abseil, zlib,
   # xxHash and others whose licenses travel with them (as in build.sh).
-  ANGLE_LICENSE_ARGS=(--angle-root "$ROOT/third_party/angle" --out "$OUT_DIR/PearANGLE/THIRD_PARTY_LICENSES.txt")
-  ANGLE_NINJA="$ROOT/third_party/angle/out/PearHostMetal"
-  if [[ -f "$ANGLE_NINJA/build.ninja" ]]; then
-    ANGLE_LICENSE_ARGS+=(--ninja-dir "$ANGLE_NINJA" --target libEGL.dylib --target libGLESv2.dylib)
+  if [[ -f "$ANGLE_DIR/THIRD_PARTY_LICENSES.txt" ]]; then
+    cp "$ANGLE_DIR/THIRD_PARTY_LICENSES.txt" "$OUT_DIR/PearANGLE/THIRD_PARTY_LICENSES.txt"
   else
-    for component in abseil-cpp astc-encoder perfetto volk xxhash zlib; do
-      ANGLE_LICENSE_ARGS+=(--component "$component")
-    done
+    ANGLE_LICENSE_ARGS=(--angle-root "$ROOT/third_party/angle" --out "$OUT_DIR/PearANGLE/THIRD_PARTY_LICENSES.txt")
+    ANGLE_NINJA="$ROOT/third_party/angle/out/PearHostMetal"
+    if [[ -f "$ANGLE_NINJA/build.ninja" ]]; then
+      ANGLE_LICENSE_ARGS+=(--ninja-dir "$ANGLE_NINJA" --target libEGL.dylib --target libGLESv2.dylib)
+    else
+      for component in abseil-cpp astc-encoder perfetto volk xxhash zlib; do
+        ANGLE_LICENSE_ARGS+=(--component "$component")
+      done
+    fi
+    python3 "$ROOT/collect-angle-licenses.py" "${ANGLE_LICENSE_ARGS[@]}"
   fi
-  python3 "$ROOT/collect-angle-licenses.py" "${ANGLE_LICENSE_ARGS[@]}"
   echo "   ANGLE: $(ls "$OUT_DIR/PearANGLE" | grep -c dylib) libraries"
   GLES_LINK=(-Wl,-rpath,@loader_path/../PearANGLE)
 else
@@ -169,6 +174,16 @@ fi
   -o "$OUT_DIR/OpenGLES.framework/OpenGLES" -install_name @rpath/OpenGLES.framework/OpenGLES \
   -compatibility_version 1.0.0 -current_version 1.0.0 -framework Foundation -framework QuartzCore
 echo ">> $OUT_DIR/OpenGLES.framework/OpenGLES"
+
+# GLKit.framework: GLKView and GLKViewController on PearANGLE (Rust pear-glkit),
+# re-exporting macOS GLKit for GLKBaseEffect / GLKMath / GLKTextureLoader.
+mkdir -p "$OUT_DIR/GLKit.framework"
+"${LD[@]}" -dynamiclib -Wl,-force_load,"$RUST_GLKIT_LIB" \
+  "$OUT_DIR/UIKit.framework/UIKit" "$OUT_DIR/OpenGLES.framework/OpenGLES" \
+  -Wl,-reexport_framework,GLKit \
+  -o "$OUT_DIR/GLKit.framework/GLKit" -install_name @rpath/GLKit.framework/GLKit \
+  -compatibility_version 1.0.0 -current_version 1.0.0 -framework Foundation -framework QuartzCore
+echo ">> $OUT_DIR/GLKit.framework/GLKit"
 
 # MetalKit.framework: iOS apps expect MTKView to be a UIView (Rust pear-metalkit).
 mkdir -p "$OUT_DIR/MetalKit.framework"

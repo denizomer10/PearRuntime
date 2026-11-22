@@ -46,7 +46,7 @@ spec.loader.exec_module(uikit_stubs)
 
 # Frameworks implemented elsewhere in PearHost (pear-uikit, pear-gles,
 # pear-metalkit) or mapped to another macOS framework by the preparers.
-HANDLED = {"UIKit", "OpenGLES", "MetalKit", "MobileCoreServices",
+HANDLED = {"UIKit", "OpenGLES", "MetalKit", "GLKit", "MobileCoreServices",
            # Swift metadata and witness tables, which plain stubs cannot stand
            # in for (UIViewRepresentable & co.).
            "SwiftUI"}

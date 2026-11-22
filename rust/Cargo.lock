@@ -40,6 +40,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pear-glkit"
+version = "0.1.0"
+dependencies = [
+ "pear-objc",
+]
+
+[[package]]
 name = "pear-graphics"
 version = "0.1.0"
 dependencies = [

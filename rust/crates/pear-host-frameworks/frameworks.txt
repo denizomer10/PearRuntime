@@ -3,7 +3,6 @@ AVKit overlay
 AddressBookUI stub
 AssetsLibrary stub
 EventKitUI stub
-GLKit overlay
 GameController overlay
 MediaPlayer overlay
 MessageUI stub

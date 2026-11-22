@@ -43,6 +43,33 @@ pear_objc::nsstring_constant!(UIPasteboardDetectionPatternPostalAddress = "com.a
 pear_objc::nsstring_constant!(UIPasteboardDetectionPatternProbableWebSearch = "com.apple.uikit.pasteboard-detection-pattern.probable-web-search");
 pear_objc::nsstring_constant!(UIPasteboardDetectionPatternProbableWebURL = "com.apple.uikit.pasteboard-detection-pattern.probable-web-url");
 pear_objc::nsstring_constant!(UIPasteboardDetectionPatternShipmentTrackingNumber = "com.apple.uikit.pasteboard-detection-pattern.shipment-tracking-number");
+pear_objc::nsstring_constant!(UIAccessibilityOnOffSwitchLabelsDidChangeNotification = "UIAccessibilityOnOffSwitchLabelsDidChangeNotification");
+pear_objc::nsstring_constant!(UIAccessibilitySpeechAttributeSpellOut = "UIAccessibilitySpeechAttributeSpellOut");
+pear_objc::nsstring_constant!(UITextContentTypeAddressCity = "addressCity");
+pear_objc::nsstring_constant!(UITextContentTypeAddressCityAndState = "addressCityAndState");
+pear_objc::nsstring_constant!(UITextContentTypeAddressState = "addressState");
+pear_objc::nsstring_constant!(UITextContentTypeCountryName = "countryName");
+pear_objc::nsstring_constant!(UITextContentTypeCreditCardNumber = "creditCardNumber");
+pear_objc::nsstring_constant!(UITextContentTypeEmailAddress = "emailAddress");
+pear_objc::nsstring_constant!(UITextContentTypeFamilyName = "familyName");
+pear_objc::nsstring_constant!(UITextContentTypeFullStreetAddress = "fullStreetAddress");
+pear_objc::nsstring_constant!(UITextContentTypeGivenName = "givenName");
+pear_objc::nsstring_constant!(UITextContentTypeJobTitle = "jobTitle");
+pear_objc::nsstring_constant!(UITextContentTypeLocation = "location");
+pear_objc::nsstring_constant!(UITextContentTypeMiddleName = "middleName");
+pear_objc::nsstring_constant!(UITextContentTypeName = "name");
+pear_objc::nsstring_constant!(UITextContentTypeNamePrefix = "namePrefix");
+pear_objc::nsstring_constant!(UITextContentTypeNameSuffix = "nameSuffix");
+pear_objc::nsstring_constant!(UITextContentTypeNewPassword = "newPassword");
+pear_objc::nsstring_constant!(UITextContentTypeNickname = "nickname");
+pear_objc::nsstring_constant!(UITextContentTypeOrganizationName = "organizationName");
+pear_objc::nsstring_constant!(UITextContentTypePassword = "password");
+pear_objc::nsstring_constant!(UITextContentTypePostalCode = "postalCode");
+pear_objc::nsstring_constant!(UITextContentTypeStreetAddressLine1 = "streetAddressLine1");
+pear_objc::nsstring_constant!(UITextContentTypeStreetAddressLine2 = "streetAddressLine2");
+pear_objc::nsstring_constant!(UITextContentTypeSublocality = "sublocality");
+pear_objc::nsstring_constant!(UITextContentTypeTelephoneNumber = "telephoneNumber");
+pear_objc::nsstring_constant!(UITextContentTypeUsername = "username");
 
 extern "C" {
     #[link_name = "OBJC_CLASS_$_NSObject"]
@@ -61,6 +88,9 @@ pear_objc::empty_class!(UIScreenMode : &raw const super::NSObject_CLASS, &raw co
 pear_objc::empty_class!(PearLayoutConstraint : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
 pear_objc::empty_class!(PearLayoutAnchor : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
 pear_objc::empty_class!(UIWindowSceneGeometry : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+pear_objc::empty_class!(UIIndirectScribbleInteraction : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+pear_objc::empty_class!(UIScribbleInteraction : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
+pear_objc::empty_class!(UITextPlaceholder : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
 
 extern "C" {
     fn PearHostLogMessage(area: *const c_char, message: *const c_char);

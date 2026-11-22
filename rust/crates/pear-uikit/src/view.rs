@@ -1367,6 +1367,7 @@ static VC_MODAL_STYLE_KEY: u8 = 0;
 static VC_MODAL_TRANSITION_KEY: u8 = 0;
 static VC_EDGES_KEY: u8 = 0;
 static VC_WANTS_FULL_SCREEN_KEY: u8 = 0;
+static VC_NAV_ITEM_KEY: u8 = 0;
 
 unsafe extern "C" fn vc_init(self_obj: Id, _cmd: Sel) -> Id {
     msg2(self_obj, "initWithNibName:bundle:", NIL, NIL)
@@ -1418,15 +1419,55 @@ unsafe extern "C" fn vc_nib_bundle(self_obj: Id, _cmd: Sel) -> Id {
     }
 }
 
+unsafe fn try_load_nib_view(self_obj: Id, nib_name: Id, bundle: Id) -> bool {
+    let nib: Id = msg2(cls("UINib"), "nibWithNibName:bundle:", nib_name, bundle);
+    if nib.is_null() {
+        return false;
+    }
+    msg2::<Id, Id, Id>(nib, "instantiateWithOwner:options:", self_obj, NIL);
+    !assoc_get(self_obj, &VC_VIEW_KEY).is_null()
+}
+
 unsafe extern "C" fn vc_load_view(self_obj: Id, _cmd: Sel) {
+    let b = vc_nib_bundle(self_obj, sel("nibBundle"));
     let nn = assoc_get(self_obj, &VC_NIB_NAME_KEY);
-    if !nn.is_null() && !nsstring_to_string(nn).unwrap_or_default().is_empty() {
-        let b = vc_nib_bundle(self_obj, sel("nibBundle"));
-        let nib: Id = msg2(cls("UINib"), "nibWithNibName:bundle:", nn, b);
-        if !nib.is_null() {
-            msg2::<Id, Id, Id>(nib, "instantiateWithOwner:options:", self_obj, NIL);
-            if !assoc_get(self_obj, &VC_VIEW_KEY).is_null() {
-                return;
+    if let Some(explicit) = nsstring_to_string(nn).filter(|s| !s.is_empty()) {
+        if try_load_nib_view(self_obj, nsstring(&explicit), b) {
+            return;
+        }
+    } else {
+        let cname_ptr = class_getName(object_getClass(self_obj));
+        if !cname_ptr.is_null() {
+            let full = CStr::from_ptr(cname_ptr).to_string_lossy();
+            let is_base = matches!(
+                full.as_ref(),
+                "UIViewController"
+                    | "UINavigationController"
+                    | "UITabBarController"
+                    | "UISplitViewController"
+                    | "UIPageViewController"
+                    | "UICollectionViewController"
+                    | "UITableViewController"
+            );
+            if !is_base {
+                let mut candidates = vec![full.to_string()];
+                let unqual = match full.rsplit_once('.') {
+                    Some((_, tail)) if !tail.is_empty() => {
+                        candidates.push(tail.to_string());
+                        tail
+                    }
+                    _ => full.as_ref(),
+                };
+                if let Some(stripped) = unqual.strip_suffix("Controller") {
+                    if !stripped.is_empty() {
+                        candidates.push(stripped.to_string());
+                    }
+                }
+                for cand in candidates {
+                    if try_load_nib_view(self_obj, nsstring(&cand), b) {
+                        return;
+                    }
+                }
             }
         }
     }
@@ -1529,6 +1570,76 @@ unsafe extern "C" fn vc_set_wants_full_screen_layout(controller: Id, _cmd: Sel, 
     // PearHost has no in-window status bar, so the root already uses the
     // entire content area. Keep the legacy controller property readable.
     pear_objc::assoc_set_bool(controller, &VC_WANTS_FULL_SCREEN_KEY, full_screen);
+}
+
+unsafe extern "C" fn vc_navigation_item(self_obj: Id, _cmd: Sel) -> Id {
+    let mut item = assoc_get(self_obj, &VC_NAV_ITEM_KEY);
+    if item.is_null() {
+        let ni_cls = cls("UINavigationItem");
+        if !ni_cls.is_null() {
+            item = msg0(ni_cls as Id, "new");
+            assoc_set(self_obj, &VC_NAV_ITEM_KEY, item);
+            objc_release(item);
+        }
+    }
+    item
+}
+
+static ACT_IND_STYLE_KEY: u8 = 0;
+static ACT_IND_ANIM_KEY: u8 = 0;
+static ACT_IND_HIDES_KEY: u8 = 0;
+static ACT_IND_COLOR_KEY: u8 = 0;
+
+unsafe extern "C" fn aiv_init_style(self_obj: Id, _cmd: Sel, style: isize) -> Id {
+    let frame = CGRect {
+        origin: CGPoint::default(),
+        size: CGSize { width: 37.0, height: 37.0 },
+    };
+    let obj: Id = super1(self_obj, "UIActivityIndicatorView", "initWithFrame:", frame);
+    if !obj.is_null() {
+        assoc_set(obj, &ACT_IND_STYLE_KEY, nsnumber_i64(style as i64));
+        assoc_set(obj, &ACT_IND_ANIM_KEY, nsnumber_bool(false));
+        assoc_set(obj, &ACT_IND_HIDES_KEY, nsnumber_bool(true));
+        msg1::<bool, ()>(obj, "setHidden:", true);
+    }
+    obj
+}
+unsafe extern "C" fn aiv_start(self_obj: Id, _cmd: Sel) {
+    assoc_set(self_obj, &ACT_IND_ANIM_KEY, nsnumber_bool(true));
+    msg1::<bool, ()>(self_obj, "setHidden:", false);
+}
+unsafe extern "C" fn aiv_stop(self_obj: Id, _cmd: Sel) {
+    assoc_set(self_obj, &ACT_IND_ANIM_KEY, nsnumber_bool(false));
+    if aiv_hides(self_obj, sel("hidesWhenStopped")) {
+        msg1::<bool, ()>(self_obj, "setHidden:", true);
+    }
+}
+unsafe extern "C" fn aiv_is_animating(self_obj: Id, _cmd: Sel) -> bool {
+    let n = assoc_get(self_obj, &ACT_IND_ANIM_KEY);
+    !n.is_null() && msg0::<bool>(n, "boolValue")
+}
+unsafe extern "C" fn aiv_hides(self_obj: Id, _cmd: Sel) -> bool {
+    let n = assoc_get(self_obj, &ACT_IND_HIDES_KEY);
+    n.is_null() || msg0::<bool>(n, "boolValue")
+}
+unsafe extern "C" fn aiv_set_hides(self_obj: Id, _cmd: Sel, h: bool) {
+    assoc_set(self_obj, &ACT_IND_HIDES_KEY, nsnumber_bool(h));
+    if h && !aiv_is_animating(self_obj, sel("isAnimating")) {
+        msg1::<bool, ()>(self_obj, "setHidden:", true);
+    }
+}
+unsafe extern "C" fn aiv_color(self_obj: Id, _cmd: Sel) -> Id {
+    assoc_get(self_obj, &ACT_IND_COLOR_KEY)
+}
+unsafe extern "C" fn aiv_set_color(self_obj: Id, _cmd: Sel, c: Id) {
+    assoc_set(self_obj, &ACT_IND_COLOR_KEY, c);
+}
+unsafe extern "C" fn aiv_style(self_obj: Id, _cmd: Sel) -> isize {
+    let n = assoc_get(self_obj, &ACT_IND_STYLE_KEY);
+    if n.is_null() { 0 } else { msg0(n, "integerValue") }
+}
+unsafe extern "C" fn aiv_set_style(self_obj: Id, _cmd: Sel, style: isize) {
+    assoc_set(self_obj, &ACT_IND_STYLE_KEY, nsnumber_i64(style as i64));
 }
 unsafe extern "C" fn vc_orientations(_self: Id, _cmd: Sel) -> usize {
     (1 << 3) | (1 << 4) // landscape
@@ -1855,6 +1966,9 @@ pub extern "C" fn PearUIKitWindowDidResize(window: Id, point_size: CGSize, scale
 // ============================================================================
 
 static BI_TITLE_KEY: u8 = 0;
+static NAV_ITEM_TITLE_KEY: u8 = 0;
+unsafe extern "C" fn nav_item_title(s: Id, _c: Sel) -> Id { assoc_get(s, &NAV_ITEM_TITLE_KEY) }
+unsafe extern "C" fn nav_item_set_title(s: Id, _c: Sel, t: Id) { assoc_set(s, &NAV_ITEM_TITLE_KEY, t); }
 static BI_IMAGE_KEY: u8 = 0;
 static BI_TAG_KEY: u8 = 0;
 static BI_DISABLED_KEY: u8 = 0;
@@ -2711,6 +2825,7 @@ pub unsafe fn register_classes() {
         add_method(vc, "parentViewController", view_nil as Imp, "@@:");
         add_method(vc, "childViewControllers", view_empty_arr as Imp, "@@:");
         add_method(vc, "navigationController", view_nil as Imp, "@@:");
+        add_method(vc, "navigationItem", vc_navigation_item as Imp, "@@:");
         add_method(vc, "tabBarController", view_nil as Imp, "@@:");
         add_method(vc, "prefersStatusBarHidden", view_true as Imp, "B@:");
         add_method(vc, "prefersHomeIndicatorAutoHidden", view_true as Imp, "B@:");
@@ -2747,6 +2862,7 @@ pub unsafe fn register_classes() {
         add_method(w, "windowScene", win_scene as Imp, "@@:");
         add_method(w, "setWindowScene:", win_set_scene as Imp, "v@:@");
         add_method(w, "isKeyWindow", win_is_key as Imp, "B@:");
+        add_method(w, "canBecomeKeyWindow", view_true as Imp, "B@:");
         add_method(w, "rootViewController", win_root as Imp, "@@:");
         add_method(w, "setRootViewController:", win_set_root as Imp, "v@:@");
         add_method(w, "makeKeyWindow", win_make_key as Imp, "v@:");
@@ -2767,6 +2883,12 @@ pub unsafe fn register_classes() {
         add_method(bi, "setTag:", bi_set_tag as Imp, "v@:q");
         add_method(bi, "isEnabled", bi_enabled as Imp, "B@:");
         add_method(bi, "setEnabled:", bi_set_enabled as Imp, "v@:B");
+    }
+
+    let ni = cls("UINavigationItem");
+    if !ni.is_null() {
+        add_method(ni, "title", nav_item_title as Imp, "@@:");
+        add_method(ni, "setTitle:", nav_item_set_title as Imp, "v@:@");
     }
 
     let bbi = cls("UIBarButtonItem");
@@ -2918,6 +3040,20 @@ pub unsafe fn register_classes() {
         add_method(pop, "dismissPopoverAnimated:", pop_dismiss as Imp, "v@:B");
     }
 
+    let aiv = cls("UIActivityIndicatorView");
+    if !aiv.is_null() {
+        add_method(aiv, "initWithActivityIndicatorStyle:", aiv_init_style as Imp, "@@:q");
+        add_method(aiv, "startAnimating", aiv_start as Imp, "v@:");
+        add_method(aiv, "stopAnimating", aiv_stop as Imp, "v@:");
+        add_method(aiv, "isAnimating", aiv_is_animating as Imp, "B@:");
+        add_method(aiv, "hidesWhenStopped", aiv_hides as Imp, "B@:");
+        add_method(aiv, "setHidesWhenStopped:", aiv_set_hides as Imp, "v@:B");
+        add_method(aiv, "color", aiv_color as Imp, "@@:");
+        add_method(aiv, "setColor:", aiv_set_color as Imp, "v@:@");
+        add_method(aiv, "activityIndicatorViewStyle", aiv_style as Imp, "q@:");
+        add_method(aiv, "setActivityIndicatorViewStyle:", aiv_set_style as Imp, "v@:q");
+    }
+
     let gr = cls("UIGestureRecognizer");
     if !gr.is_null() {
         add_method(gr, "init", gr_init as Imp, "@@:");
@@ -2980,6 +3116,14 @@ pub unsafe fn register_classes() {
         add_method(tap, "setNumberOfTapsRequired:", gr_set_taps_required as Imp, "v@:Q");
         add_method(tap, "numberOfTouchesRequired", gr_touches_required as Imp, "Q@:");
         add_method(tap, "setNumberOfTouchesRequired:", gr_set_touches_required as Imp, "v@:Q");
+    }
+
+    let scribble = cls("UIIndirectScribbleInteraction");
+    if !scribble.is_null() {
+        unsafe extern "C" fn scribble_init_del(self_obj: Id, _cmd: Sel, _del: Id) -> Id {
+            msg0(self_obj, "init")
+        }
+        add_method(scribble, "initWithDelegate:", scribble_init_del as Imp, "@@:@");
     }
 
     pointer_gestures::register();
@@ -3087,10 +3231,25 @@ mod layout_controls_imp {
         }
     }
 
+    unsafe extern "C" fn view_animate_simple(
+        cls_obj: Id, _c: Sel, duration: f64, animations: Id, completion: Id,
+    ) {
+        view_animate(
+            cls_obj,
+            sel("animateWithDuration:delay:options:animations:completion:"),
+            duration,
+            0.0,
+            0,
+            animations,
+            completion,
+        );
+    }
+
     pub unsafe fn register_view(v: Class) {
         add_class_method(v, "setAnimationsEnabled:", view_set_anim as Imp, "v@:B");
         add_class_method(v, "areAnimationsEnabled", view_are_anim as Imp, "B@:");
         add_class_method(v, "animateWithDuration:delay:options:animations:completion:", view_animate as Imp, "v@:ddQ@?@?");
+        add_class_method(v, "animateWithDuration:animations:completion:", view_animate_simple as Imp, "v@:d@?@?");
         add_method(v, "constraints", view_constraints as Imp, "@@:");
         add_method(v, "addConstraint:", view_add_constraint as Imp, "v@:@");
         add_method(v, "addConstraints:", view_add_constraints as Imp, "v@:@");

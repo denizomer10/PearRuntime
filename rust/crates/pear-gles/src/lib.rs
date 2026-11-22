@@ -622,8 +622,32 @@ mod forwarders;
 
 mod gl_symbols {
     use super::{dlopen, dlsym, RTLD_LAZY, RTLD_LOCAL};
+    use std::collections::HashMap;
     use std::ffi::{c_char, c_void, CStr, CString};
-    use std::sync::OnceLock;
+    use std::sync::{Mutex, OnceLock};
+
+    const GL_EXTENSIONS: u32 = 0x1F03;
+    const GL_NUM_EXTENSIONS: u32 = 0x821D;
+
+    fn is_hidden_extension(name: &str) -> bool {
+        static ALL_EXTENSIONS: OnceLock<bool> = OnceLock::new();
+        if *ALL_EXTENSIONS.get_or_init(|| std::env::var_os("PEAR_GL_ALL_EXTENSIONS").is_some()) {
+            return false;
+        }
+        matches!(
+            name,
+            "GL_EXT_texture_compression_dxt1"
+                | "GL_EXT_texture_compression_s3tc"
+                | "GL_EXT_texture_compression_s3tc_srgb"
+                | "GL_ANGLE_texture_compression_dxt3"
+                | "GL_ANGLE_texture_compression_dxt5"
+                | "GL_EXT_texture_compression_rgtc"
+                | "GL_EXT_texture_compression_bptc"
+                | "GL_AMD_compressed_ATC_texture"
+                | "GL_NV_texture_compression_s3tc"
+                | "GL_S3_s3tc"
+        )
+    }
 
     fn libglesv2() -> *mut c_void {
         static HANDLE: OnceLock<usize> = OnceLock::new();
@@ -814,6 +838,111 @@ mod gl_symbols {
         upload(target, level, internal_format, width, height, border, format, ty, pixels);
     }
 
+    /// Apple GPUs on iOS never advertise desktop texture compression; games
+    /// pick their asset pack from the extension list, so hide them while
+    /// leaving ANGLE itself unchanged.
+    unsafe extern "C" fn get_string(which: u32) -> *const u8 {
+        type GetString = unsafe extern "C" fn(u32) -> *const u8;
+        static PROC: OnceLock<usize> = OnceLock::new();
+        let proc = *PROC.get_or_init(|| angle(c"glGetString") as usize);
+        if proc == 0 {
+            return std::ptr::null();
+        }
+        let get_str: GetString = std::mem::transmute(proc);
+        let value = get_str(which);
+        if which != GL_EXTENSIONS || value.is_null() {
+            return value;
+        }
+        static FILTERED: OnceLock<Mutex<HashMap<usize, CString>>> = OnceLock::new();
+        let map = FILTERED.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut guard = map.lock().unwrap();
+        let entry = guard.entry(value as usize).or_insert_with(|| {
+            let bytes = CStr::from_ptr(value as *const c_char).to_bytes();
+            let mut out = Vec::with_capacity(bytes.len());
+            for token in bytes.split(|&b| b == b' ') {
+                if token.is_empty() {
+                    continue;
+                }
+                if let Ok(ext) = std::str::from_utf8(token) {
+                    if is_hidden_extension(ext) {
+                        continue;
+                    }
+                }
+                if !out.is_empty() {
+                    out.push(b' ');
+                }
+                out.extend_from_slice(token);
+            }
+            CString::new(out).unwrap_or_default()
+        });
+        entry.as_ptr() as *const u8
+    }
+
+    unsafe fn angle_get_integerv(which: u32, value: *mut i32) {
+        type GetIntegerv = unsafe extern "C" fn(u32, *mut i32);
+        static PROC: OnceLock<usize> = OnceLock::new();
+        let proc = *PROC.get_or_init(|| angle(c"glGetIntegerv") as usize);
+        if proc != 0 {
+            let f: GetIntegerv = std::mem::transmute(proc);
+            f(which, value);
+        }
+    }
+
+    unsafe fn angle_get_stringi(which: u32, index: u32) -> *const u8 {
+        type GetStringi = unsafe extern "C" fn(u32, u32) -> *const u8;
+        static PROC: OnceLock<usize> = OnceLock::new();
+        let proc = *PROC.get_or_init(|| angle(c"glGetStringi") as usize);
+        if proc == 0 {
+            return std::ptr::null();
+        }
+        let f: GetStringi = std::mem::transmute(proc);
+        f(which, index)
+    }
+
+    /// ES3 indexed extension queries, renumbered without the hidden entries.
+    unsafe fn visible_extension(wanted: i32) -> (i32, *const u8) {
+        let mut total: i32 = 0;
+        angle_get_integerv(GL_NUM_EXTENSIONS, &mut total);
+        let mut visible: i32 = 0;
+        for i in 0..total {
+            let entry = angle_get_stringi(GL_EXTENSIONS, i as u32);
+            if entry.is_null() {
+                continue;
+            }
+            if let Ok(name) = CStr::from_ptr(entry as *const c_char).to_str() {
+                if is_hidden_extension(name) {
+                    continue;
+                }
+            }
+            if visible == wanted {
+                return (visible, entry);
+            }
+            visible += 1;
+        }
+        (visible, std::ptr::null())
+    }
+
+    unsafe extern "C" fn get_stringi(which: u32, index: u32) -> *const u8 {
+        if which != GL_EXTENSIONS {
+            return angle_get_stringi(which, index);
+        }
+        if let Ok(wanted) = i32::try_from(index) {
+            let (_, ptr) = visible_extension(wanted);
+            if !ptr.is_null() {
+                return ptr;
+            }
+        }
+        // Out of range: let ANGLE record GL_INVALID_VALUE as usual.
+        angle_get_stringi(which, 0x7fff_ffff)
+    }
+
+    unsafe extern "C" fn get_integerv(which: u32, value: *mut i32) {
+        angle_get_integerv(which, value);
+        if which == GL_NUM_EXTENSIONS && !value.is_null() {
+            *value = visible_extension(-1).0;
+        }
+    }
+
     /// The GLES (and EAGL) implementation for `name`, or null.
     #[export_name = "_Z19PearANGLEGameSymbolPKc"]
     pub unsafe extern "C" fn game_symbol(name: *const c_char) -> *mut c_void {
@@ -826,6 +955,9 @@ mod gl_symbols {
             return alias;
         }
         match c.to_bytes() {
+            b"glGetString" if !angle(c).is_null() => return get_string as *mut c_void,
+            b"glGetStringi" if !angle(c).is_null() => return get_stringi as *mut c_void,
+            b"glGetIntegerv" if !angle(c).is_null() => return get_integerv as *mut c_void,
             b"glTexImage2D" if !angle(c).is_null() => return tex_image_2d as *mut c_void,
             b"glResolveMultisampleFramebufferAPPLE" => return resolve_multisample_apple as *mut c_void,
             b"EAGLGetVersion" => return super::EAGLGetVersion as *mut c_void,

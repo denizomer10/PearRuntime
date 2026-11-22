@@ -539,7 +539,33 @@ extern "C-unwind" fn launch_finish_inner(ctx: *mut c_void) {
         }
 
         let del: Id = msg0(app, "delegate");
+        let manifest: Id = msg1(info, "objectForKey:", nsstring("UIApplicationSceneManifest"));
         let has_scene_cb = !del.is_null() && responds_to(del, "application:configurationForConnectingSceneSession:options:");
+        if main_nib.is_none() && manifest.is_null() && !has_scene_cb {
+            let mut sb_name = nsstring_to_string(msg1(info, "objectForKey:", nsstring("UIMainStoryboardFile~ipad")));
+            if sb_name.as_deref().unwrap_or("").is_empty() {
+                sb_name = nsstring_to_string(msg1(info, "objectForKey:", nsstring("UIMainStoryboardFile")));
+            }
+            if let Some(ref name) = sb_name {
+                if !name.is_empty() {
+                    let board: Id = msg2(cls("UIStoryboard"), "storyboardWithName:bundle:", nsstring(name), bundle);
+                    let controller: Id = msg0(board, "instantiateInitialViewController");
+                    if !controller.is_null() {
+                        let screen: Id = msg0(cls("UIScreen"), "mainScreen");
+                        let bounds: CGRect = msg0(screen, "bounds");
+                        let window: Id = msg1(msg0(cls("UIWindow"), "alloc"), "initWithFrame:", bounds);
+                        if !del.is_null() && responds_to(del, "setWindow:") {
+                            msg1::<Id, ()>(del, "setWindow:", window);
+                        }
+                        msg1::<Id, ()>(window, "setRootViewController:", controller);
+                        nib_windows.push(window);
+                        objc_autorelease(window);
+                    } else {
+                        log_msg("app", "could not load main storyboard entry point");
+                    }
+                }
+            }
+        }
         if del.is_null() {
             log_msg("app", "no application delegate after launch setup");
         } else {
@@ -554,7 +580,6 @@ extern "C-unwind" fn launch_finish_inner(ctx: *mut c_void) {
             }
         }
 
-        let manifest: Id = msg1(info, "objectForKey:", nsstring("UIApplicationSceneManifest"));
         if !manifest.is_null() || has_scene_cb {
             connect_main_scene(app, del, manifest);
         }
@@ -635,14 +660,6 @@ pub extern "C" fn UIApplicationMain(
             msg1::<Id, ()>(app, "pear_retainDelegate:", del);
             if !del.is_null() && del != app {
                 objc_release(del);
-            }
-
-            let info: Id = msg0(msg0(cls("NSBundle"), "mainBundle"), "infoDictionary");
-            let has_sb = !msg1::<Id, Id>(info, "objectForKey:", nsstring("UIMainStoryboardFile")).is_null();
-            if d_name.as_deref().unwrap_or("").is_empty() && has_sb {
-                let c1 = CString::new("UIApplicationMain").unwrap();
-                let c2 = CString::new("main storyboard launch").unwrap();
-                PearMissingReport(1, c1.as_ptr(), c2.as_ptr(), std::ptr::null());
             }
 
             let app_ptr = app as usize;
@@ -1431,29 +1448,43 @@ unsafe extern "C" fn dec_obj(s: Id, _c: Sel, key: Id) -> Id {
 
 static NIB_DATA_KEY: u8 = 0;
 static NIB_NAME_KEY: u8 = 0;
+static STORYBOARD_DIRECTORY_KEY: u8 = 0;
+static STORYBOARD_INFO_KEY: u8 = 0;
+static VC_STORYBOARD_KEY: u8 = 0;
+
+unsafe fn load_nib_data_at_path(p: Id) -> Id {
+    if p.is_null() {
+        return NIL;
+    }
+    let fm: Id = msg0(cls("NSFileManager"), "defaultManager");
+    let mut is_dir = false;
+    let exists: bool = msg2(fm, "fileExistsAtPath:isDirectory:", p, &mut is_dir as *mut bool);
+    if !exists {
+        return NIL;
+    }
+    let target = if is_dir {
+        let mut inner: Id = msg1(p, "stringByAppendingPathComponent:", nsstring("runtime.nib"));
+        if !msg1::<Id, bool>(fm, "fileExistsAtPath:", inner) {
+            inner = msg1(p, "stringByAppendingPathComponent:", nsstring("objects-13.0+.nib"));
+        }
+        inner
+    } else {
+        p
+    };
+    msg1(cls("NSData"), "dataWithContentsOfFile:", target)
+}
 
 unsafe extern "C" fn nib_with_name(_cls: Id, _c: Sel, name: Id, bundle: Id) -> Id {
     let name_str = nsstring_to_string(name).unwrap_or_default();
     let b = if bundle.is_null() { msg0(cls("NSBundle"), "mainBundle") } else { bundle };
-    let fm: Id = msg0(cls("NSFileManager"), "defaultManager");
-    let mut found_path: Id = NIL;
+    let mut data: Id = NIL;
     for cand in [format!("{name_str}~ipad"), name_str.clone()] {
         let p: Id = msg2(b, "pathForResource:ofType:", nsstring(&cand), nsstring("nib"));
-        if p.is_null() { continue; }
-        let mut is_dir = false;
-        let exists: bool = msg2(fm, "fileExistsAtPath:isDirectory:", p, &mut is_dir as *mut bool);
-        if exists && is_dir {
-            let mut inner: Id = msg1(p, "stringByAppendingPathComponent:", nsstring("runtime.nib"));
-            if !msg1::<Id, bool>(fm, "fileExistsAtPath:", inner) {
-                inner = msg1(p, "stringByAppendingPathComponent:", nsstring("objects-13.0+.nib"));
-            }
-            found_path = inner;
-        } else {
-            found_path = p;
+        data = load_nib_data_at_path(p);
+        if !data.is_null() {
+            break;
         }
-        break;
     }
-    let data: Id = if found_path.is_null() { NIL } else { msg1(cls("NSData"), "dataWithContentsOfFile:", found_path) };
     if data.is_null() {
         log_msg("nib", &format!("nib {name_str} not found"));
         return NIL;
@@ -1461,6 +1492,89 @@ unsafe extern "C" fn nib_with_name(_cls: Id, _c: Sel, name: Id, bundle: Id) -> I
     let nib: Id = msg2(cls("UINib"), "nibWithData:bundle:", data, bundle);
     assoc_set(nib, &NIB_NAME_KEY, name);
     nib
+}
+
+unsafe extern "C" fn storyboard_with_name(_cls: Id, _cmd: Sel, name: Id, bundle: Id) -> Id {
+    let Some(name_str) = nsstring_to_string(name).filter(|s| !s.is_empty()) else {
+        return NIL;
+    };
+    let bundle = if bundle.is_null() { msg0(cls("NSBundle"), "mainBundle") } else { bundle };
+    for cand in [format!("{name_str}~ipad"), name_str] {
+        let directory: Id = msg2(bundle, "pathForResource:ofType:", nsstring(&cand), nsstring("storyboardc"));
+        if directory.is_null() {
+            continue;
+        }
+        let plist: Id = msg1(directory, "stringByAppendingPathComponent:", nsstring("Info.plist"));
+        let info: Id = msg1(cls("NSDictionary"), "dictionaryWithContentsOfFile:", plist);
+        if info.is_null() {
+            continue;
+        }
+        let board: Id = objc_autorelease(msg0(cls("UIStoryboard"), "new"));
+        assoc_set(board, &STORYBOARD_DIRECTORY_KEY, directory);
+        assoc_set(board, &STORYBOARD_INFO_KEY, info);
+        return board;
+    }
+    NIL
+}
+
+unsafe extern "C" fn storyboard_instantiate(board: Id, _cmd: Sel, identifier: Id) -> Id {
+    if identifier.is_null() {
+        return NIL;
+    }
+    let info = assoc_get(board, &STORYBOARD_INFO_KEY);
+    let names: Id = msg1(info, "objectForKey:", nsstring("UIViewControllerIdentifiersToNibNames"));
+    let name: Id = msg1(names, "objectForKey:", identifier);
+    if name.is_null() {
+        return NIL;
+    }
+    let directory = assoc_get(board, &STORYBOARD_DIRECTORY_KEY);
+    let nib_name: Id = msg1(name, "stringByAppendingPathExtension:", nsstring("nib"));
+    let path: Id = msg1(directory, "stringByAppendingPathComponent:", nib_name);
+    let data: Id = load_nib_data_at_path(path);
+    if data.is_null() {
+        return NIL;
+    }
+    let nib: Id = msg2(cls("UINib"), "nibWithData:bundle:", data, NIL);
+    assoc_set(nib, &NIB_NAME_KEY, name);
+    let dictionary = cls("NSDictionary");
+    let external: Id = msg2(dictionary, "dictionaryWithObject:forKey:", board, nsstring("UIStoryboardPlaceholder"));
+    let options: Id = msg2(dictionary, "dictionaryWithObject:forKey:", external, nsstring("UINibExternalObjects"));
+    let objects: Id = msg2(nib, "instantiateWithOwner:options:", NIL, options);
+    for i in 0..nsarray_count(objects) {
+        let obj = nsarray_object_at(objects, i);
+        if is_kind_of(obj, "UIViewController") {
+            assoc_set(obj, &VC_STORYBOARD_KEY, board);
+            return obj;
+        }
+    }
+    NIL
+}
+
+unsafe extern "C" fn storyboard_initial(board: Id, cmd: Sel) -> Id {
+    let info = assoc_get(board, &STORYBOARD_INFO_KEY);
+    let entry: Id = msg1(info, "objectForKey:", nsstring("UIStoryboardDesignatedEntryPointIdentifier"));
+    storyboard_instantiate(board, cmd, entry)
+}
+
+unsafe extern "C" fn storyboard_initial_creator(board: Id, cmd: Sel, creator: Id) -> Id {
+    if !creator.is_null() {
+        let hdr = &*(creator as *const BlockHeader);
+        let f: unsafe extern "C" fn(Id, Id) -> Id = std::mem::transmute(hdr.invoke);
+        let res = f(creator, NIL);
+        if !res.is_null() {
+            assoc_set(res, &VC_STORYBOARD_KEY, board);
+            return res;
+        }
+    }
+    storyboard_initial(board, cmd)
+}
+
+unsafe extern "C" fn vc_storyboard(controller: Id, _cmd: Sel) -> Id {
+    assoc_get(controller, &VC_STORYBOARD_KEY)
+}
+
+unsafe extern "C" fn vc_set_storyboard(controller: Id, _cmd: Sel, board: Id) {
+    assoc_set(controller, &VC_STORYBOARD_KEY, board);
 }
 
 unsafe extern "C" fn nib_with_data(_cls: Id, _c: Sel, data: Id, _bundle: Id) -> Id {
@@ -1973,6 +2087,18 @@ pub unsafe fn register_classes() {
     let bdl = cls("NSBundle");
     if !bdl.is_null() {
         add_method(bdl, "loadNibNamed:owner:options:", bundle_load_nib as Imp, "@@:@@@");
+    }
+    let sb = cls("UIStoryboard");
+    if !sb.is_null() {
+        add_class_method(sb, "storyboardWithName:bundle:", storyboard_with_name as Imp, "@@:@@");
+        add_method(sb, "instantiateInitialViewController", storyboard_initial as Imp, "@@:");
+        add_method(sb, "instantiateInitialViewControllerWithCreator:", storyboard_initial_creator as Imp, "@@:@?");
+        add_method(sb, "instantiateViewControllerWithIdentifier:", storyboard_instantiate as Imp, "@@:@");
+    }
+    let vc = cls("UIViewController");
+    if !vc.is_null() {
+        add_method(vc, "storyboard", vc_storyboard as Imp, "@@:");
+        add_method(vc, "setStoryboard:", vc_set_storyboard as Imp, "v@:@");
     }
 
     scene_imp::register();

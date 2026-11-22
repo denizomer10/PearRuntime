@@ -1,5 +1,5 @@
 //! UITraitCollection, UIScreen, UIDevice, UIResponder, UITouch, UIEvent,
-//! UIPasteboard, UIFeedbackGenerator (+ subclasses), and UIStoryboard.
+//! UIPasteboard, and UIFeedbackGenerator (+ subclasses).
 
 use pear_objc::{
     cls, is_kind_of, msg0, msg1, msg2, msg3, nsarray_count, nsarray_from_ids,
@@ -11,14 +11,6 @@ use pear_objc::{
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-
-#[repr(C)]
-struct BlockHeader {
-    isa: *const c_void,
-    flags: i32,
-    reserved: i32,
-    invoke: *const c_void,
-}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -943,7 +935,7 @@ unsafe extern "C" fn pb_set_value_for_type(self_obj: Id, _cmd: Sel, val: Id, ty:
 }
 
 // ============================================================================
-// UIFeedbackGenerator & UIStoryboard
+// UIFeedbackGenerator
 // ============================================================================
 
 unsafe extern "C" fn fb_noop(_self: Id, _cmd: Sel) {}
@@ -951,58 +943,6 @@ unsafe extern "C" fn fb_noop_f64(_self: Id, _cmd: Sel, _v: f64) {}
 unsafe extern "C" fn fb_noop_int(_self: Id, _cmd: Sel, _v: isize) {}
 unsafe extern "C" fn fb_init_style(self_obj: Id, _cmd: Sel, _style: isize) -> Id {
     msg0(self_obj, "init")
-}
-
-static SB_NAME_KEY: u8 = 0;
-
-unsafe extern "C" fn sb_with_name(_self_cls: Id, _cmd: Sel, name: Id, bundle: Id) -> Id {
-    let name_str = nsstring_to_string(name).unwrap_or_default();
-    if name_str.is_empty() {
-        return NIL;
-    }
-    let b = if bundle.is_null() {
-        msg0(cls("NSBundle"), "mainBundle")
-    } else {
-        bundle
-    };
-    let path: Id = msg2(b, "pathForResource:ofType:", name, nsstring("storyboardc"));
-    if path.is_null() {
-        return NIL;
-    }
-    let sb: Id = msg0(cls("UIStoryboard"), "new");
-    assoc_set(sb, &SB_NAME_KEY, name);
-    sb
-}
-
-unsafe extern "C" fn sb_init_vc(_self_obj: Id, _cmd: Sel) -> Id {
-    let vc: Id = msg0(cls("UIViewController"), "new");
-    if vc.is_null() {
-        return NIL;
-    }
-    let _view: Id = msg0(vc, "view");
-    pear_objc::objc_autorelease(vc)
-}
-
-unsafe extern "C" fn sb_init_vc_creator(_self_obj: Id, _cmd: Sel, creator: Id) -> Id {
-    if !creator.is_null() {
-        let hdr = &*(creator as *const BlockHeader);
-        let f: unsafe extern "C" fn(Id, Id) -> Id = std::mem::transmute(hdr.invoke);
-        let res = f(creator, NIL);
-        if !res.is_null() {
-            let _view: Id = msg0(res, "view");
-            return res;
-        }
-    }
-    sb_init_vc(_self_obj, _cmd)
-}
-
-unsafe extern "C" fn sb_vc_with_id(_self: Id, _cmd: Sel, _ident: Id) -> Id {
-    let vc: Id = msg0(cls("UIViewController"), "new");
-    if vc.is_null() {
-        return NIL;
-    }
-    let _view: Id = msg0(vc, "view");
-    pear_objc::objc_autorelease(vc)
 }
 
 pub unsafe fn register_classes() {
@@ -1017,6 +957,8 @@ pub unsafe fn register_classes() {
         add_method(tc, "verticalSizeClass", trait_size_class as Imp, "q@:");
         add_method(tc, "forceTouchCapability", trait_force_touch as Imp, "q@:");
         add_method(tc, "displayGamut", trait_gamut as Imp, "q@:");
+        unsafe extern "C" fn trait_contrast(_s: Id, _c: Sel) -> isize { 0 }
+        add_method(tc, "accessibilityContrast", trait_contrast as Imp, "q@:");
         add_method(tc, "copyWithZone:", copy_self as Imp, "@@:^{_NSZone=}");
     }
 
@@ -1137,6 +1079,10 @@ pub unsafe fn register_classes() {
         add_method(touch, "previousLocationInView:", touch_prev_location_in_view as Imp, "{CGPoint=dd}@:@");
         add_method(touch, "preciseLocationInView:", touch_location_in_view as Imp, "{CGPoint=dd}@:@");
         add_method(touch, "precisePreviousLocationInView:", touch_prev_location_in_view as Imp, "{CGPoint=dd}@:@");
+        unsafe extern "C" fn touch_altitude(_s: Id, _c: Sel) -> f64 { std::f64::consts::FRAC_PI_2 }
+        unsafe extern "C" fn touch_azimuth(_s: Id, _c: Sel, _v: Id) -> f64 { 0.0 }
+        add_method(touch, "altitudeAngle", touch_altitude as Imp, "d@:");
+        add_method(touch, "azimuthAngleInView:", touch_azimuth as Imp, "d@:@");
     }
 
     let ev = cls("UIEvent");
@@ -1144,6 +1090,7 @@ pub unsafe fn register_classes() {
         add_method(ev, "initWithTouches:timestamp:", event_init as Imp, "@@:@d");
         add_method(ev, "type", event_zero as Imp, "q@:");
         add_method(ev, "subtype", event_zero as Imp, "q@:");
+        add_method(ev, "buttonMask", event_zero as Imp, "q@:");
         add_method(ev, "timestamp", event_timestamp as Imp, "d@:");
         add_method(ev, "allTouches", event_all_touches as Imp, "@@:");
         add_method(ev, "touchesForView:", event_touches_for_view as Imp, "@@:@");
@@ -1194,13 +1141,5 @@ pub unsafe fn register_classes() {
     let sel_fb = cls("UISelectionFeedbackGenerator");
     if !sel_fb.is_null() {
         add_method(sel_fb, "selectionChanged", fb_noop as Imp, "v@:");
-    }
-
-    let sb = cls("UIStoryboard");
-    if !sb.is_null() {
-        add_class_method(sb, "storyboardWithName:bundle:", sb_with_name as Imp, "@@:@@");
-        add_method(sb, "instantiateInitialViewController", sb_init_vc as Imp, "@@:");
-        add_method(sb, "instantiateInitialViewControllerWithCreator:", sb_init_vc_creator as Imp, "@@:@?");
-        add_method(sb, "instantiateViewControllerWithIdentifier:", sb_vc_with_id as Imp, "@@:@");
     }
 }
