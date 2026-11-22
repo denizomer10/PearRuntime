@@ -7,8 +7,6 @@ members = [
     "crates/pear-gles",
     "crates/pear-metalkit",
     "crates/pear-uikit",
-    "crates/pear-catalyst",
-    "crates/pear-opengles",
     "crates/pear-cxxcompat",
     "crates/pear-keychain",
     "crates/pear-empty-framework",
@@ -25,9 +23,8 @@ members = [
     "crates/pear-runtime",
     "crates/pear-legacy-host",
 ]
-# pear-catalyst, pear-opengles, pear-cxxcompat and pear-swift-support target
-# Mac Catalyst only
-# (build.sh, build-angle-bridge.sh); host builds skip them.
+# pear-swift-support targets aarch64-apple-ios-macabi for the UIKit Swift
+# overlay; default host builds skip it.
 default-members = [
     "crates/pear-core",
     "crates/pear-macho",
@@ -55,10 +52,3 @@ resolver = "2"
 [profile.release]
 opt-level = 2
 lto = "thin"
-
-# Source-level smoke tests (scripts/build-smoke-runtime.sh): release code
-# generation without LTO, built with the `smoke` feature of the crate tested.
-[profile.smoke]
-inherits = "release"
-lto = false
-incremental = true

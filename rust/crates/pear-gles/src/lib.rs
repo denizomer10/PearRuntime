@@ -608,11 +608,10 @@ mod abi {
 }
 
 // ---- GLES entry points --------------------------------------------------------
-// OpenGLES.framework exports every GLES prototype through the pear-opengles
-// forwarders, so a game binds at launch even for entry points ANGLE names
-// differently or lacks; each resolves here on first call.
+// OpenGLES.framework exports every GLES prototype through its forwarders, so a
+// game binds at launch even for entry points ANGLE names differently or lacks;
+// each resolves here on first call.
 #[allow(non_upper_case_globals, non_snake_case)]
-#[path = "../../pear-opengles/src/forwarders.rs"]
 mod forwarders;
 
 mod gl_symbols {

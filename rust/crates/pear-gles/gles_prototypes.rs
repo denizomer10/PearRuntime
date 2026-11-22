@@ -1,5 +1,5 @@
-// Shared by pear-opengles and pear-gles build scripts (include!d): writes
-// OUT_DIR/forwarders.rs, the list of GLES prototypes for forwarders.rs.
+// Included by `pear-gles/build.rs`: writes OUT_DIR/forwarders.rs, the list of
+// GLES prototypes for `src/forwarders.rs`.
 //
 // The GLES ABI: every `gl*` prototype in ANGLE's pinned Khronos headers (GLES
 // 1 + extensions, GLES 2/3.x + extensions), so a game image binds at launch

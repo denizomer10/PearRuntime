@@ -1,9 +1,8 @@
 //! Every GLES prototype as a register-preserving trampoline that resolves its
 //! target once through `PearANGLEGameSymbol` and tail-jumps to it, so no C
-//! signature is needed and no system OpenGL ES is ever used. Shared by
-//! libPearOpenGLES.dylib (Mac Catalyst, feature `catalyst`) and PearHost's
-//! OpenGLES.framework (pear-gles includes this file); the including crate's
-//! build script writes the list (gles_prototypes.rs).
+//! signature is needed and no system OpenGL ES is ever used by PearHost's
+//! `OpenGLES.framework`; `build.rs` writes the prototype list from ANGLE's
+//! Khronos headers (`gles_prototypes.rs`).
 
 // The trampolines are AArch64 (Apple silicon, and arm64 Linux/Windows);
 // an x86-64 host needs its own pair (System V and Win64 argument registers).
@@ -15,23 +14,14 @@ use std::ffi::{c_char, c_void};
 extern "C" {
     #[link_name = "_Z19PearANGLEGameSymbolPKc"]
     pub(crate) fn PearANGLEGameSymbol(name: *const c_char) -> *mut c_void;
-    #[cfg(feature = "catalyst")]
-    #[link_name = "_Z14PearANGLETracePKcz"]
-    fn PearANGLETrace(format: *const c_char, ...);
-    #[cfg(not(feature = "catalyst"))]
     fn PearHostLogMessage(area: *const c_char, message: *const c_char);
     fn abort() -> !;
 }
 
 unsafe fn report_unavailable(name: *const c_char) {
-    #[cfg(feature = "catalyst")]
-    PearANGLETrace(c"[PearRuntime][angle] unavailable GLES entry: %s\n".as_ptr(), name);
-    #[cfg(not(feature = "catalyst"))]
-    {
-        let text = format!("unavailable GLES entry: {}", std::ffi::CStr::from_ptr(name).to_string_lossy());
-        let message = std::ffi::CString::new(text).unwrap_or_default();
-        PearHostLogMessage(c"angle".as_ptr(), message.as_ptr());
-    }
+    let text = format!("unavailable GLES entry: {}", std::ffi::CStr::from_ptr(name).to_string_lossy());
+    let message = std::ffi::CString::new(text).unwrap_or_default();
+    PearHostLogMessage(c"angle".as_ptr(), message.as_ptr());
 }
 
 /// Slow path of every forwarder: resolve, cache, or abort (no silent no-op).

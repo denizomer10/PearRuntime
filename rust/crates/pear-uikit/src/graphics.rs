@@ -1,11 +1,11 @@
 //! UIColor, UIImage, UIImagePNGRepresentation/JPEGRepresentation, UIGraphics*, UIFont, UILabel, UIProgressView.
 
 use pear_objc::{
-    assoc_get, assoc_i64, assoc_set, assoc_set_i64, autoreleased, cls, is_kind_of, msg0, msg1,
-    msg2, msg_super0, msg_super1, nsstring, object_getClass, objc_getAssociatedObject,
-    objc_release, objc_retain, objc_setAssociatedObject, replace_method as add_method,
-    responds_to, sel, super_dealloc, CGPoint, CGRect, CGSize, Class, Id, Imp, Sel, NIL,
-    OBJC_ASSOCIATION_RETAIN,
+    assoc_get, assoc_i64, assoc_set, assoc_set_i64, autoreleased, class_respondsToSelector, cls,
+    is_kind_of, msg0, msg1, msg2, msg_super0, msg_super1, nsstring, nsstring_to_string,
+    object_getClass, objc_getAssociatedObject, objc_msgSend, objc_release, objc_retain,
+    objc_setAssociatedObject, replace_method as add_method, responds_to, sel, super_dealloc,
+    CGPoint, CGRect, CGSize, Class, Id, Imp, Sel, UIEdgeInsets, NIL, OBJC_ASSOCIATION_RETAIN,
 };
 use std::ffi::{c_double, c_float, c_void};
 use std::sync::Mutex;
@@ -48,6 +48,7 @@ extern "C" {
     fn CGPathCreateWithRect(rect: CGRect, transform: *const c_void) -> *mut c_void;
     fn CGPathRelease(path: *mut c_void);
     fn CGContextSetFillColorWithColor(ctx: *mut c_void, color: *mut c_void);
+    fn CGContextSetBlendMode(ctx: *mut c_void, mode: i32);
     fn CGContextFillRect(ctx: *mut c_void, rect: CGRect);
     fn CGContextClearRect(ctx: *mut c_void, rect: CGRect);
     fn CGContextSetTextPosition(ctx: *mut c_void, x: f64, y: f64);
@@ -148,13 +149,13 @@ extern "C" {
 
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
-struct CGAffineTransform {
-    a: f64,
-    b: f64,
-    c: f64,
-    d: f64,
-    tx: f64,
-    ty: f64,
+pub struct CGAffineTransform {
+    pub a: f64,
+    pub b: f64,
+    pub c: f64,
+    pub d: f64,
+    pub tx: f64,
+    pub ty: f64,
 }
 
 #[repr(C)]
@@ -736,6 +737,132 @@ pub extern "C" fn UIGraphicsEndPDFContext() {
                 CGContextRelease(c);
             }
         }
+    }
+}
+
+fn fmt_cg_num(v: f64) -> String {
+    let clean = if v == 0.0 { 0.0 } else { v };
+    format!("{clean}")
+}
+
+unsafe fn parse_cg_floats(s: Id, count: usize) -> Option<Vec<f64>> {
+    let text = nsstring_to_string(s)?;
+    let mut vals = Vec::with_capacity(count);
+    for tok in text.split(|c: char| matches!(c, '{' | '}' | '[' | ']' | ',') || c.is_whitespace()) {
+        if tok.is_empty() {
+            continue;
+        }
+        let v = tok.parse::<f64>().ok()?;
+        vals.push(v);
+    }
+    (vals.len() == count).then_some(vals)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn NSStringFromCGPoint(point: CGPoint) -> Id {
+    nsstring(&format!("{{{}, {}}}", fmt_cg_num(point.x), fmt_cg_num(point.y)))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn NSStringFromCGSize(size: CGSize) -> Id {
+    nsstring(&format!("{{{}, {}}}", fmt_cg_num(size.width), fmt_cg_num(size.height)))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn NSStringFromCGRect(rect: CGRect) -> Id {
+    nsstring(&format!(
+        "{{{{{}, {}}}, {{{}, {}}}}}",
+        fmt_cg_num(rect.origin.x),
+        fmt_cg_num(rect.origin.y),
+        fmt_cg_num(rect.size.width),
+        fmt_cg_num(rect.size.height),
+    ))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn NSStringFromCGAffineTransform(t: CGAffineTransform) -> Id {
+    nsstring(&format!(
+        "[{}, {}, {}, {}, {}, {}]",
+        fmt_cg_num(t.a),
+        fmt_cg_num(t.b),
+        fmt_cg_num(t.c),
+        fmt_cg_num(t.d),
+        fmt_cg_num(t.tx),
+        fmt_cg_num(t.ty),
+    ))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn NSStringFromUIEdgeInsets(e: UIEdgeInsets) -> Id {
+    nsstring(&format!(
+        "{{{}, {}, {}, {}}}",
+        fmt_cg_num(e.top),
+        fmt_cg_num(e.left),
+        fmt_cg_num(e.bottom),
+        fmt_cg_num(e.right),
+    ))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn CGSizeFromString(s: Id) -> CGSize {
+    match parse_cg_floats(s, 2) {
+        Some(v) => CGSize { width: v[0], height: v[1] },
+        None => CGSize::default(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn CGRectFromString(s: Id) -> CGRect {
+    match parse_cg_floats(s, 4) {
+        Some(v) => CGRect {
+            origin: CGPoint { x: v[0], y: v[1] },
+            size: CGSize { width: v[2], height: v[3] },
+        },
+        None => CGRect::default(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn UIEdgeInsetsFromString(s: Id) -> UIEdgeInsets {
+    match parse_cg_floats(s, 4) {
+        Some(v) => UIEdgeInsets {
+            top: v[0],
+            left: v[1],
+            bottom: v[2],
+            right: v[3],
+        },
+        None => UIEdgeInsets::default(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn UIRectFillUsingBlendMode(rect: CGRect, blend_mode: i32) {
+    let ctx = UIGraphicsGetCurrentContext();
+    if ctx.is_null() {
+        return;
+    }
+    CGContextSaveGState(ctx);
+    CGContextSetBlendMode(ctx, blend_mode);
+    CGContextFillRect(ctx, rect);
+    CGContextRestoreGState(ctx);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn UIRectFill(rect: CGRect) {
+    UIRectFillUsingBlendMode(rect, 17);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn UIImageWriteToSavedPhotosAlbum(
+    image: Id,
+    target: Id,
+    selector: Sel,
+    context: *mut c_void,
+) {
+    if !target.is_null() && !selector.is_null() && class_respondsToSelector(object_getClass(target), selector) {
+        let f: unsafe extern "C" fn(Id, Sel, Id, Id, *mut c_void) =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        f(target, selector, image, NIL, context);
     }
 }
 

@@ -86,14 +86,36 @@ MACOSX_DEPLOYMENT_TARGET=26.0 cargo build --quiet --manifest-path "$ROOT/rust/Ca
   -install_name @rpath/libcxxcompat.dylib -compatibility_version 1.0.0 -current_version 1.0.0
 echo ">> $OUT_DIR/libcxxcompat.dylib"
 
-# The UIKit Swift overlay (Swift, compat/swift; built by build.sh for Mac
-# Catalyst). The preparers retarget it to macOS like the app's own images.
+# The UIKit Swift overlay (Swift, compat/swift + pear-swift-support).
+# The preparers retarget it to macOS like the app's own images.
+IOS_FRAMEWORKS="$SDK/System/iOSSupport/System/Library/Frameworks"
 CATALYST_OVERLAY="${PEAR_BUILD_DIR:-$ROOT/build}/libswiftUIKit.dylib"
 if [[ -f "$CATALYST_OVERLAY" ]]; then
   cp "$CATALYST_OVERLAY" "$OUT_DIR/libswiftUIKit.dylib"
-  echo ">> $OUT_DIR/libswiftUIKit.dylib (from the Catalyst build)"
-else
-  echo "!! no $CATALYST_OVERLAY (run build.sh): apps linking the UIKit Swift overlay will not start" >&2
+  echo ">> $OUT_DIR/libswiftUIKit.dylib (staged)"
+elif [[ -d "$IOS_FRAMEWORKS" ]]; then
+  SWIFT_TARGET_DIR="${PEAR_BUILD_DIR:-$ROOT/build}/rust-catalyst"
+  CLANG_TARGET="arm64-apple-ios15.0-macabi"
+  SWIFTC="$(xcrun --find swiftc)"
+  IPHONEOS_DEPLOYMENT_TARGET=15.0 RUSTC_BOOTSTRAP=1 \
+    cargo build --quiet --manifest-path "$ROOT/rust/Cargo.toml" --release -p pear-swift-support \
+    --target aarch64-apple-ios-macabi -Zbuild-std=std,panic_abort --target-dir "$SWIFT_TARGET_DIR"
+  SWIFT_SUPPORT_LIB="$SWIFT_TARGET_DIR/aarch64-apple-ios-macabi/release/libpear_swift_support.a"
+  "$SWIFTC" -target "$CLANG_TARGET" -sdk "$SDK" -F "$IOS_FRAMEWORKS" \
+    -parse-as-library -emit-object -module-name PearSwiftUIKit \
+    -o "$OUT_DIR/PearSwiftUIKit.o" "$ROOT/compat/swift/PearSwiftUIKit.swift"
+  "$SWIFTC" -target "$CLANG_TARGET" -sdk "$SDK" -F "$IOS_FRAMEWORKS" \
+    -parse-as-library -emit-object -module-name UIKit -module-alias AppleUIKit=UIKit \
+    -o "$OUT_DIR/PearUIKitNumeric.o" "$ROOT/compat/swift/PearUIKitNumeric.swift"
+  "$SWIFTC" -target "$CLANG_TARGET" -sdk "$SDK" -F "$IOS_FRAMEWORKS" \
+    -parse-as-library -emit-library -Xlinker -install_name -Xlinker @rpath/libswiftUIKit.dylib \
+    -Xlinker -undefined -Xlinker dynamic_lookup \
+    -o "$OUT_DIR/libswiftUIKit.dylib" "$OUT_DIR/PearSwiftUIKit.o" "$OUT_DIR/PearUIKitNumeric.o" \
+    -Xlinker -u -Xlinker '__swift_FORCE_LOAD_$_swiftUIKit' "$SWIFT_SUPPORT_LIB"
+  rm -f "$OUT_DIR/PearSwiftUIKit.o" "$OUT_DIR/PearUIKitNumeric.o"
+  echo ">> $OUT_DIR/libswiftUIKit.dylib (built from compat/swift)"
+elif [[ ! -f "$OUT_DIR/libswiftUIKit.dylib" ]]; then
+  echo "!! no libswiftUIKit.dylib and no iOSSupport SDK: apps linking the UIKit Swift overlay will not start" >&2
 fi
 
 # Stands in for the Catalyst runtime (libPearRuntime.dylib) that a bundle

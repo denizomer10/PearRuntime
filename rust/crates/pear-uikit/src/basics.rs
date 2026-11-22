@@ -49,6 +49,45 @@ fn assoc_set(obj: Id, key: &u8, val: Id) {
     }
 }
 
+fn content_size_rank(cat: &str) -> Option<usize> {
+    match cat {
+        "UIContentSizeCategoryExtraSmall" | "UICTContentSizeCategoryXS" => Some(0),
+        "UIContentSizeCategorySmall" | "UICTContentSizeCategoryS" => Some(1),
+        "UIContentSizeCategoryMedium" | "UICTContentSizeCategoryM" => Some(2),
+        "UIContentSizeCategoryLarge" | "UICTContentSizeCategoryL" => Some(3),
+        "UIContentSizeCategoryExtraLarge" | "UICTContentSizeCategoryXL" => Some(4),
+        "UIContentSizeCategoryExtraExtraLarge" | "UICTContentSizeCategoryXXL" => Some(5),
+        "UIContentSizeCategoryExtraExtraExtraLarge" | "UICTContentSizeCategoryXXXL" => Some(6),
+        "UIContentSizeCategoryAccessibilityMedium" | "UICTContentSizeCategoryAccessibilityM" => Some(7),
+        "UIContentSizeCategoryAccessibilityLarge" | "UICTContentSizeCategoryAccessibilityL" => Some(8),
+        "UIContentSizeCategoryAccessibilityExtraLarge" | "UICTContentSizeCategoryAccessibilityXL" => Some(9),
+        "UIContentSizeCategoryAccessibilityExtraExtraLarge" | "UICTContentSizeCategoryAccessibilityXXL" => Some(10),
+        "UIContentSizeCategoryAccessibilityExtraExtraExtraLarge" | "UICTContentSizeCategoryAccessibilityXXXL" => Some(11),
+        _ => None,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn UIContentSizeCategoryCompareToCategory(lhs: Id, rhs: Id) -> isize {
+    let l = nsstring_to_string(lhs).unwrap_or_default();
+    let r = nsstring_to_string(rhs).unwrap_or_default();
+    match (content_size_rank(&l), content_size_rank(&r)) {
+        (Some(a), Some(b)) => match a.cmp(&b) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        },
+        _ => 0,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn UIContentSizeCategoryIsAccessibilityCategory(cat: Id) -> bool {
+    nsstring_to_string(cat)
+        .map(|s| s.contains("Accessibility"))
+        .unwrap_or(false)
+}
+
 // ============================================================================
 // UITraitCollection
 // ============================================================================

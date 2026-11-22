@@ -2,14 +2,167 @@
 
 use pear_objc::{
     assoc_bool, assoc_get, assoc_i64, assoc_rect, assoc_set, assoc_set_bool,
-    assoc_set_copy, assoc_set_i64, assoc_set_rect, autoreleased, cls, msg0, msg1,
-    replace_method as add_method, CGRect, Class, Id, Imp, Sel,
+    assoc_set_copy, assoc_set_i64, assoc_set_rect, autoreleased, cls, msg0, msg1, msg2,
+    replace_method as add_method, responds_to, CGRect, Class, Id, Imp, Sel, NIL,
 };
 use std::ffi::c_void;
+
+#[repr(C)]
+struct BlockHeader {
+    isa: *const c_void,
+    flags: i32,
+    reserved: i32,
+    invoke: *const c_void,
+}
+
+#[no_mangle]
+pub static UIAccessibilityTraitNone: u64 = 0;
+#[no_mangle]
+pub static UIAccessibilityTraitButton: u64 = 1 << 0;
+#[no_mangle]
+pub static UIAccessibilityTraitLink: u64 = 1 << 1;
+#[no_mangle]
+pub static UIAccessibilityTraitImage: u64 = 1 << 2;
+#[no_mangle]
+pub static UIAccessibilityTraitSelected: u64 = 1 << 3;
+#[no_mangle]
+pub static UIAccessibilityTraitPlaysSound: u64 = 1 << 4;
+#[no_mangle]
+pub static UIAccessibilityTraitKeyboardKey: u64 = 1 << 5;
+#[no_mangle]
+pub static UIAccessibilityTraitStaticText: u64 = 1 << 6;
+#[no_mangle]
+pub static UIAccessibilityTraitSummaryElement: u64 = 1 << 7;
+#[no_mangle]
+pub static UIAccessibilityTraitNotEnabled: u64 = 1 << 8;
+#[no_mangle]
+pub static UIAccessibilityTraitUpdatesFrequently: u64 = 1 << 9;
+#[no_mangle]
+pub static UIAccessibilityTraitSearchField: u64 = 1 << 10;
+#[no_mangle]
+pub static UIAccessibilityTraitStartsMediaSession: u64 = 1 << 11;
+#[no_mangle]
+pub static UIAccessibilityTraitAdjustable: u64 = 1 << 12;
+#[no_mangle]
+pub static UIAccessibilityTraitAllowsDirectInteraction: u64 = 1 << 13;
+#[no_mangle]
+pub static UIAccessibilityTraitHeader: u64 = 1 << 16;
+#[no_mangle]
+pub static UIAccessibilityTraitTabBar: u64 = 1 << 19;
 
 #[no_mangle]
 pub extern "C" fn UIAccessibilityIsVoiceOverRunning() -> bool {
     pear_host::host().screen_reader_running()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityButtonShapesEnabled() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityDarkerSystemColorsEnabled() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityIsAssistiveTouchRunning() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityIsBoldTextEnabled() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityIsClosedCaptioningEnabled() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityIsGrayscaleEnabled() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityIsGuidedAccessEnabled() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityIsInvertColorsEnabled() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityIsMonoAudioEnabled() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityIsOnOffSwitchLabelsEnabled() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityIsReduceMotionEnabled() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityIsReduceTransparencyEnabled() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityIsShakeToUndoEnabled() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityIsSpeakScreenEnabled() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityIsSpeakSelectionEnabled() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityIsSwitchControlRunning() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityIsVideoAutoplayEnabled() -> bool {
+    true
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityPrefersCrossFadeTransitions() -> bool {
+    false
+}
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityShouldDifferentiateWithoutColor() -> bool {
+    false
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityFocusedElement(_assistive_tech: Id) -> Id {
+    NIL
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityHearingDevicePairedEar() -> usize {
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityConvertFrameToScreenCoordinates(rect: CGRect, view: Id) -> CGRect {
+    if !view.is_null() && responds_to(view, "convertRect:toView:") {
+        msg2(view, "convertRect:toView:", rect, NIL)
+    } else {
+        rect
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityConvertPathToScreenCoordinates(path: Id, _view: Id) -> Id {
+    path
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn UIAccessibilityRequestGuidedAccessSession(_enable: bool, completion: Id) {
+    if !completion.is_null() {
+        let hdr = &*(completion as *const BlockHeader);
+        let f: unsafe extern "C" fn(Id, bool) = std::mem::transmute(hdr.invoke);
+        f(completion, false);
+    }
 }
 
 #[no_mangle]

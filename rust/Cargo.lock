@@ -3,14 +3,6 @@
 version = 4
 
 [[package]]
-name = "pear-catalyst"
-version = "0.1.0"
-dependencies = [
- "pear-keychain",
- "pear-objc",
-]
-
-[[package]]
 name = "pear-core"
 version = "0.1.0"
 dependencies = [
@@ -123,10 +115,6 @@ version = "0.1.0"
 
 [[package]]
 name = "pear-objc"
-version = "0.1.0"
-
-[[package]]
-name = "pear-opengles"
 version = "0.1.0"
 
 [[package]]
