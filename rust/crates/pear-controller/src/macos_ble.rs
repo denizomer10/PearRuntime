@@ -8,8 +8,8 @@ use std::thread;
 use std::time::Duration;
 
 use pear_objc::{
-    add_method, cls, msg0, msg1, msg2, msg3, nsnumber_bool, nsstring, objc_release, objc_retain,
-    Class, Id, Imp, Sel,
+    add_method, autorelease_pool, cls, msg0, msg1, msg2, msg3, nsnumber_bool, nsstring,
+    objc_release, objc_retain, Class, Id, Imp, Sel,
 };
 
 use crate::protocols::switch2::{
@@ -275,8 +275,9 @@ unsafe fn start_scan_internal(central: Id) {
     if state != CB_MANAGER_STATE_POWERED_ON {
         return;
     }
-    // AllowDuplicates = true so Joy-Con 2s re-entering pairing mode are always re-discovered.
-    let allow_dup = nsnumber_bool(true);
+    // allowDuplicates = false keeps idle CPU at ~0% while stop/restart on disconnect
+    // clears CoreBluetooth's cache so re-pairing devices are always seen immediately.
+    let allow_dup = nsnumber_bool(false);
     let key = nsstring("kCBScanOptionAllowDuplicates");
     let opts: Id = msg2(cls("NSDictionary"), "dictionaryWithObject:forKey:", allow_dup, key);
     let _: () = msg2(
@@ -299,114 +300,126 @@ extern "C" fn on_discover_peripheral(
         return;
     }
     unsafe {
-        let pname: Id = msg0(peripheral, "name");
-        let name_str = nsstring_to_rust(pname);
-
-        let svc_key = nsstring("kCBAdvDataServiceUUIDs");
-        let svc_uuids: Id = msg1(adv, "objectForKey:", svc_key);
-        let mut matched_switch2 = false;
-        if !svc_uuids.is_null() {
-            let count: usize = msg0(svc_uuids, "count");
-            for i in 0..count {
-                let u: Id = msg1(svc_uuids, "objectAtIndex:", i);
-                let ustr: Id = msg0(u, "UUIDString");
-                if nsstring_to_rust(ustr).eq_ignore_ascii_case(SWITCH2_SERVICE_UUID) {
-                    matched_switch2 = true;
-                    break;
-                }
-            }
-        }
-
-        let mfg_key = nsstring("kCBAdvDataManufacturerData");
-        let mfg_data: Id = msg1(adv, "objectForKey:", mfg_key);
-        let mut detected: Option<(u16, ControllerKind)> = None;
-        if !mfg_data.is_null() {
-            let len: usize = msg0(mfg_data, "length");
-            let bytes_ptr: *const u8 = msg0(mfg_data, "bytes");
-            if !bytes_ptr.is_null() && len > 0 {
-                let slice = std::slice::from_raw_parts(bytes_ptr, len);
-                detected = parse_manufacturer_data(slice);
-                if detected.is_some() {
-                    matched_switch2 = true;
-                }
-                if matched_switch2 {
-                    let mhex: Vec<String> = slice.iter().map(|b| format!("{:02X}", b)).collect();
-                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/pear-jc2-raw.log") {
-                        use std::io::Write;
-                        let _ = writeln!(f, "ADV name={} detected={:?} mfg={}", name_str, detected, mhex.join(" "));
+        autorelease_pool(|| {
+            // 1. Fast-path check Manufacturer Data first (avoids string allocations for unrelated BLE devices).
+            let mfg_key = nsstring("kCBAdvDataManufacturerData");
+            let mfg_data: Id = msg1(adv, "objectForKey:", mfg_key);
+            let mut detected: Option<(u16, ControllerKind)> = None;
+            let mut matched_switch2 = false;
+            if !mfg_data.is_null() {
+                let len: usize = msg0(mfg_data, "length");
+                let bytes_ptr: *const u8 = msg0(mfg_data, "bytes");
+                if !bytes_ptr.is_null() && len > 0 {
+                    let slice = std::slice::from_raw_parts(bytes_ptr, len);
+                    detected = parse_manufacturer_data(slice);
+                    if detected.is_some()
+                        || slice.windows(2).any(|w| w == [0x03, 0x7E])
+                    {
+                        matched_switch2 = true;
                     }
                 }
             }
-        }
 
-        if detected.is_none() {
-            if let Some(k) = classify_by_name(&name_str) {
-                let pid = match k {
-                    ControllerKind::Switch2JoyConRight => PID_JOYCON2_RIGHT,
-                    ControllerKind::Switch2JoyConLeft => PID_JOYCON2_LEFT,
-                    _ => PID_PRO2,
-                };
-                detected = Some((pid, k));
-                matched_switch2 = true;
+            // 2. Check advertised services only if manufacturer data didn't already match.
+            if !matched_switch2 {
+                let svc_key = nsstring("kCBAdvDataServiceUUIDs");
+                let svc_uuids: Id = msg1(adv, "objectForKey:", svc_key);
+                if !svc_uuids.is_null() {
+                    let count: usize = msg0(svc_uuids, "count");
+                    for i in 0..count {
+                        let u: Id = msg1(svc_uuids, "objectAtIndex:", i);
+                        let ustr: Id = msg0(u, "UUIDString");
+                        if nsstring_to_rust(ustr).eq_ignore_ascii_case(SWITCH2_SERVICE_UUID) {
+                            matched_switch2 = true;
+                            break;
+                        }
+                    }
+                }
             }
-        }
 
-        if !matched_switch2 {
-            return;
-        }
+            // 3. Check peripheral name or local name in advertisement data.
+            let pname: Id = msg0(peripheral, "name");
+            let mut name_str = nsstring_to_rust(pname);
+            if name_str.is_empty() {
+                let local_key = nsstring("kCBAdvDataLocalName");
+                let local_name: Id = msg1(adv, "objectForKey:", local_key);
+                name_str = nsstring_to_rust(local_name);
+            }
+            if detected.is_none() {
+                if let Some(k) = classify_by_name(&name_str) {
+                    let pid = match k {
+                        ControllerKind::Switch2JoyConRight => PID_JOYCON2_RIGHT,
+                        ControllerKind::Switch2JoyConLeft => PID_JOYCON2_LEFT,
+                        _ => PID_PRO2,
+                    };
+                    detected = Some((pid, k));
+                    matched_switch2 = true;
+                }
+            }
 
-        let (pid, kind) = detected.unwrap_or((PID_JOYCON2_RIGHT, ControllerKind::Switch2JoyConRight));
-        let p_key = peripheral as usize;
-        let uuid_str = peripheral_uuid_string(peripheral);
-        let display_name = if name_str.is_empty() {
-            kind.display_name().to_string()
-        } else {
-            name_str
-        };
+            if !matched_switch2 {
+                return;
+            }
 
-        let should_connect = if let Ok(mut guard) = ble_state().lock() {
-            if let Some(st) = guard.as_mut() {
-                if st.peripherals.contains_key(&p_key) {
-                    false
+            let (pid, kind) = detected.unwrap_or((PID_JOYCON2_RIGHT, ControllerKind::Switch2JoyConRight));
+            let p_key = peripheral as usize;
+            let p_state: isize = msg0(peripheral, "state"); // 0 = disconnected
+            let uuid_str = peripheral_uuid_string(peripheral);
+            let display_name = if name_str.is_empty() {
+                kind.display_name().to_string()
+            } else {
+                name_str
+            };
+
+            let should_connect = if let Ok(mut guard) = ble_state().lock() {
+                if let Some(st) = guard.as_mut() {
+                    if let Some(existing) = st.peripherals.get(&p_key) {
+                        if p_state == 0 && existing.cmd_char.is_none() {
+                            // Stale disconnected entry; retry connection.
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        objc_retain(peripheral);
+                        st.peripherals.insert(
+                            p_key,
+                            BlePeripheralEntry {
+                                device_id: format!("ble:{}", uuid_str),
+                                peripheral: p_key,
+                                cmd_char: None,
+                                cmd_write_type: CB_CHAR_WRITE_WITHOUT_RESPONSE,
+                                kind,
+                                pid,
+                                name: display_name,
+                                last_report_us: now_us(),
+                                keepalive_seq: 0,
+                                raw_log_count: 0,
+                                cal: Switch2StickCal::default(),
+                                opt_rem_x: 0.0,
+                                opt_rem_y: 0.0,
+                                prev_left_click: false,
+                                prev_right_click: false,
+                            },
+                        );
+                        true
+                    }
                 } else {
-                    objc_retain(peripheral);
-                    st.peripherals.insert(
-                        p_key,
-                        BlePeripheralEntry {
-                            device_id: format!("ble:{}", uuid_str),
-                            peripheral: p_key,
-                            cmd_char: None,
-                            cmd_write_type: CB_CHAR_WRITE_WITHOUT_RESPONSE,
-                            kind,
-                            pid,
-                            name: display_name,
-                            last_report_us: now_us(),
-                            keepalive_seq: 0,
-                            raw_log_count: 0,
-                            cal: Switch2StickCal::default(),
-                            opt_rem_x: 0.0,
-                            opt_rem_y: 0.0,
-                            prev_left_click: false,
-                            prev_right_click: false,
-                        },
-                    );
-                    true
+                    false
                 }
             } else {
                 false
-            }
-        } else {
-            false
-        };
+            };
 
-        if should_connect {
-            let _: () = msg2(
-                central,
-                "connectPeripheral:options:",
-                peripheral,
-                std::ptr::null::<c_void>() as Id,
-            );
-        }
+            if should_connect {
+                let _: () = msg2(
+                    central,
+                    "connectPeripheral:options:",
+                    peripheral,
+                    std::ptr::null::<c_void>() as Id,
+                );
+            }
+        });
     }
 }
 
@@ -463,7 +476,7 @@ extern "C" fn on_connect_peripheral(
 extern "C" fn on_fail_to_connect_peripheral(
     _self: Id,
     _cmd: Sel,
-    _central: Id,
+    central: Id,
     peripheral: Id,
     _error: Id,
 ) {
@@ -471,25 +484,33 @@ extern "C" fn on_fail_to_connect_peripheral(
         return;
     }
     unsafe {
-        let p_key = peripheral as usize;
-        if let Ok(mut guard) = ble_state().lock() {
-            if let Some(st) = guard.as_mut() {
-                if let Some(entry) = st.peripherals.remove(&p_key) {
-                    if let Some(c) = entry.cmd_char {
-                        objc_release(c as Id);
+        autorelease_pool(|| {
+            let p_key = peripheral as usize;
+            let mut rescan = false;
+            if let Ok(mut guard) = ble_state().lock() {
+                if let Some(st) = guard.as_mut() {
+                    if let Some(entry) = st.peripherals.remove(&p_key) {
+                        if let Some(c) = entry.cmd_char {
+                            objc_release(c as Id);
+                        }
+                        st.store.remove_device(&entry.device_id);
                     }
-                    st.store.remove_device(&entry.device_id);
+                    rescan = st.scanning_wanted;
                 }
             }
-        }
-        objc_release(peripheral);
+            objc_release(peripheral);
+            if rescan && !central.is_null() {
+                let _: () = msg0(central, "stopScan");
+                start_scan_internal(central);
+            }
+        });
     }
 }
 
 extern "C" fn on_disconnect_peripheral(
     _self: Id,
     _cmd: Sel,
-    _central: Id,
+    central: Id,
     peripheral: Id,
     _error: Id,
 ) {
@@ -497,18 +518,26 @@ extern "C" fn on_disconnect_peripheral(
         return;
     }
     unsafe {
-        let p_key = peripheral as usize;
-        if let Ok(mut guard) = ble_state().lock() {
-            if let Some(st) = guard.as_mut() {
-                if let Some(entry) = st.peripherals.remove(&p_key) {
-                    if let Some(c) = entry.cmd_char {
-                        objc_release(c as Id);
+        autorelease_pool(|| {
+            let p_key = peripheral as usize;
+            let mut rescan = false;
+            if let Ok(mut guard) = ble_state().lock() {
+                if let Some(st) = guard.as_mut() {
+                    if let Some(entry) = st.peripherals.remove(&p_key) {
+                        if let Some(c) = entry.cmd_char {
+                            objc_release(c as Id);
+                        }
+                        st.store.remove_device(&entry.device_id);
                     }
-                    st.store.remove_device(&entry.device_id);
+                    rescan = st.scanning_wanted;
                 }
             }
-        }
-        objc_release(peripheral);
+            objc_release(peripheral);
+            if rescan && !central.is_null() {
+                let _: () = msg0(central, "stopScan");
+                start_scan_internal(central);
+            }
+        });
     }
 }
 
@@ -651,6 +680,7 @@ extern "C" fn on_characteristic_value(
         return;
     }
     unsafe {
+        autorelease_pool(|| {
         let val: Id = msg0(characteristic, "value");
         if val.is_null() {
             return;
@@ -668,14 +698,6 @@ extern "C" fn on_characteristic_value(
             if let Some(st) = guard.as_mut() {
                 let cfg = st.store.config();
                 if let Some(entry) = st.peripherals.get_mut(&p_key) {
-                    if entry.raw_log_count < 15 {
-                        entry.raw_log_count += 1;
-                        let hex: Vec<String> = bytes.iter().take(24).map(|b| format!("{:02X}", b)).collect();
-                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/pear-jc2-raw.log") {
-                            use std::io::Write;
-                            let _ = writeln!(f, "kind={:?} len={} hex={}", entry.kind, bytes.len(), hex.join(" "));
-                        }
-                    }
                     if !cfg.is_device_enabled(&entry.device_id) {
                         None
                     } else if let Some((state, (opt_dx, opt_dy))) =
@@ -735,6 +757,7 @@ extern "C" fn on_characteristic_value(
                 }
             }
         }
+        });
     }
 }
 
