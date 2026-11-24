@@ -222,6 +222,12 @@ unsafe fn register_ble_delegate_class() -> Class {
         );
         add_method(
             c,
+            "centralManager:didFailToConnectPeripheral:error:",
+            on_fail_to_connect_peripheral as Imp,
+            "v@:@@@",
+        );
+        add_method(
+            c,
             "centralManager:didDisconnectPeripheral:error:",
             on_disconnect_peripheral as Imp,
             "v@:@@@",
@@ -269,7 +275,8 @@ unsafe fn start_scan_internal(central: Id) {
     if state != CB_MANAGER_STATE_POWERED_ON {
         return;
     }
-    let allow_dup = nsnumber_bool(false);
+    // AllowDuplicates = true so Joy-Con 2s re-entering pairing mode are always re-discovered.
+    let allow_dup = nsnumber_bool(true);
     let key = nsstring("kCBScanOptionAllowDuplicates");
     let opts: Id = msg2(cls("NSDictionary"), "dictionaryWithObject:forKey:", allow_dup, key);
     let _: () = msg2(
@@ -450,6 +457,32 @@ extern "C" fn on_connect_peripheral(
             "discoverServices:",
             std::ptr::null::<c_void>() as Id,
         );
+    }
+}
+
+extern "C" fn on_fail_to_connect_peripheral(
+    _self: Id,
+    _cmd: Sel,
+    _central: Id,
+    peripheral: Id,
+    _error: Id,
+) {
+    if peripheral.is_null() {
+        return;
+    }
+    unsafe {
+        let p_key = peripheral as usize;
+        if let Ok(mut guard) = ble_state().lock() {
+            if let Some(st) = guard.as_mut() {
+                if let Some(entry) = st.peripherals.remove(&p_key) {
+                    if let Some(c) = entry.cmd_char {
+                        objc_release(c as Id);
+                    }
+                    st.store.remove_device(&entry.device_id);
+                }
+            }
+        }
+        objc_release(peripheral);
     }
 }
 
