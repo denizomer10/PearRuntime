@@ -540,9 +540,29 @@ pub struct BleBackend {
     keepalive_thread: Option<thread::JoinHandle<()>>,
 }
 
+unsafe fn bundle_has_bluetooth_usage_description() -> bool {
+    let bundle: Id = msg0(cls("NSBundle"), "mainBundle");
+    if bundle.is_null() {
+        return false;
+    }
+    let info: Id = msg0(bundle, "infoDictionary");
+    if info.is_null() {
+        return false;
+    }
+    let key = nsstring("NSBluetoothAlwaysUsageDescription");
+    let val: Id = msg1(info, "objectForKey:", key);
+    !val.is_null()
+}
+
 impl BleBackend {
     pub fn start(store: Arc<SharedStore>, scan_enabled: bool) -> Self {
         unsafe {
+            if !bundle_has_bluetooth_usage_description() {
+                return Self {
+                    running: Arc::new(AtomicBool::new(false)),
+                    keepalive_thread: None,
+                };
+            }
             dlopen(
                 c"/System/Library/Frameworks/CoreBluetooth.framework/CoreBluetooth".as_ptr(),
                 RTLD_LAZY,

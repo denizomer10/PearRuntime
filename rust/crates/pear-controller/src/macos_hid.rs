@@ -45,6 +45,7 @@ const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
 extern "C" {
     static kCFAllocatorDefault: CFAllocatorRef;
     static kCFRunLoopCommonModes: CFStringRef;
+    static kCFRunLoopDefaultMode: CFStringRef;
     static kCFTypeDictionaryKeyCallBacks: c_void;
     static kCFTypeDictionaryValueCallBacks: c_void;
     static kCFTypeArrayCallBacks: c_void;
@@ -314,7 +315,7 @@ unsafe fn run_hid_loop(store: Arc<SharedStore>, running: Arc<AtomicBool>) {
 
     if IOHIDManagerOpen(manager, 0) == K_IO_RETURN_SUCCESS {
         while running.load(Ordering::Acquire) {
-            CFRunLoopRunInMode(kCFRunLoopCommonModes, 0.05, false);
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
         }
     }
 
