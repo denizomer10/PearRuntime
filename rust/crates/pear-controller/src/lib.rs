@@ -294,6 +294,9 @@ pub extern "C" fn pear_controller_set_config_json(config_json: *const c_char) {
             inst.store.set_config(cfg.clone());
             if let Some(ble) = inst.ble.as_ref() {
                 ble.set_scanning(cfg.ble_switch2_enabled);
+                if cfg.mouse_mode_enabled {
+                    ble.enable_optical_mode();
+                }
             }
         }
     }

@@ -205,9 +205,17 @@ pub fn parse_switch2_ble_report(
         }
 
         let mut mouse_delta = (0i16, 0i16);
-        if data.len() >= 20 {
-            let cur_x = u16::from_le_bytes([data[16], data[17]]);
-            let cur_y = u16::from_le_bytes([data[18], data[19]]);
+        // Check both compact (10..14) and full-report (16..20) optical offsets.
+        let opt_off = if data.len() >= 20 && (data[16] != 0 || data[17] != 0 || data[18] != 0 || data[19] != 0) {
+            Some(16)
+        } else if data.len() >= 14 && (data[10] != 0 || data[11] != 0 || data[12] != 0 || data[13] != 0) {
+            Some(10)
+        } else {
+            None
+        };
+        if let Some(off) = opt_off {
+            let cur_x = u16::from_le_bytes([data[off], data[off + 1]]);
+            let cur_y = u16::from_le_bytes([data[off + 2], data[off + 3]]);
             if let (Some(px), Some(py)) = (cal.prev_opt_x, cal.prev_opt_y) {
                 let dx = cur_x.wrapping_sub(px) as i16;
                 let dy = cur_y.wrapping_sub(py) as i16;

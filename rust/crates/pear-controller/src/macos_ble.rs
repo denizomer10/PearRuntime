@@ -45,6 +45,7 @@ struct CGPoint {
 extern "C" {
     fn CGEventCreate(source: *const c_void) -> *mut c_void;
     fn CGEventGetLocation(event: *const c_void) -> CGPoint;
+    fn CGWarpMouseCursorPosition(new_cursor_position: CGPoint) -> i32;
     fn CGEventCreateMouseEvent(
         source: *const c_void,
         mouse_type: u32,
@@ -167,6 +168,7 @@ unsafe fn emit_mouse_delta(dx: i32, dy: i32, left_down: bool) {
         CGEventPost(K_CG_HID_EVENT_TAP, move_ev);
         CFRelease(move_ev);
     }
+    let _ = CGWarpMouseCursorPosition(new_pos);
 }
 
 unsafe fn emit_mouse_button(button: u32, down: bool) {
@@ -663,6 +665,27 @@ extern "C" fn on_characteristic_value(
     }
 }
 
+extern "C" fn optical_init_on_queue(_ctx: *mut c_void) {
+    unsafe {
+        if let Ok(guard) = ble_state().lock() {
+            if let Some(st) = guard.as_ref() {
+                for entry in st.peripherals.values() {
+                    if let Some(ch_ptr) = entry.cmd_char {
+                        for opt_pkt in switch2_optical_init_packets() {
+                            write_ctrl_bytes(
+                                entry.peripheral as Id,
+                                ch_ptr as Id,
+                                entry.cmd_write_type,
+                                &opt_pkt,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 extern "C" fn keepalive_tick_on_queue(_ctx: *mut c_void) {
     unsafe {
         if let Ok(mut guard) = ble_state().lock() {
@@ -763,6 +786,22 @@ impl BleBackend {
         Self {
             running,
             keepalive_thread,
+        }
+    }
+
+    pub fn enable_optical_mode(&self) {
+        if let Ok(guard) = ble_state().lock() {
+            if let Some(st) = guard.as_ref() {
+                if st.queue != 0 {
+                    unsafe {
+                        dispatch_async_f(
+                            st.queue as *const c_void,
+                            std::ptr::null_mut(),
+                            optical_init_on_queue,
+                        );
+                    }
+                }
+            }
         }
     }
 
