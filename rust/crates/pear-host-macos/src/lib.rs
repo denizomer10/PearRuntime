@@ -13,6 +13,11 @@
 #![allow(non_snake_case, clippy::missing_safety_doc)]
 
 mod guest_framework_path;
+mod hud;
+mod key_names;
+mod keymapper;
+mod physical_gamepad;
+mod virtual_gamepad;
 
 extern "C" {
     fn PearInstallUnavailableCloudKit();
@@ -104,10 +109,50 @@ fn assoc_set(obj: Id, key: &u8, val: Id) {
     }
 }
 
-unsafe fn log_msg(tag: &str, msg: &str) {
+pub(crate) unsafe fn log_msg(tag: &str, msg: &str) {
     let t = CString::new(tag).unwrap_or_default();
     let m = CString::new(msg).unwrap_or_default();
     PearHostLogMessage(t.as_ptr(), m.as_ptr());
+}
+
+pub(crate) unsafe fn alloc_class(super_name: &str, name: &CStr) -> Class {
+    objc_allocateClassPair(cls(super_name), name.as_ptr(), 0)
+}
+
+pub(crate) unsafe fn register_class(c: Class) {
+    objc_registerClassPair(c);
+}
+
+pub(crate) fn primary_view_and_ui_window() -> (Id, Id) {
+    unsafe {
+        let mut view = G_PRIMARY_VIEW.load(Ordering::Acquire) as Id;
+        let ns_app: Id = msg0(cls("NSApplication"), "sharedApplication");
+        if !ns_app.is_null() {
+            let key: Id = msg0(ns_app, "keyWindow");
+            if !key.is_null() {
+                let cv: Id = msg0(key, "contentView");
+                if !cv.is_null() && !assoc_get(cv, &HV_UIWIN_KEY).is_null() {
+                    view = cv;
+                }
+            }
+        }
+        if view.is_null() {
+            return (NIL, NIL);
+        }
+        (view, assoc_get(view, &HV_UIWIN_KEY))
+    }
+}
+
+pub(crate) unsafe fn primary_backing_layer_info() -> (Id, f64, CGRect) {
+    let (view, _) = primary_view_and_ui_window();
+    if view.is_null() {
+        return (NIL, 2.0, CGRect::default());
+    }
+    let layer: Id = msg0(view, "layer");
+    let bounds: CGRect = if layer.is_null() { CGRect::default() } else { msg0(layer, "bounds") };
+    let win: Id = msg0(view, "window");
+    let scale: f64 = if win.is_null() { 2.0 } else { msg0(win, "backingScaleFactor") };
+    (layer, if scale > 0.0 { scale } else { 2.0 }, bounds)
 }
 
 /// Registers the AppKit helper classes and installs [`MacHost`] as the
@@ -191,6 +236,10 @@ pub extern "C" fn PearBackendInitialize() {
         install_webkit_compat();
         PearInstallUnavailableCloudKit();
         PearInstallClientCredentialCompatibility();
+        hud::install();
+        virtual_gamepad::install();
+        physical_gamepad::install();
+        keymapper::install();
 
         let obs: Id = msg0(cls("PearHostAppObserver"), "new");
         let nc: Id = msg0(cls("NSNotificationCenter"), "defaultCenter");
@@ -827,7 +876,11 @@ unsafe extern "C" fn app_del_did_finish(_s: Id, _c: Sel, _n: Id) {
     }
 }
 unsafe extern "C" fn app_del_should_term(_s: Id, _c: Sel, _app: Id) -> bool { true }
-unsafe extern "C" fn obs_active(_s: Id, _c: Sel, _n: Id) { events().lifecycle(Lifecycle::DidBecomeActive); }
+unsafe extern "C" fn obs_active(_s: Id, _c: Sel, _n: Id) {
+    virtual_gamepad::on_app_active(true);
+    keymapper::on_app_active(true);
+    events().lifecycle(Lifecycle::DidBecomeActive);
+}
 unsafe fn keeps_running_when_unfocused() -> bool {
     let bundle: Id = msg0(cls("NSBundle"), "mainBundle");
     let identifier: Id = msg0(bundle, "bundleIdentifier");
@@ -835,6 +888,8 @@ unsafe fn keeps_running_when_unfocused() -> bool {
 }
 
 unsafe extern "C" fn obs_resign(_s: Id, _c: Sel, _n: Id) {
+    virtual_gamepad::on_app_active(false);
+    keymapper::on_app_active(false);
     // Unity in Zenless Zone Zero pauses startup work on this event, and can
     // leave the download or shader warmup stalled when a Mac window loses focus.
     if !keeps_running_when_unfocused() {
@@ -842,13 +897,19 @@ unsafe extern "C" fn obs_resign(_s: Id, _c: Sel, _n: Id) {
     }
 }
 unsafe extern "C" fn obs_hide(_s: Id, _c: Sel, _n: Id) {
+    virtual_gamepad::on_app_active(false);
+    keymapper::on_app_active(false);
     if keeps_running_when_unfocused() {
         events().lifecycle(Lifecycle::WillResignActive);
     }
     events().lifecycle(Lifecycle::DidEnterBackground);
 }
 unsafe extern "C" fn obs_unhide(_s: Id, _c: Sel, _n: Id) { events().lifecycle(Lifecycle::WillEnterForeground); }
-unsafe extern "C" fn obs_term(_s: Id, _c: Sel, _n: Id) { events().lifecycle(Lifecycle::WillTerminate); }
+unsafe extern "C" fn obs_term(_s: Id, _c: Sel, _n: Id) {
+    virtual_gamepad::on_app_active(false);
+    keymapper::on_app_active(false);
+    events().lifecycle(Lifecycle::WillTerminate);
+}
 
 unsafe extern "C" fn wd_did_resize(s: Id, _c: Sel, notif: Id) {
     let w: Id = msg0(notif, "object");
@@ -861,10 +922,12 @@ unsafe extern "C" fn wd_did_resize(s: Id, _c: Sel, notif: Id) {
     let presentation = assoc_get(cv, &HV_PRESENTATION_LAYER_KEY);
     if !presentation.is_null() {
         fit_guest_presentation(cv, presentation, b);
+        hud::update_carrier_layout();
         return;
     }
     let scale: f64 = msg0(w, "backingScaleFactor");
     events().window_resized(GuestObject(ui), Size { width: b.size.width, height: b.size.height }, scale);
+    hud::update_carrier_layout();
 }
 unsafe extern "C" fn wd_became_key(s: Id, _c: Sel, _notif: Id) {
     events().window_became_key(GuestObject(assoc_get(s, &WD_UIWIN_KEY)));
@@ -901,9 +964,64 @@ unsafe fn hv_pointer(view: Id, event: Id, phase: isize) {
     let ts: f64 = msg0(event, "timestamp");
     events().pointer(GuestObject(w), self::phase(phase), ui.x, ui.y, ts);
 }
-unsafe extern "C" fn hv_mouse_down(s: Id, _c: Sel, e: Id) { hv_pointer(s, e, 0); }
-unsafe extern "C" fn hv_mouse_drag(s: Id, _c: Sel, e: Id) { hv_pointer(s, e, 1); }
-unsafe extern "C" fn hv_mouse_up(s: Id, _c: Sel, e: Id) { hv_pointer(s, e, 3); }
+unsafe extern "C" fn hv_mouse_down(s: Id, _c: Sel, e: Id) {
+    if !events().text_input_active() {
+        let w: Id = msg0(s, "window");
+        if !w.is_null() && msg0::<Id>(w, "firstResponder") != s {
+            msg1::<Id, bool>(w, "makeFirstResponder:", s);
+        }
+        if virtual_gamepad::handle_mouse_button(0, true, s, e) || keymapper::handle_mouse_button(0, true, s, e) {
+            return;
+        }
+    }
+    hv_pointer(s, e, 0);
+}
+unsafe extern "C" fn hv_mouse_drag(s: Id, _c: Sel, e: Id) {
+    if virtual_gamepad::is_look_captured() || keymapper::is_look_captured() {
+        let dx: f64 = msg0(e, "deltaX");
+        let dy: f64 = msg0(e, "deltaY");
+        virtual_gamepad::handle_mouse_move(dx, dy);
+        keymapper::handle_mouse_move(dx, dy);
+        return;
+    }
+    hv_pointer(s, e, 1);
+}
+unsafe extern "C" fn hv_mouse_up(s: Id, _c: Sel, e: Id) {
+    if !events().text_input_active()
+        && (virtual_gamepad::handle_mouse_button(0, false, s, e) || keymapper::handle_mouse_button(0, false, s, e))
+    {
+        return;
+    }
+    hv_pointer(s, e, 3);
+}
+unsafe extern "C" fn hv_right_mouse_down(s: Id, _c: Sel, e: Id) {
+    if !events().text_input_active() {
+        let _ = virtual_gamepad::handle_mouse_button(1, true, s, e) || keymapper::handle_mouse_button(1, true, s, e);
+    }
+}
+unsafe extern "C" fn hv_right_mouse_up(s: Id, _c: Sel, e: Id) {
+    if !events().text_input_active() {
+        let _ = virtual_gamepad::handle_mouse_button(1, false, s, e) || keymapper::handle_mouse_button(1, false, s, e);
+    }
+}
+unsafe extern "C" fn hv_other_mouse_down(s: Id, _c: Sel, e: Id) {
+    if !events().text_input_active() {
+        let b: isize = msg0(e, "buttonNumber");
+        let _ = virtual_gamepad::handle_mouse_button(b, true, s, e) || keymapper::handle_mouse_button(b, true, s, e);
+    }
+}
+unsafe extern "C" fn hv_other_mouse_up(s: Id, _c: Sel, e: Id) {
+    if !events().text_input_active() {
+        let b: isize = msg0(e, "buttonNumber");
+        let _ = virtual_gamepad::handle_mouse_button(b, false, s, e) || keymapper::handle_mouse_button(b, false, s, e);
+    }
+}
+unsafe extern "C" fn hv_mouse_moved(_s: Id, _c: Sel, e: Id) {
+    let dx: f64 = msg0(e, "deltaX");
+    let dy: f64 = msg0(e, "deltaY");
+    virtual_gamepad::handle_mouse_move(dx, dy);
+    keymapper::handle_mouse_move(dx, dy);
+}
 unsafe fn hv_send_key(event: Id, down: bool) {
     let code: u16 = msg0(event, "keyCode");
     let usage = PearHIDUsageForMacKeyCode(code);
@@ -928,10 +1046,20 @@ unsafe extern "C" fn hv_key_down(s: Id, _c: Sel, e: Id) {
         return;
     }
     if msg0::<bool>(e, "isARepeat") { return; }
+    let code: u16 = msg0(e, "keyCode");
+    let flags: usize = msg0(e, "modifierFlags");
+    if virtual_gamepad::handle_key(code, flags, true) || keymapper::handle_key(code, flags, true) {
+        return;
+    }
     hv_send_key(e, true);
 }
 unsafe extern "C" fn hv_key_up(_s: Id, _c: Sel, e: Id) {
     if events().text_input_active() { return; }
+    let code: u16 = msg0(e, "keyCode");
+    let flags: usize = msg0(e, "modifierFlags");
+    if virtual_gamepad::handle_key(code, flags, false) || keymapper::handle_key(code, flags, false) {
+        return;
+    }
     hv_send_key(e, false);
 }
 unsafe extern "C" fn hv_flags_changed(_s: Id, _c: Sel, e: Id) {
@@ -947,6 +1075,11 @@ unsafe extern "C" fn hv_flags_changed(_s: Id, _c: Sel, e: Id) {
     };
     let flags: usize = msg0(e, "modifierFlags");
     let down = (flags & bit) != 0;
+    if !events().text_input_active()
+        && (virtual_gamepad::handle_key(code, flags, down) || keymapper::handle_key(code, flags, down))
+    {
+        return;
+    }
     let mods = (flags & 0xFFFF_0000) as isize;
     let ts: f64 = msg0(e, "timestamp");
     events().key(KeyEvent {
@@ -1023,6 +1156,13 @@ unsafe fn register_classes() {
             add_method(c, "mouseDown:", hv_mouse_down as Imp, "v@:@");
             add_method(c, "mouseDragged:", hv_mouse_drag as Imp, "v@:@");
             add_method(c, "mouseUp:", hv_mouse_up as Imp, "v@:@");
+            add_method(c, "rightMouseDown:", hv_right_mouse_down as Imp, "v@:@");
+            add_method(c, "rightMouseDragged:", hv_mouse_moved as Imp, "v@:@");
+            add_method(c, "rightMouseUp:", hv_right_mouse_up as Imp, "v@:@");
+            add_method(c, "otherMouseDown:", hv_other_mouse_down as Imp, "v@:@");
+            add_method(c, "otherMouseDragged:", hv_mouse_moved as Imp, "v@:@");
+            add_method(c, "otherMouseUp:", hv_other_mouse_up as Imp, "v@:@");
+            add_method(c, "mouseMoved:", hv_mouse_moved as Imp, "v@:@");
             add_method(c, "keyDown:", hv_key_down as Imp, "v@:@");
             add_method(c, "keyUp:", hv_key_up as Imp, "v@:@");
             add_method(c, "flagsChanged:", hv_flags_changed as Imp, "v@:@");

@@ -44,11 +44,9 @@ rm -rf "$OUT_DIR/obj" # objects of earlier builds (Objective-C sources)
 # as on iOS (host/UIFoundation.tbd, tools/host-reexport-census.py).
 "${LD[@]}" -dynamiclib -Wl,-force_load,"$RUST_UIKIT_LIB" -o "$OUT_DIR/UIKit.framework/UIKit" \
   "$ROOT/host/guest-dlopen.c" "$ROOT/host/cloudkit-unavailable.m" "$ROOT/host/client-credential.m" \
-  "$ROOT/host/controller-input.m" "$ROOT/host/controller-hid/PearControllerHID.m" \
-  -I "$ROOT/host/controller-hid/include" \
   -fobjc-arc -Wno-deprecated-declarations \
   -install_name @rpath/UIKit.framework/UIKit -compatibility_version 1.0.0 -current_version 6209.0.0 \
-  -framework Foundation -framework AppKit -Wl,-reexport_library,"$ROOT/host/UIFoundation.tbd" -framework QuartzCore -framework CoreGraphics -framework CoreText -framework ImageIO -framework IOKit -framework Security -framework GameController -lc++
+  -framework Foundation -framework AppKit -Wl,-reexport_library,"$ROOT/host/UIFoundation.tbd" -framework QuartzCore -framework Metal -framework CoreGraphics -framework CoreText -framework ImageIO -framework IOKit -framework Security -lc++
 echo ">> $OUT_DIR/UIKit.framework/UIKit"
 
 # Stub and overlay frameworks generated from the census: iOS-only frameworks
@@ -122,6 +120,11 @@ elif [[ -d "$IOS_FRAMEWORKS" ]]; then
 elif [[ ! -f "$OUT_DIR/libswiftUIKit.dylib" ]]; then
   echo "!! no libswiftUIKit.dylib and no iOSSupport SDK: apps linking the UIKit Swift overlay will not start" >&2
 fi
+if [[ -f "$OUT_DIR/libswiftUIKit.dylib" ]] && vtool -show-build "$OUT_DIR/libswiftUIKit.dylib" 2>/dev/null | grep -q "platform MACCATALYST"; then
+  vtool -set-build-version macos 26.0 26.0 -replace -output "$OUT_DIR/libswiftUIKit.dylib.tmp" "$OUT_DIR/libswiftUIKit.dylib"
+  mv "$OUT_DIR/libswiftUIKit.dylib.tmp" "$OUT_DIR/libswiftUIKit.dylib"
+  echo "   retargeted $OUT_DIR/libswiftUIKit.dylib to macOS 26.0"
+fi
 
 # Stands in for the Catalyst runtime (libPearRuntime.dylib) that a bundle
 # prepared for Mac Catalyst links; PearHost needs nothing from it.
@@ -194,3 +197,19 @@ mkdir -p "$OUT_DIR/MetalKit.framework"
   -o "$OUT_DIR/MetalKit.framework/MetalKit" -install_name @rpath/MetalKit.framework/MetalKit \
   -compatibility_version 1.0.0 -current_version 1.0.0 -framework Foundation -framework Metal -framework QuartzCore
 echo ">> $OUT_DIR/MetalKit.framework/MetalKit"
+
+if [[ -f "$RUST_LIBS/libpear_controller.dylib" ]]; then
+  cp -f "$RUST_LIBS/libpear_controller.dylib" "$OUT_DIR/libpear_controller.dylib"
+  install_name_tool -id @rpath/libpear_controller.dylib "$OUT_DIR/libpear_controller.dylib" 2>/dev/null || true
+  echo ">> $OUT_DIR/libpear_controller.dylib"
+fi
+
+# Pre-sign host outputs so runtime preparation can clone them directly without
+# per-framework codesign subprocesses.
+for fw in "$OUT_DIR"/*.framework; do
+  name="$(basename "$fw" .framework)"
+  [[ -f "$fw/$name" ]] && codesign --force --sign - "$fw/$name" 2>/dev/null || true
+done
+for lib in "$OUT_DIR"/*.dylib "$OUT_DIR"/PearANGLE/*.dylib; do
+  [[ -f "$lib" ]] && codesign --force --sign - "$lib" 2>/dev/null || true
+done

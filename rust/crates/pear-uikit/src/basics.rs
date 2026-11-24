@@ -8,9 +8,10 @@ use pear_objc::{
     replace_method as add_method, sel, CGPoint, CGRect, CGSize, Class, Id, Imp, Sel, UIEdgeInsets,
     NIL, OBJC_ASSOCIATION_RETAIN,
 };
+use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -719,18 +720,25 @@ unsafe extern "C" fn event_predicted(_self: Id, _cmd: Sel, _touch: Id) -> Id {
     msg0(cls("NSArray"), "array")
 }
 
-static ACTIVE_TOUCH: AtomicUsize = AtomicUsize::new(0);
+static ACTIVE_TOUCHES: OnceLock<Mutex<HashMap<u32, usize>>> = OnceLock::new();
+
+fn active_touches() -> &'static Mutex<HashMap<u32, usize>> {
+    ACTIVE_TOUCHES.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 #[no_mangle]
-pub extern "C" fn PearUIKitDeliverPointer(window: Id, phase: isize, point: CGPoint, timestamp: f64) {
+pub extern "C" fn PearUIKitDeliverTouch(window: Id, finger_id: u32, phase: isize, point: CGPoint, timestamp: f64) {
     unsafe {
         if window.is_null() {
             return;
         }
-        let mut touch = ACTIVE_TOUCH.load(Ordering::Acquire) as Id;
+        let mut touch: Id = NIL;
         if phase == 0 {
-            if !touch.is_null() {
-                objc_release(touch);
+            let old = active_touches().lock().unwrap_or_else(|e| e.into_inner()).remove(&finger_id);
+            if let Some(old_ptr) = old {
+                if old_ptr != 0 {
+                    objc_release(old_ptr as Id);
+                }
             }
             let hit: Id = msg2(window, "hitTest:withEvent:", point, NIL);
             let target = if hit.is_null() { window } else { hit };
@@ -738,19 +746,34 @@ pub extern "C" fn PearUIKitDeliverPointer(window: Id, phase: isize, point: CGPoi
             let f: unsafe extern "C" fn(Id, Sel, Id, Id, CGPoint, f64) -> Id =
                 std::mem::transmute(pear_objc::objc_msgSend as *const c_void);
             touch = f(alloc, sel("initWithView:window:location:timestamp:"), target, window, point, timestamp);
-            ACTIVE_TOUCH.store(touch as usize, Ordering::Release);
-        } else if !touch.is_null() {
-            msg3::<CGPoint, isize, f64, ()>(touch, "pear_moveTo:phase:timestamp:", point, phase, timestamp);
+            if !touch.is_null() {
+                active_touches().lock().unwrap_or_else(|e| e.into_inner()).insert(finger_id, touch as usize);
+            }
         } else {
-            return;
+            let ptr = active_touches().lock().unwrap_or_else(|e| e.into_inner()).get(&finger_id).copied();
+            if let Some(ptr) = ptr {
+                if ptr != 0 {
+                    touch = ptr as Id;
+                    msg3::<CGPoint, isize, f64, ()>(touch, "pear_moveTo:phase:timestamp:", point, phase, timestamp);
+                }
+            }
         }
 
         if touch.is_null() {
             return;
         }
         let set: Id = msg1(cls("NSSet"), "setWithObject:", touch);
+        let all_set: Id = msg0(cls("NSMutableSet"), "set");
+        {
+            let guard = active_touches().lock().unwrap_or_else(|e| e.into_inner());
+            for &ptr in guard.values() {
+                if ptr != 0 {
+                    msg1::<Id, ()>(all_set, "addObject:", ptr as Id);
+                }
+            }
+        }
         let ev_alloc: Id = msg0(cls("UIEvent"), "alloc");
-        let ev: Id = msg2(ev_alloc, "initWithTouches:timestamp:", set, timestamp);
+        let ev: Id = msg2(ev_alloc, "initWithTouches:timestamp:", all_set, timestamp);
         let target_view: Id = msg0(touch, "view");
         if !target_view.is_null() {
             let cancel = crate::view::deliver_pointer_gestures(target_view, touch, phase);
@@ -774,12 +797,18 @@ pub extern "C" fn PearUIKitDeliverPointer(window: Id, phase: isize, point: CGPoi
         }
         objc_release(ev);
         if phase == 3 || phase == 4 {
-            let old = ACTIVE_TOUCH.swap(0, Ordering::AcqRel) as Id;
-            if !old.is_null() {
-                objc_release(old);
+            if let Some(old) = active_touches().lock().unwrap_or_else(|e| e.into_inner()).remove(&finger_id) {
+                if old != 0 {
+                    objc_release(old as Id);
+                }
             }
         }
     }
+}
+
+#[no_mangle]
+pub extern "C" fn PearUIKitDeliverPointer(window: Id, phase: isize, point: CGPoint, timestamp: f64) {
+    PearUIKitDeliverTouch(window, 0, phase, point, timestamp);
 }
 
 // ============================================================================

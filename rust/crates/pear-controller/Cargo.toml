@@ -1,0 +1,13 @@
+[package]
+name = "pear-controller"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Pure-Rust low-latency controller engine supporting Switch 2 Joy-Cons (BLE), DualSense, Xbox, Switch Pro/Joy-Con, and HID gamepads on macOS"
+
+[lib]
+name = "pear_controller"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+pear-objc = { path = "../pear-objc" }

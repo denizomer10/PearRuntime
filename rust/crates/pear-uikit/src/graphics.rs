@@ -1064,6 +1064,18 @@ unsafe extern "C" fn font_italic(_cls: Class, _cmd: Sel, size: f64) -> Id {
         make_uifont_owned(italic)
     }
 }
+unsafe extern "C" fn font_system_size(_cls: Class, _cmd: Sel) -> f64 {
+    14.0
+}
+unsafe extern "C" fn font_small_system_size(_cls: Class, _cmd: Sel) -> f64 {
+    12.0
+}
+unsafe extern "C" fn font_label_size(_cls: Class, _cmd: Sel) -> f64 {
+    17.0
+}
+unsafe extern "C" fn font_button_size(_cls: Class, _cmd: Sel) -> f64 {
+    18.0
+}
 unsafe extern "C" fn font_with_descriptor(_cls: Class, _cmd: Sel, desc: Id, size: f64) -> Id {
     if !desc.is_null() {
         // UIFontDescriptor is a CTFontDescriptor (toll-free bridged).
@@ -1732,6 +1744,10 @@ pub unsafe fn register() {
         add_method(meta, "fontWithName:size:", font_with_name as Imp, "@@:@d");
         add_method(meta, "italicSystemFontOfSize:", font_italic as Imp, "@@:d");
         add_method(meta, "fontWithDescriptor:size:", font_with_descriptor as Imp, "@@:@d");
+        add_method(meta, "systemFontSize", font_system_size as Imp, "d@:");
+        add_method(meta, "smallSystemFontSize", font_small_system_size as Imp, "d@:");
+        add_method(meta, "labelFontSize", font_label_size as Imp, "d@:");
+        add_method(meta, "buttonFontSize", font_button_size as Imp, "d@:");
         add_method(meta, "familyNames", font_family_names as Imp, "@@:");
         add_method(meta, "fontNamesForFamilyName:", font_names_for_family as Imp, "@@:@");
         add_method(fnt, "pointSize", font_point_size as Imp, "d@:");

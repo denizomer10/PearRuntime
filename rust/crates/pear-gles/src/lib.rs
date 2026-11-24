@@ -434,7 +434,15 @@ unsafe extern "C" fn eagl_present_renderbuffer(self_obj: Id, _cmd: pear_objc::Se
     if !state.bound_surface.is_null() && state.drawable_renderbuffer != 0 {
         drawable_storage::copy_to_window(state);
     }
-    bridge.swap_buffers(surf)
+    let ok = bridge.swap_buffers(surf);
+    #[cfg(target_os = "macos")]
+    if ok {
+        extern "C" {
+            fn PearRecordFramePresented();
+        }
+        PearRecordFramePresented();
+    }
+    ok
 }
 
 /// iOS's drawable renderbuffer on an ANGLE window surface: the app draws into

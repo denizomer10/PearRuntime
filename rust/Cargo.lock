@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "pear-controller"
+version = "0.1.0"
+dependencies = [
+ "pear-objc",
+]
+
+[[package]]
 name = "pear-core"
 version = "0.1.0"
 dependencies = [
@@ -75,6 +82,7 @@ dependencies = [
 name = "pear-host-macos"
 version = "0.1.0"
 dependencies = [
+ "pear-controller",
  "pear-host",
  "pear-objc",
 ]
