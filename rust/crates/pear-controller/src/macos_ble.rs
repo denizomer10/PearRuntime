@@ -83,6 +83,7 @@ struct BlePeripheralEntry {
     name: String,
     last_report_us: u64,
     keepalive_seq: u8,
+    raw_log_count: u8,
     cal: Switch2StickCal,
     prev_left_click: bool,
     prev_right_click: bool,
@@ -312,6 +313,13 @@ extern "C" fn on_discover_peripheral(
                 if detected.is_some() {
                     matched_switch2 = true;
                 }
+                if matched_switch2 {
+                    let mhex: Vec<String> = slice.iter().map(|b| format!("{:02X}", b)).collect();
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/pear-jc2-raw.log") {
+                        use std::io::Write;
+                        let _ = writeln!(f, "ADV name={} detected={:?} mfg={}", name_str, detected, mhex.join(" "));
+                    }
+                }
             }
         }
 
@@ -358,6 +366,7 @@ extern "C" fn on_discover_peripheral(
                             name: display_name,
                             last_report_us: now_us(),
                             keepalive_seq: 0,
+                            raw_log_count: 0,
                             cal: Switch2StickCal::default(),
                             prev_left_click: false,
                             prev_right_click: false,
@@ -542,11 +551,18 @@ extern "C" fn on_discover_characteristics(
                         }
                     }
                 }
-                // Stop blinking & lock Player 1 LED solid + initialize optical mouse sensor.
+                // Stop blinking & lock Player 1 LED solid (BlueRetro 0x09 0x91 0x01 0x07).
                 let led_pkt = switch2_player_led_packet(1);
                 write_ctrl_bytes(peripheral, ch, write_type, &led_pkt);
-                for opt_pkt in switch2_optical_init_packets() {
-                    write_ctrl_bytes(peripheral, ch, write_type, &opt_pkt);
+                let mouse_on = ble_state()
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.as_ref().map(|s| s.store.config().mouse_mode_enabled))
+                    .unwrap_or(false);
+                if mouse_on {
+                    for opt_pkt in switch2_optical_init_packets() {
+                        write_ctrl_bytes(peripheral, ch, write_type, &opt_pkt);
+                    }
                 }
             }
         }
@@ -581,6 +597,14 @@ extern "C" fn on_characteristic_value(
             if let Some(st) = guard.as_mut() {
                 let cfg = st.store.config();
                 if let Some(entry) = st.peripherals.get_mut(&p_key) {
+                    if entry.raw_log_count < 15 {
+                        entry.raw_log_count += 1;
+                        let hex: Vec<String> = bytes.iter().take(24).map(|b| format!("{:02X}", b)).collect();
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/pear-jc2-raw.log") {
+                            use std::io::Write;
+                            let _ = writeln!(f, "kind={:?} len={} hex={}", entry.kind, bytes.len(), hex.join(" "));
+                        }
+                    }
                     if !cfg.is_device_enabled(&entry.device_id) {
                         None
                     } else if let Some((state, (opt_dx, opt_dy))) =
@@ -727,32 +751,14 @@ impl BleBackend {
             }
         }
 
-        let running = Arc::new(AtomicBool::new(true));
-        let flag = running.clone();
-        let keepalive_thread = thread::Builder::new()
-            .name("pear-controller-ble-keepalive".to_string())
-            .spawn(move || {
-                while flag.load(Ordering::Acquire) {
-                    thread::sleep(Duration::from_secs(2));
-                    if !flag.load(Ordering::Acquire) {
-                        break;
-                    }
-                    if let Ok(guard) = ble_state().lock() {
-                        if let Some(st) = guard.as_ref() {
-                            if st.queue != 0 && !st.peripherals.is_empty() {
-                                unsafe {
-                                    dispatch_async_f(
-                                        st.queue as *const c_void,
-                                        std::ptr::null_mut(),
-                                        keepalive_tick_on_queue,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            })
-            .ok();
+        // Note: Switch 2 BLE uses 0x30 (LED) / 0x0C (optical) commands; do not send Switch 1 0x00 rumble packets.
+        let _ = keepalive_tick_on_queue;
+        let _ = switch2_keepalive_packet;
+        let running = Arc::new(AtomicBool::new(false));
+        let keepalive_thread = None;
+        let _ = thread::Builder::new;
+        let _ = Duration::from_secs;
+        let _ = dispatch_async_f;
 
         Self {
             running,

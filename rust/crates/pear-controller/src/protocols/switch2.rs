@@ -105,13 +105,13 @@ pub fn classify_by_name(name: &str) -> Option<ControllerKind> {
     None
 }
 
-/// Player LED command (`0x30`) to stop blinking and lock Player LED solid.
-pub fn switch2_player_led_packet(player_num: u8) -> [u8; 15] {
+/// Real Switch 2 Player LED command (`0x09 0x91 0x01 0x07`) from BlueRetro `sw2.c`.
+pub fn switch2_player_led_packet(player_num: u8) -> [u8; 16] {
     const MAP: [u8; 8] = [0x01, 0x02, 0x04, 0x08, 0x03, 0x06, 0x0C, 0x0F];
     let idx = player_num.clamp(1, 8) as usize - 1;
     [
-        0x30, 0x01, 0x00, 0x30, 0x00, 0x08, 0x00, 0x00, MAP[idx], 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00,
+        0x09, 0x91, 0x01, 0x07, 0x00, 0x08, 0x00, 0x00, MAP[idx], 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00,
     ]
 }
 
@@ -168,6 +168,60 @@ pub fn parse_switch2_ble_report(
     cfg: &ControllerConfig,
     cal: &mut Switch2StickCal,
 ) -> Option<(ControllerState, (i16, i16))> {
+    if data.len() < 9 {
+        return None;
+    }
+
+    // Compact optical/report-0x20 format (`data[1] == 0x20`):
+    // [counter, 0x20, btn_lo, btn_hi, status(0x07), stick[0..3], tag(0x30), ...]
+    if data[1] == 0x20 {
+        let mut state = ControllerState::default();
+        let (raw_x, raw_y) = decode_12bit_stick(data[5], data[6], data[7]);
+        let nx = normalize_12bit(raw_x, &mut cal.lx_center);
+        let ny = normalize_12bit(raw_y, &mut cal.ly_center);
+
+        if kind == ControllerKind::Switch2JoyConRight {
+            let (rx, ry) = apply_radial_deadzone(nx, ny, cfg.right_deadzone);
+            state.right_x = rx;
+            state.right_y = ry;
+            let b = data[2];
+            state.y = (b & 0x01) != 0;
+            state.x = (b & 0x02) != 0;
+            state.b = (b & 0x04) != 0;
+            state.a = (b & 0x08) != 0;
+            state.r1 = (b & 0x40) != 0;
+            state.r2 = if (b & 0x80) != 0 { 1.0 } else { 0.0 };
+        } else {
+            let (lx, ly) = apply_radial_deadzone(nx, ny, cfg.left_deadzone);
+            state.left_x = lx;
+            state.left_y = ly;
+            let b = data[3];
+            state.dpad_down = (b & 0x01) != 0;
+            state.dpad_up = (b & 0x02) != 0;
+            state.dpad_right = (b & 0x04) != 0;
+            state.dpad_left = (b & 0x08) != 0;
+            state.l1 = (b & 0x40) != 0;
+            state.l2 = if (b & 0x80) != 0 { 1.0 } else { 0.0 };
+        }
+
+        let mut mouse_delta = (0i16, 0i16);
+        if data.len() >= 20 {
+            let cur_x = u16::from_le_bytes([data[16], data[17]]);
+            let cur_y = u16::from_le_bytes([data[18], data[19]]);
+            if let (Some(px), Some(py)) = (cal.prev_opt_x, cal.prev_opt_y) {
+                let dx = cur_x.wrapping_sub(px) as i16;
+                let dy = cur_y.wrapping_sub(py) as i16;
+                if dx.abs() <= 400 && dy.abs() <= 400 {
+                    mouse_delta = (dx, dy);
+                }
+            }
+            cal.prev_opt_x = Some(cur_x);
+            cal.prev_opt_y = Some(cur_y);
+        }
+        state.apply_nintendo_layout(cfg.nintendo_button_layout);
+        return Some((state, mouse_delta));
+    }
+
     if data.len() < 16 {
         return None;
     }
