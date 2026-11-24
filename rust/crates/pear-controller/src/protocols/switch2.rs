@@ -14,6 +14,7 @@ pub const PID_GAMECUBE2: u16 = 0x2073;
 pub const SWITCH2_SERVICE_UUID: &str = "AB7DE9BE-89FE-49AD-828F-118F09DF7FD0";
 pub const SWITCH2_CMD_CHAR_UUID: &str = "AB7DE9BE-89FE-49AD-828F-118F09DF7FD1";
 pub const SWITCH2_CTRL_CHAR_UUID: &str = "649D4AC9-8EB7-4E6C-AF44-1EA54FE5F005";
+pub const SWITCH2_RESPONSE_CHAR_UUID: &str = "C765A961-D9D8-4D36-A20A-5315B111836A";
 pub const SWITCH2_COMMON_INPUT_UUID: &str = "AB7DE9BE-89FE-49AD-828F-118F09DF7FD2";
 pub const SWITCH2_JC2_L_INPUT_UUID: &str = "CC1BBBB5-7354-4D32-A716-A81CB241A32A";
 pub const SWITCH2_JC2_R_INPUT_UUID: &str = "D5A9E01E-2FFC-4CCA-B20C-8B67142BF442";
@@ -172,9 +173,9 @@ pub fn parse_switch2_ble_report(
         return None;
     }
 
-    // Compact optical/report-0x20 format (`data[1] == 0x20`):
+    // Compact optical/report-0x20 format (`data[1] == 0x20` or `[0x07, ..., 0x30]` tag):
     // [counter, 0x20, btn_lo, btn_hi, status(0x07), stick[0..3], tag(0x30), ...]
-    if data[1] == 0x20 {
+    if data[1] == 0x20 || (data[4] == 0x07 && data[8] == 0x30) {
         let mut state = ControllerState::default();
         let (raw_x, raw_y) = decode_12bit_stick(data[5], data[6], data[7]);
         let nx = normalize_12bit(raw_x, &mut cal.lx_center);

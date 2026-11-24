@@ -412,6 +412,7 @@ extern "C" fn on_device_added(
             report_rate_hz: 0,
             connected: true,
             enabled: true,
+            raw_hex: String::new(),
             state: ControllerState::default(),
         });
 

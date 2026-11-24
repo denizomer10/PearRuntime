@@ -101,6 +101,14 @@ impl SharedStore {
         self.notify_listeners();
     }
 
+    pub fn update_raw_hex(&self, id: &str, raw_hex: String) {
+        if let Ok(mut map) = self.raw_devices.lock() {
+            if let Some(d) = map.get_mut(id) {
+                d.raw_hex = raw_hex;
+            }
+        }
+    }
+
     pub fn update_state(
         &self,
         id: &str,
@@ -470,6 +478,7 @@ mod tests {
                 report_rate_hz: 125,
                 connected: true,
                 enabled: true,
+                raw_hex: String::new(),
                 state: left_st,
             },
             ControllerDevice {
@@ -484,6 +493,7 @@ mod tests {
                 report_rate_hz: 125,
                 connected: true,
                 enabled: true,
+                raw_hex: String::new(),
                 state: right_st,
             },
         ];

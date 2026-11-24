@@ -102,6 +102,7 @@ pub fn build_effective_devices(
             report_rate_hz: l.report_rate_hz.min(r.report_rate_hz),
             connected: true,
             enabled: cfg.is_device_enabled(&pair_id),
+            raw_hex: l.raw_hex.clone(),
             state: merge_pair_state(&l.state, &r.state),
         });
     }
@@ -124,6 +125,7 @@ pub fn build_effective_devices(
             report_rate_hz: l.report_rate_hz.min(r.report_rate_hz),
             connected: true,
             enabled: cfg.is_device_enabled(&pair_id),
+            raw_hex: l.raw_hex.clone(),
             state: merge_pair_state(&l.state, &r.state),
         });
     }
@@ -145,14 +147,12 @@ pub fn build_effective_devices(
         }
 
         let mut cloned = dev.clone();
-        if matches!(dev.kind, ControllerKind::Switch2JoyConLeft | ControllerKind::Switch1JoyConLeft)
-            && cfg.joycon_combine_mode != JoyConCombineMode::SingleLeft
-        {
-            cloned.state = rotate_left_joycon_horizontal(&dev.state);
-        } else if matches!(dev.kind, ControllerKind::Switch2JoyConRight | ControllerKind::Switch1JoyConRight)
-            && cfg.joycon_combine_mode != JoyConCombineMode::SingleRight
-        {
-            cloned.state = rotate_right_joycon_horizontal(&dev.state);
+        if cfg.joycon_combine_mode == JoyConCombineMode::Separate {
+            if matches!(dev.kind, ControllerKind::Switch2JoyConLeft | ControllerKind::Switch1JoyConLeft) {
+                cloned.state = rotate_left_joycon_horizontal(&dev.state);
+            } else if matches!(dev.kind, ControllerKind::Switch2JoyConRight | ControllerKind::Switch1JoyConRight) {
+                cloned.state = rotate_right_joycon_horizontal(&dev.state);
+            }
         }
         result.push(cloned);
     }

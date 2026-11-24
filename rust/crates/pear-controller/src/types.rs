@@ -272,6 +272,7 @@ pub struct ControllerDevice {
     pub report_rate_hz: u32,
     pub connected: bool,
     pub enabled: bool,
+    pub raw_hex: String,
     pub state: ControllerState,
 }
 
@@ -286,6 +287,7 @@ impl ControllerDevice {
                 "{{\"id\":\"{}\",\"name\":\"{}\",\"kind\":\"{}\",\"kindDisplay\":\"{}\",",
                 "\"transport\":\"{}\",\"vendorId\":{},\"productId\":{},",
                 "\"batteryPercent\":{},\"latencyUs\":{},\"reportRateHz\":{},\"connected\":{},\"enabled\":{},",
+                "\"rawHex\":\"{}\",",
                 "\"state\":{{\"leftX\":{:.4},\"leftY\":{:.4},\"rightX\":{:.4},\"rightY\":{:.4},",
                 "\"l2\":{:.4},\"r2\":{:.4},\"buttons\":{}}}}}"
             ),
@@ -301,6 +303,7 @@ impl ControllerDevice {
             self.report_rate_hz,
             self.connected,
             self.enabled,
+            escape_json(&self.raw_hex),
             self.state.left_x,
             self.state.left_y,
             self.state.right_x,

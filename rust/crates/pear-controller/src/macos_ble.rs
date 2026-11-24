@@ -16,7 +16,8 @@ use crate::protocols::switch2::{
     classify_by_char_uuid, classify_by_name, is_switch2_ctrl_char, is_switch2_input_char,
     parse_manufacturer_data, parse_switch2_ble_report, switch2_keepalive_packet,
     switch2_optical_init_packets, switch2_player_led_packet, Switch2StickCal, NINTENDO_VID,
-    PID_JOYCON2_LEFT, PID_JOYCON2_RIGHT, PID_PRO2, SWITCH2_SERVICE_UUID,
+    PID_JOYCON2_LEFT, PID_JOYCON2_RIGHT, PID_PRO2, SWITCH2_RESPONSE_CHAR_UUID,
+    SWITCH2_SERVICE_UUID,
 };
 use crate::types::{ControllerDevice, ControllerKind, ControllerState, TransportKind};
 use crate::{now_us, SharedStore};
@@ -85,7 +86,6 @@ struct BlePeripheralEntry {
     name: String,
     last_report_us: u64,
     keepalive_seq: u8,
-    raw_log_count: u8,
     cal: Switch2StickCal,
     opt_rem_x: f32,
     opt_rem_y: f32,
@@ -394,7 +394,6 @@ extern "C" fn on_discover_peripheral(
                                 name: display_name,
                                 last_report_us: now_us(),
                                 keepalive_seq: 0,
-                                raw_log_count: 0,
                                 cal: Switch2StickCal::default(),
                                 opt_rem_x: 0.0,
                                 opt_rem_y: 0.0,
@@ -450,6 +449,7 @@ extern "C" fn on_connect_peripheral(
                         report_rate_hz: 60,
                         connected: true,
                         enabled,
+                        raw_hex: String::new(),
                         state: ControllerState::default(),
                     });
                 }
@@ -603,6 +603,8 @@ extern "C" fn on_discover_characteristics(
                     }
                 }
                 let _: () = msg2(peripheral, "setNotifyValue:forCharacteristic:", 1i8, ch);
+            } else if uuid.eq_ignore_ascii_case(SWITCH2_RESPONSE_CHAR_UUID) {
+                let _: () = msg2(peripheral, "setNotifyValue:forCharacteristic:", 1i8, ch);
             } else if is_switch2_ctrl_char(&uuid) {
                 let props: usize = msg0(ch, "properties");
                 let write_type = if (props & CB_CHAR_PROP_WRITE_WITHOUT_RESPONSE) != 0 {
@@ -625,13 +627,26 @@ extern "C" fn on_discover_characteristics(
                     }
                 }
                 // JoyCon2Mac / joycon2cpp timed init sequence:
-                //   t=0ms:   0C 91 01 02 00 04 00 00 FF 00 00 00 (enable optical/IMU step 1)
-                //   t=500ms: 0C 91 01 04 00 04 00 00 FF 00 00 00 (enable optical/IMU step 2)
-                //   t=700ms: 09 91 01 07 00 08 00 00 01 ...      (lock Player 1 LED solid)
-                // Back-to-back writes without 500ms spacing are discarded by Joy-Con 2 firmware.
+                //   t=500ms:  0C 91 01 02 00 04 00 00 FF 00 00 00 (enable optical/IMU step 1)
+                //   t=1000ms: 0C 91 01 04 00 04 00 00 FF 00 00 00 (enable optical/IMU step 2)
+                //   t=1200ms: 09 91 01 07 00 08 00 00 01 ...      (lock Player 1 LED solid)
                 let opt_pkts = switch2_optical_init_packets();
-                write_ctrl_bytes(peripheral, ch, write_type, &opt_pkts[0]);
                 thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(500));
+                    if let Ok(guard) = ble_state().lock() {
+                        if let Some(st) = guard.as_ref() {
+                            if let Some(entry) = st.peripherals.get(&p_key) {
+                                if let Some(ch_ptr) = entry.cmd_char {
+                                    write_ctrl_bytes(
+                                        entry.peripheral as Id,
+                                        ch_ptr as Id,
+                                        entry.cmd_write_type,
+                                        &opt_pkts[0],
+                                    );
+                                }
+                            }
+                        }
+                    }
                     thread::sleep(Duration::from_millis(500));
                     if let Ok(guard) = ble_state().lock() {
                         if let Some(st) = guard.as_ref() {
@@ -681,6 +696,12 @@ extern "C" fn on_characteristic_value(
     }
     unsafe {
         autorelease_pool(|| {
+        let cuuid: Id = msg0(characteristic, "UUID");
+        let ustr_id: Id = msg0(cuuid, "UUIDString");
+        let uuid = nsstring_to_rust(ustr_id);
+        if !is_switch2_input_char(&uuid) {
+            return;
+        }
         let val: Id = msg0(characteristic, "value");
         if val.is_null() {
             return;
@@ -703,6 +724,12 @@ extern "C" fn on_characteristic_value(
                     } else if let Some((state, (opt_dx, opt_dy))) =
                         parse_switch2_ble_report(entry.kind, bytes, &cfg, &mut entry.cal)
                     {
+                        let raw_hex: String = bytes
+                            .iter()
+                            .take(24)
+                            .map(|b| format!("{:02X}", b))
+                            .collect::<Vec<_>>()
+                            .join(" ");
                         let dt = now.saturating_sub(entry.last_report_us);
                         entry.last_report_us = now;
                         let hz = if dt > 500 && dt < 250_000 {
@@ -736,7 +763,7 @@ extern "C" fn on_characteristic_value(
                             }
                         }
 
-                        Some((entry.device_id.clone(), state, dt, hz))
+                        Some((entry.device_id.clone(), state, raw_hex, dt, hz))
                     } else {
                         None
                     }
@@ -750,9 +777,10 @@ extern "C" fn on_characteristic_value(
             None
         };
 
-        if let Some((id, state, dt, hz)) = update {
+        if let Some((id, state, raw_hex, dt, hz)) = update {
             if let Ok(guard) = ble_state().lock() {
                 if let Some(st) = guard.as_ref() {
+                    st.store.update_raw_hex(&id, raw_hex);
                     st.store.update_state(&id, state, None, dt, hz);
                 }
             }
