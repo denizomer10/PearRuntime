@@ -46,6 +46,7 @@ extern "C" {
     fn CGEventCreate(source: *const c_void) -> *mut c_void;
     fn CGEventGetLocation(event: *const c_void) -> CGPoint;
     fn CGWarpMouseCursorPosition(new_cursor_position: CGPoint) -> i32;
+    fn CGPreflightPostEventAccess() -> bool;
     fn CGEventCreateMouseEvent(
         source: *const c_void,
         mouse_type: u32,
@@ -86,6 +87,8 @@ struct BlePeripheralEntry {
     keepalive_seq: u8,
     raw_log_count: u8,
     cal: Switch2StickCal,
+    opt_rem_x: f32,
+    opt_rem_y: f32,
     prev_left_click: bool,
     prev_right_click: bool,
 }
@@ -156,19 +159,23 @@ unsafe fn emit_mouse_delta(dx: i32, dy: i32, left_down: bool) {
         x: (pos.x + dx as f64).max(0.0),
         y: (pos.y + dy as f64).max(0.0),
     };
-    let ev_type = if left_down {
-        K_CG_EVENT_LEFT_MOUSE_DRAGGED
+    if CGPreflightPostEventAccess() {
+        let ev_type = if left_down {
+            K_CG_EVENT_LEFT_MOUSE_DRAGGED
+        } else {
+            K_CG_EVENT_MOUSE_MOVED
+        };
+        let move_ev = CGEventCreateMouseEvent(std::ptr::null(), ev_type, new_pos, 0);
+        if !move_ev.is_null() {
+            CGEventSetIntegerValueField(move_ev, K_CG_MOUSE_EVENT_DELTA_X, dx as i64);
+            CGEventSetIntegerValueField(move_ev, K_CG_MOUSE_EVENT_DELTA_Y, dy as i64);
+            CGEventPost(K_CG_HID_EVENT_TAP, move_ev);
+            CFRelease(move_ev);
+        }
     } else {
-        K_CG_EVENT_MOUSE_MOVED
-    };
-    let move_ev = CGEventCreateMouseEvent(std::ptr::null(), ev_type, new_pos, 0);
-    if !move_ev.is_null() {
-        CGEventSetIntegerValueField(move_ev, K_CG_MOUSE_EVENT_DELTA_X, dx as i64);
-        CGEventSetIntegerValueField(move_ev, K_CG_MOUSE_EVENT_DELTA_Y, dy as i64);
-        CGEventPost(K_CG_HID_EVENT_TAP, move_ev);
-        CFRelease(move_ev);
+        // Without Accessibility permission, warp cursor cleanly without fighting CGEventPost.
+        let _ = CGWarpMouseCursorPosition(new_pos);
     }
-    let _ = CGWarpMouseCursorPosition(new_pos);
 }
 
 unsafe fn emit_mouse_button(button: u32, down: bool) {
@@ -370,6 +377,8 @@ extern "C" fn on_discover_peripheral(
                             keepalive_seq: 0,
                             raw_log_count: 0,
                             cal: Switch2StickCal::default(),
+                            opt_rem_x: 0.0,
+                            opt_rem_y: 0.0,
                             prev_left_click: false,
                             prev_right_click: false,
                         },
@@ -632,9 +641,13 @@ extern "C" fn on_characteristic_value(
                                 entry.prev_right_click = right_click;
                                 emit_mouse_button(1, right_click);
                             }
-                            if opt_dx.abs() >= 2 || opt_dy.abs() >= 2 {
-                                let mx = ((opt_dx as f32) * sens * 0.45).round() as i32;
-                                let my = ((opt_dy as f32) * sens * 0.45).round() as i32;
+                            if opt_dx != 0 || opt_dy != 0 {
+                                entry.opt_rem_x += (opt_dx as f32) * sens * 0.6;
+                                entry.opt_rem_y += (opt_dy as f32) * sens * 0.6;
+                                let mx = entry.opt_rem_x.trunc() as i32;
+                                let my = entry.opt_rem_y.trunc() as i32;
+                                entry.opt_rem_x -= mx as f32;
+                                entry.opt_rem_y -= my as f32;
                                 if mx != 0 || my != 0 {
                                     emit_mouse_delta(mx, my, left_click);
                                 }

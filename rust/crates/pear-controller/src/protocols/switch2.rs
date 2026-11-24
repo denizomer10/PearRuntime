@@ -205,10 +205,14 @@ pub fn parse_switch2_ble_report(
         }
 
         let mut mouse_delta = (0i16, 0i16);
-        // Check both compact (10..14) and full-report (16..20) optical offsets.
-        let opt_off = if data.len() >= 20 && (data[16] != 0 || data[17] != 0 || data[18] != 0 || data[19] != 0) {
+        // Check both full-report (16..20) and compact-0x20 (10..14) optical offsets.
+        let opt_off = if data.len() >= 20
+            && (data[16] != 0 || data[17] != 0 || data[18] != 0 || data[19] != 0)
+        {
             Some(16)
-        } else if data.len() >= 14 && (data[10] != 0 || data[11] != 0 || data[12] != 0 || data[13] != 0) {
+        } else if data.len() >= 14
+            && (data[10] != 0 || data[11] != 0 || data[12] != 0 || data[13] != 0)
+        {
             Some(10)
         } else {
             None
@@ -219,12 +223,19 @@ pub fn parse_switch2_ble_report(
             if let (Some(px), Some(py)) = (cal.prev_opt_x, cal.prev_opt_y) {
                 let dx = cur_x.wrapping_sub(px) as i16;
                 let dy = cur_y.wrapping_sub(py) as i16;
-                if dx.abs() <= 400 && dy.abs() <= 400 {
-                    mouse_delta = (dx, dy);
+                if dx.abs() <= 200 && dy.abs() <= 200 {
+                    mouse_delta = (
+                        if dx.abs() > 2 { dx } else { 0 },
+                        if dy.abs() > 2 { dy } else { 0 },
+                    );
                 }
             }
             cal.prev_opt_x = Some(cur_x);
             cal.prev_opt_y = Some(cur_y);
+        } else {
+            // Reset previous optical anchor on lift-off so re-touching the desk does not jump.
+            cal.prev_opt_x = None;
+            cal.prev_opt_y = None;
         }
         state.apply_nintendo_layout(cfg.nintendo_button_layout);
         return Some((state, mouse_delta));
