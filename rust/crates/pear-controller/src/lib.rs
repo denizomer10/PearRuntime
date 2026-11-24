@@ -1,6 +1,6 @@
 //! Pure-Rust low-latency controller engine for PearRuntime & PearSilicon.
 //!
-//! Supports Nintendo Switch 2 Joy-Cons / Pro Controller 2 (BLE GATT),
+//! Supports Nintendo Switch 2 Joy-Cons / Pro Controller 2 (BLE GATT + Optical Mouse),
 //! Sony DualSense / DualShock 4, Microsoft Xbox controllers, Nintendo Switch 1
 //! Pro / Joy-Cons, and generic HID gamepads.
 
@@ -11,6 +11,7 @@ pub mod types;
 
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr, CString};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -18,6 +19,12 @@ use macos_ble::BleBackend;
 use macos_hid::HidBackend;
 use protocols::combiner::build_effective_devices;
 use types::{ControllerConfig, ControllerDevice, ControllerKind, ControllerState};
+
+static REVISION: AtomicU64 = AtomicU64::new(1);
+
+fn bump_revision() {
+    REVISION.fetch_add(1, Ordering::Release);
+}
 
 pub fn now_us() -> u64 {
     SystemTime::now()
@@ -49,8 +56,14 @@ impl SharedStore {
 
     pub fn set_config(&self, cfg: ControllerConfig) {
         if let Ok(mut w) = self.config.write() {
-            *w = cfg;
+            *w = cfg.clone();
         }
+        if let Ok(mut map) = self.raw_devices.lock() {
+            for dev in map.values_mut() {
+                dev.enabled = cfg.is_device_enabled(&dev.id);
+            }
+        }
+        bump_revision();
         self.notify_listeners();
     }
 
@@ -60,10 +73,13 @@ impl SharedStore {
         }
     }
 
-    pub fn upsert_device(&self, dev: ControllerDevice) {
+    pub fn upsert_device(&self, mut dev: ControllerDevice) {
+        let cfg = self.config();
+        dev.enabled = cfg.is_device_enabled(&dev.id);
         if let Ok(mut map) = self.raw_devices.lock() {
             map.insert(dev.id.clone(), dev);
         }
+        bump_revision();
         self.notify_listeners();
     }
 
@@ -71,6 +87,7 @@ impl SharedStore {
         if let Ok(mut map) = self.raw_devices.lock() {
             map.remove(id);
         }
+        bump_revision();
         self.notify_listeners();
     }
 
@@ -80,6 +97,7 @@ impl SharedStore {
                 d.kind = kind;
             }
         }
+        bump_revision();
         self.notify_listeners();
     }
 
@@ -91,8 +109,15 @@ impl SharedStore {
         latency_us: u64,
         report_rate_hz: u32,
     ) {
+        let mut changed = false;
         if let Ok(mut map) = self.raw_devices.lock() {
             if let Some(d) = map.get_mut(id) {
+                if !d.enabled {
+                    return;
+                }
+                if d.state != state || (battery.is_some() && d.battery_percent != battery) {
+                    changed = true;
+                }
                 d.state = state;
                 if battery.is_some() {
                     d.battery_percent = battery;
@@ -105,7 +130,10 @@ impl SharedStore {
                 }
             }
         }
-        self.notify_listeners();
+        if changed {
+            bump_revision();
+            self.notify_listeners();
+        }
     }
 
     pub fn effective_devices(&self) -> Vec<ControllerDevice> {
@@ -116,16 +144,36 @@ impl SharedStore {
             .map(|m| m.values().cloned().collect())
             .unwrap_or_default();
         let mut eff = build_effective_devices(&raw, &cfg);
+        eff.retain(|d| d.enabled);
+        eff.sort_by(|a, b| a.id.cmp(&b.id));
+        eff
+    }
+
+    pub fn snapshot_devices_for_ui(&self) -> Vec<ControllerDevice> {
+        let cfg = self.config();
+        let raw: Vec<ControllerDevice> = self
+            .raw_devices
+            .lock()
+            .map(|m| m.values().cloned().collect())
+            .unwrap_or_default();
+        let mut eff = build_effective_devices(&raw, &cfg);
+        // Also include individually disabled raw devices so the user can re-enable them in UI.
+        for d in &raw {
+            if !d.enabled && !eff.iter().any(|e| e.id == d.id) {
+                eff.push(d.clone());
+            }
+        }
         eff.sort_by(|a, b| a.id.cmp(&b.id));
         eff
     }
 
     pub fn snapshot_json(&self) -> String {
         let cfg = self.config();
-        let devices = self.effective_devices();
+        let devices = self.snapshot_devices_for_ui();
         let dev_json: Vec<String> = devices.iter().map(|d| d.to_json()).collect();
         format!(
-            "{{\"lowLatencyMode\":{},\"pollingHz\":{},\"joyconCombineMode\":\"{}\",\"devices\":[{}]}}",
+            "{{\"revision\":{},\"lowLatencyMode\":{},\"pollingHz\":{},\"joyconCombineMode\":\"{}\",\"devices\":[{}]}}",
+            REVISION.load(Ordering::Acquire),
             cfg.low_latency_mode,
             cfg.polling_hz,
             cfg.joycon_combine_mode.as_str(),
@@ -226,6 +274,11 @@ pub extern "C" fn pear_controller_stop() {
 }
 
 #[no_mangle]
+pub extern "C" fn pear_controller_revision() -> u64 {
+    REVISION.load(Ordering::Acquire)
+}
+
+#[no_mangle]
 pub extern "C" fn pear_controller_set_config_json(config_json: *const c_char) {
     if config_json.is_null() {
         return;
@@ -261,7 +314,7 @@ pub extern "C" fn pear_controller_set_ble_scan(enabled: bool) {
 pub extern "C" fn pear_controller_snapshot_json() -> *mut c_char {
     let json = shared_store()
         .map(|s| s.snapshot_json())
-        .unwrap_or_else(|| "{\"lowLatencyMode\":true,\"pollingHz\":250,\"joyconCombineMode\":\"auto\",\"devices\":[]}".to_string());
+        .unwrap_or_else(|| "{\"revision\":0,\"lowLatencyMode\":true,\"pollingHz\":250,\"joyconCombineMode\":\"auto\",\"devices\":[]}".to_string());
     CString::new(json)
         .map(CString::into_raw)
         .unwrap_or(std::ptr::null_mut())
@@ -283,21 +336,24 @@ mod tests {
     use protocols::switch1::parse_switch1_report;
     use protocols::switch2::{
         classify_by_char_uuid, parse_manufacturer_data, parse_switch2_ble_report,
-        PID_JOYCON2_LEFT, PID_JOYCON2_RIGHT, SWITCH2_JC2_L_INPUT_UUID, SWITCH2_JC2_R_INPUT_UUID,
+        Switch2StickCal, PID_JOYCON2_LEFT, PID_JOYCON2_RIGHT, SWITCH2_JC2_L_INPUT_UUID,
+        SWITCH2_JC2_R_INPUT_UUID,
     };
     use types::{JoyConCombineMode, TransportKind};
 
     #[test]
     fn parses_switch2_manufacturer_data() {
-        // Little-endian VID 0x057E + PID 0x2066
-        let adv = [0x7E, 0x05, 0x01, 0x66, 0x20, 0x00];
-        let parsed = parse_manufacturer_data(&adv);
-        assert_eq!(parsed, Some((PID_JOYCON2_LEFT, ControllerKind::Switch2JoyConLeft)));
-
-        let adv_r = [0x7E, 0x05, 0x67, 0x20];
+        // Nintendo BLE company ID 0x0553 + prefix 01 00 03 7e 05 + 0x66 (Right) / 0x67 (Left)
+        let adv_r = [0x53, 0x05, 0x01, 0x00, 0x03, 0x7E, 0x05, 0x66, 0x00];
         assert_eq!(
             parse_manufacturer_data(&adv_r),
             Some((PID_JOYCON2_RIGHT, ControllerKind::Switch2JoyConRight))
+        );
+
+        let adv_l = [0x53, 0x05, 0x01, 0x00, 0x03, 0x7E, 0x05, 0x67, 0x00];
+        assert_eq!(
+            parse_manufacturer_data(&adv_l),
+            Some((PID_JOYCON2_LEFT, ControllerKind::Switch2JoyConLeft))
         );
     }
 
@@ -314,45 +370,54 @@ mod tests {
     }
 
     #[test]
-    fn parses_switch2_ble_report_and_nintendo_swap() {
+    fn parses_switch2_ble_report_with_autocal_and_optical_delta() {
         let mut pkt = [0u8; 64];
-        // Set bit 3 (A on Nintendo) and bit 6 (R1)
-        let btn: u32 = (1 << 3) | (1 << 6);
-        pkt[4..8].copy_from_slice(&btn.to_le_bytes());
-        // Neutral sticks (2048, 2048 -> 0x00, 0x08, 0x80)
-        pkt[10] = 0x00;
-        pkt[11] = 0x08;
-        pkt[12] = 0x80;
-        pkt[13] = 0x00;
-        pkt[14] = 0x08;
-        pkt[15] = 0x80;
+        // Right Joy-Con 2: A button = bit 3 on byte 4, R1 = bit 6 on byte 4
+        pkt[4] = 0x08 | 0x40;
+        // Neutral stick ~2000 (0x7D0 -> b0=0xD0, b1=0x07, b2=0x7D -> 0xD0, 0x07, 0x7D)
+        pkt[13] = 0xD0;
+        pkt[14] = 0x07;
+        pkt[15] = 0x7D;
+        // Optical sample 1: x=100, y=200
+        pkt[16..18].copy_from_slice(&100u16.to_le_bytes());
+        pkt[18..20].copy_from_slice(&200u16.to_le_bytes());
 
         let mut cfg = ControllerConfig::default();
         cfg.nintendo_button_layout = false;
-        let st = parse_switch2_ble_report(ControllerKind::Switch2Pro, &pkt, &cfg).unwrap();
+        let mut cal = Switch2StickCal::default();
+        let (st, delta1) =
+            parse_switch2_ble_report(ControllerKind::Switch2JoyConRight, &pkt, &cfg, &mut cal)
+                .unwrap();
         // With Xbox/iOS layout, Nintendo A becomes B!
         assert!(st.b);
         assert!(!st.a);
         assert!(st.r1);
-        assert_eq!(st.left_x, 0.0);
+        // Auto-calibrated rest position must be 0.0 (not pinned to -1.0!)
+        assert_eq!(st.right_x, 0.0);
+        assert_eq!(st.right_y, 0.0);
+        assert_eq!(delta1, (0, 0));
 
-        cfg.nintendo_button_layout = true;
-        let st_n = parse_switch2_ble_report(ControllerKind::Switch2Pro, &pkt, &cfg).unwrap();
-        assert!(st_n.a);
+        // Optical sample 2: x=115, y=190 -> dx=+15, dy=-10
+        pkt[16..18].copy_from_slice(&115u16.to_le_bytes());
+        pkt[18..20].copy_from_slice(&190u16.to_le_bytes());
+        let (_, delta2) =
+            parse_switch2_ble_report(ControllerKind::Switch2JoyConRight, &pkt, &cfg, &mut cal)
+                .unwrap();
+        assert_eq!(delta2, (15, -10));
     }
 
     #[test]
     fn parses_dualsense_usb_report() {
         let mut pkt = [0u8; 64];
-        pkt[0] = 0x01; // USB report ID
-        pkt[1] = 128;  // LX center
-        pkt[2] = 0;    // LY up -> +1.0
-        pkt[3] = 255;  // RX right -> +1.0
-        pkt[4] = 128;  // RY center
-        pkt[5] = 255;  // L2 full
-        pkt[6] = 0;    // R2 zero
-        pkt[8] = 0x20 | 0x00; // Cross + D-pad Up (hat 0)
-        pkt[9] = 0x02;        // R1
+        pkt[0] = 0x01;
+        pkt[1] = 128;
+        pkt[2] = 0;
+        pkt[3] = 255;
+        pkt[4] = 128;
+        pkt[5] = 255;
+        pkt[6] = 0;
+        pkt[8] = 0x20 | 0x00;
+        pkt[9] = 0x02;
         let cfg = ControllerConfig::default();
         let st = parse_sony_report(ControllerKind::DualSense, &pkt, &cfg).unwrap();
         assert_eq!(classify_sony_pid(0x0CE6), Some(ControllerKind::DualSense));
@@ -368,8 +433,8 @@ mod tests {
     fn parses_switch1_full_report_and_combines_joycon2_pair() {
         let mut pkt = [0u8; 49];
         pkt[0] = 0x30;
-        pkt[2] = 0x80; // battery 100%
-        pkt[3] = 0x08; // Nintendo A
+        pkt[2] = 0x80;
+        pkt[3] = 0x08;
         pkt[6] = 0x00;
         pkt[7] = 0x08;
         pkt[8] = 0x80;
@@ -382,7 +447,6 @@ mod tests {
         assert_eq!(batt, Some(100));
         assert!(st.b);
 
-        // Combine Joy-Con 2 L + R into Pair
         let mut left_st = ControllerState::default();
         left_st.dpad_up = true;
         left_st.left_x = -0.8;
@@ -402,6 +466,7 @@ mod tests {
                 latency_us: 4000,
                 report_rate_hz: 125,
                 connected: true,
+                enabled: true,
                 state: left_st,
             },
             ControllerDevice {
@@ -415,6 +480,7 @@ mod tests {
                 latency_us: 4000,
                 report_rate_hz: 125,
                 connected: true,
+                enabled: true,
                 state: right_st,
             },
         ];
@@ -433,8 +499,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_controller_config_json() {
-        let json = r#"{"lowLatencyMode":true,"pollingHz":500,"leftDeadzone":0.12,"rightDeadzone":0.09,"joyconCombineMode":"separate","nintendoButtonLayout":true,"bleSwitch2Enabled":false}"#;
+    fn parses_controller_config_json_with_mouse_and_disabled() {
+        let json = r#"{"lowLatencyMode":true,"pollingHz":500,"leftDeadzone":0.12,"rightDeadzone":0.09,"joyconCombineMode":"separate","nintendoButtonLayout":true,"bleSwitch2Enabled":false,"mouseModeEnabled":true,"mouseSensitivity":1.5,"disabledDeviceIds":["ble:abc"]}"#;
         let cfg = ControllerConfig::from_json(json);
         assert!(cfg.low_latency_mode);
         assert_eq!(cfg.polling_hz, 500);
@@ -443,5 +509,9 @@ mod tests {
         assert_eq!(cfg.joycon_combine_mode, JoyConCombineMode::Separate);
         assert!(cfg.nintendo_button_layout);
         assert!(!cfg.ble_switch2_enabled);
+        assert!(cfg.mouse_mode_enabled);
+        assert!((cfg.mouse_sensitivity - 1.5).abs() < 0.001);
+        assert_eq!(cfg.disabled_device_ids, vec!["ble:abc".to_string()]);
+        assert!(!cfg.is_device_enabled("ble:abc"));
     }
 }

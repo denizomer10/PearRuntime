@@ -76,17 +76,18 @@ pub fn build_effective_devices(
 ) -> Vec<ControllerDevice> {
     let mut result = Vec::with_capacity(raw.len());
 
-    let jc2_l = raw.iter().find(|d| d.connected && d.kind == ControllerKind::Switch2JoyConLeft);
-    let jc2_r = raw.iter().find(|d| d.connected && d.kind == ControllerKind::Switch2JoyConRight);
-    let jc1_l = raw.iter().find(|d| d.connected && d.kind == ControllerKind::Switch1JoyConLeft);
-    let jc1_r = raw.iter().find(|d| d.connected && d.kind == ControllerKind::Switch1JoyConRight);
+    let jc2_l = raw.iter().find(|d| d.connected && d.enabled && d.kind == ControllerKind::Switch2JoyConLeft);
+    let jc2_r = raw.iter().find(|d| d.connected && d.enabled && d.kind == ControllerKind::Switch2JoyConRight);
+    let jc1_l = raw.iter().find(|d| d.connected && d.enabled && d.kind == ControllerKind::Switch1JoyConLeft);
+    let jc1_r = raw.iter().find(|d| d.connected && d.enabled && d.kind == ControllerKind::Switch1JoyConRight);
 
     let pair_jc2 = cfg.joycon_combine_mode == JoyConCombineMode::Auto && jc2_l.is_some() && jc2_r.is_some();
     let pair_jc1 = cfg.joycon_combine_mode == JoyConCombineMode::Auto && jc1_l.is_some() && jc1_r.is_some();
 
     if let (true, Some(l), Some(r)) = (pair_jc2, jc2_l, jc2_r) {
+        let pair_id = format!("pair:{}+{}", l.id, r.id);
         result.push(ControllerDevice {
-            id: format!("pair:{}+{}", l.id, r.id),
+            id: pair_id.clone(),
             name: "Nintendo Joy-Con 2 (L+R)".to_string(),
             kind: ControllerKind::Switch2JoyConPair,
             transport: TransportKind::Combined,
@@ -100,13 +101,15 @@ pub fn build_effective_devices(
             latency_us: l.latency_us.max(r.latency_us),
             report_rate_hz: l.report_rate_hz.min(r.report_rate_hz),
             connected: true,
+            enabled: cfg.is_device_enabled(&pair_id),
             state: merge_pair_state(&l.state, &r.state),
         });
     }
 
     if let (true, Some(l), Some(r)) = (pair_jc1, jc1_l, jc1_r) {
+        let pair_id = format!("pair:{}+{}", l.id, r.id);
         result.push(ControllerDevice {
-            id: format!("pair:{}+{}", l.id, r.id),
+            id: pair_id.clone(),
             name: "Nintendo Joy-Con (L+R)".to_string(),
             kind: ControllerKind::Switch1JoyConPair,
             transport: TransportKind::Combined,
@@ -120,6 +123,7 @@ pub fn build_effective_devices(
             latency_us: l.latency_us.max(r.latency_us),
             report_rate_hz: l.report_rate_hz.min(r.report_rate_hz),
             connected: true,
+            enabled: cfg.is_device_enabled(&pair_id),
             state: merge_pair_state(&l.state, &r.state),
         });
     }

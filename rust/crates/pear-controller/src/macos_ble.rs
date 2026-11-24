@@ -13,9 +13,10 @@ use pear_objc::{
 };
 
 use crate::protocols::switch2::{
-    classify_by_char_uuid, classify_by_name, is_switch2_input_char, parse_manufacturer_data,
-    parse_switch2_ble_report, switch2_keepalive_packet, NINTENDO_VID, PID_JOYCON2_LEFT,
-    PID_JOYCON2_RIGHT, PID_PRO2, SWITCH2_CMD_CHAR_UUID, SWITCH2_SERVICE_UUID,
+    classify_by_char_uuid, classify_by_name, is_switch2_ctrl_char, is_switch2_input_char,
+    parse_manufacturer_data, parse_switch2_ble_report, switch2_keepalive_packet,
+    switch2_optical_init_packets, switch2_player_led_packet, Switch2StickCal, NINTENDO_VID,
+    PID_JOYCON2_LEFT, PID_JOYCON2_RIGHT, PID_PRO2, SWITCH2_SERVICE_UUID,
 };
 use crate::types::{ControllerDevice, ControllerKind, ControllerState, TransportKind};
 use crate::{now_us, SharedStore};
@@ -33,20 +34,58 @@ extern "C" {
     fn dispatch_async_f(queue: *const c_void, context: *mut c_void, work: extern "C" fn(*mut c_void));
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct CGPoint {
+    x: f64,
+    y: f64,
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGEventCreate(source: *const c_void) -> *mut c_void;
+    fn CGEventGetLocation(event: *const c_void) -> CGPoint;
+    fn CGEventCreateMouseEvent(
+        source: *const c_void,
+        mouse_type: u32,
+        mouse_cursor_position: CGPoint,
+        mouse_button: u32,
+    ) -> *mut c_void;
+    fn CGEventSetIntegerValueField(event: *mut c_void, field: u32, value: i64);
+    fn CGEventPost(tap: u32, event: *mut c_void);
+    fn CFRelease(cf: *const c_void);
+}
+
 const RTLD_LAZY: i32 = 1;
 const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
 const CB_MANAGER_STATE_POWERED_ON: isize = 5;
-const CB_CHARACTERISTIC_WRITE_WITHOUT_RESPONSE: usize = 1;
+const CB_CHAR_PROP_WRITE_WITHOUT_RESPONSE: usize = 0x04;
+const CB_CHAR_WRITE_WITH_RESPONSE: usize = 0;
+const CB_CHAR_WRITE_WITHOUT_RESPONSE: usize = 1;
+
+const K_CG_HID_EVENT_TAP: u32 = 0;
+const K_CG_EVENT_LEFT_MOUSE_DOWN: u32 = 1;
+const K_CG_EVENT_LEFT_MOUSE_UP: u32 = 2;
+const K_CG_EVENT_RIGHT_MOUSE_DOWN: u32 = 3;
+const K_CG_EVENT_RIGHT_MOUSE_UP: u32 = 4;
+const K_CG_EVENT_MOUSE_MOVED: u32 = 5;
+const K_CG_EVENT_LEFT_MOUSE_DRAGGED: u32 = 6;
+const K_CG_MOUSE_EVENT_DELTA_X: u32 = 4;
+const K_CG_MOUSE_EVENT_DELTA_Y: u32 = 5;
 
 struct BlePeripheralEntry {
     device_id: String,
     peripheral: usize,
     cmd_char: Option<usize>,
+    cmd_write_type: usize,
     kind: ControllerKind,
     pid: u16,
     name: String,
     last_report_us: u64,
     keepalive_seq: u8,
+    cal: Switch2StickCal,
+    prev_left_click: bool,
+    prev_right_click: bool,
 }
 
 struct BleRuntimeState {
@@ -76,11 +115,6 @@ unsafe fn nsstring_to_rust(s: Id) -> String {
     }
 }
 
-unsafe fn cbuuid_from_str(s: &str) -> Id {
-    let ns = nsstring(s);
-    msg1(cls("CBUUID"), "UUIDWithString:", ns)
-}
-
 unsafe fn peripheral_uuid_string(peripheral: Id) -> String {
     let uuid: Id = msg0(peripheral, "identifier");
     if uuid.is_null() {
@@ -88,6 +122,70 @@ unsafe fn peripheral_uuid_string(peripheral: Id) -> String {
     }
     let s: Id = msg0(uuid, "UUIDString");
     nsstring_to_rust(s)
+}
+
+unsafe fn write_ctrl_bytes(peripheral: Id, ch: Id, write_type: usize, bytes: &[u8]) {
+    if peripheral.is_null() || ch.is_null() {
+        return;
+    }
+    let data: Id = msg2(
+        cls("NSData"),
+        "dataWithBytes:length:",
+        bytes.as_ptr() as *const c_void,
+        bytes.len(),
+    );
+    let _: () = msg3(
+        peripheral,
+        "writeValue:forCharacteristic:type:",
+        data,
+        ch,
+        write_type,
+    );
+}
+
+unsafe fn emit_mouse_delta(dx: i32, dy: i32, left_down: bool) {
+    let ev = CGEventCreate(std::ptr::null());
+    if ev.is_null() {
+        return;
+    }
+    let pos = CGEventGetLocation(ev);
+    CFRelease(ev);
+    let new_pos = CGPoint {
+        x: (pos.x + dx as f64).max(0.0),
+        y: (pos.y + dy as f64).max(0.0),
+    };
+    let ev_type = if left_down {
+        K_CG_EVENT_LEFT_MOUSE_DRAGGED
+    } else {
+        K_CG_EVENT_MOUSE_MOVED
+    };
+    let move_ev = CGEventCreateMouseEvent(std::ptr::null(), ev_type, new_pos, 0);
+    if !move_ev.is_null() {
+        CGEventSetIntegerValueField(move_ev, K_CG_MOUSE_EVENT_DELTA_X, dx as i64);
+        CGEventSetIntegerValueField(move_ev, K_CG_MOUSE_EVENT_DELTA_Y, dy as i64);
+        CGEventPost(K_CG_HID_EVENT_TAP, move_ev);
+        CFRelease(move_ev);
+    }
+}
+
+unsafe fn emit_mouse_button(button: u32, down: bool) {
+    let ev = CGEventCreate(std::ptr::null());
+    if ev.is_null() {
+        return;
+    }
+    let pos = CGEventGetLocation(ev);
+    CFRelease(ev);
+    let ev_type = match (button, down) {
+        (0, true) => K_CG_EVENT_LEFT_MOUSE_DOWN,
+        (0, false) => K_CG_EVENT_LEFT_MOUSE_UP,
+        (_, true) => K_CG_EVENT_RIGHT_MOUSE_DOWN,
+        (_, false) => K_CG_EVENT_RIGHT_MOUSE_UP,
+    };
+    let btn_ev = CGEventCreateMouseEvent(std::ptr::null(), ev_type, pos, button);
+    if !btn_ev.is_null() {
+        CGEventPost(K_CG_HID_EVENT_TAP, btn_ev);
+        CFRelease(btn_ev);
+    }
 }
 
 unsafe fn register_ble_delegate_class() -> Class {
@@ -187,7 +285,6 @@ extern "C" fn on_discover_peripheral(
         let pname: Id = msg0(peripheral, "name");
         let name_str = nsstring_to_rust(pname);
 
-        // 1. Check advertised services for Switch 2 UUID.
         let svc_key = nsstring("kCBAdvDataServiceUUIDs");
         let svc_uuids: Id = msg1(adv, "objectForKey:", svc_key);
         let mut matched_switch2 = false;
@@ -203,7 +300,6 @@ extern "C" fn on_discover_peripheral(
             }
         }
 
-        // 2. Check Manufacturer Data for Nintendo 0x057E + Switch 2 PIDs (0x2066 / 0x2067 / 0x2069).
         let mfg_key = nsstring("kCBAdvDataManufacturerData");
         let mfg_data: Id = msg1(adv, "objectForKey:", mfg_key);
         let mut detected: Option<(u16, ControllerKind)> = None;
@@ -219,12 +315,11 @@ extern "C" fn on_discover_peripheral(
             }
         }
 
-        // 3. Check name fallback.
         if detected.is_none() {
             if let Some(k) = classify_by_name(&name_str) {
                 let pid = match k {
-                    ControllerKind::Switch2JoyConLeft => PID_JOYCON2_LEFT,
                     ControllerKind::Switch2JoyConRight => PID_JOYCON2_RIGHT,
+                    ControllerKind::Switch2JoyConLeft => PID_JOYCON2_LEFT,
                     _ => PID_PRO2,
                 };
                 detected = Some((pid, k));
@@ -236,7 +331,7 @@ extern "C" fn on_discover_peripheral(
             return;
         }
 
-        let (pid, kind) = detected.unwrap_or((PID_JOYCON2_LEFT, ControllerKind::Switch2JoyConLeft));
+        let (pid, kind) = detected.unwrap_or((PID_JOYCON2_RIGHT, ControllerKind::Switch2JoyConRight));
         let p_key = peripheral as usize;
         let uuid_str = peripheral_uuid_string(peripheral);
         let display_name = if name_str.is_empty() {
@@ -257,11 +352,15 @@ extern "C" fn on_discover_peripheral(
                             device_id: format!("ble:{}", uuid_str),
                             peripheral: p_key,
                             cmd_char: None,
+                            cmd_write_type: CB_CHAR_WRITE_WITHOUT_RESPONSE,
                             kind,
                             pid,
                             name: display_name,
                             last_report_us: now_us(),
                             keepalive_seq: 0,
+                            cal: Switch2StickCal::default(),
+                            prev_left_click: false,
+                            prev_right_click: false,
                         },
                     );
                     true
@@ -298,6 +397,7 @@ extern "C" fn on_connect_peripheral(
         if let Ok(guard) = ble_state().lock() {
             if let Some(st) = guard.as_ref() {
                 if let Some(entry) = st.peripherals.get(&p_key) {
+                    let enabled = st.store.config().is_device_enabled(&entry.device_id);
                     st.store.upsert_device(ControllerDevice {
                         id: entry.device_id.clone(),
                         name: entry.name.clone(),
@@ -307,8 +407,9 @@ extern "C" fn on_connect_peripheral(
                         product_id: entry.pid,
                         battery_percent: None,
                         latency_us: 0,
-                        report_rate_hz: 125,
+                        report_rate_hz: 60,
                         connected: true,
+                        enabled,
                         state: ControllerState::default(),
                     });
                 }
@@ -323,9 +424,12 @@ extern "C" fn on_connect_peripheral(
         if !delegate.is_null() {
             let _: () = msg1(peripheral, "setDelegate:", delegate);
         }
-        let svc_uuid = cbuuid_from_str(SWITCH2_SERVICE_UUID);
-        let svcs: Id = msg1(cls("NSArray"), "arrayWithObject:", svc_uuid);
-        let _: () = msg1(peripheral, "discoverServices:", svcs);
+        // Discover ALL services so we find both the input notify service AND the control write service.
+        let _: () = msg1(
+            peripheral,
+            "discoverServices:",
+            std::ptr::null::<c_void>() as Id,
+        );
     }
 }
 
@@ -417,29 +521,33 @@ extern "C" fn on_discover_characteristics(
                     }
                 }
                 let _: () = msg2(peripheral, "setNotifyValue:forCharacteristic:", 1i8, ch);
-            } else if uuid.eq_ignore_ascii_case(SWITCH2_CMD_CHAR_UUID) {
+            } else if is_switch2_ctrl_char(&uuid) {
+                let props: usize = msg0(ch, "properties");
+                let write_type = if (props & CB_CHAR_PROP_WRITE_WITHOUT_RESPONSE) != 0 {
+                    CB_CHAR_WRITE_WITHOUT_RESPONSE
+                } else {
+                    CB_CHAR_WRITE_WITH_RESPONSE
+                };
                 if let Ok(mut guard) = ble_state().lock() {
                     if let Some(st) = guard.as_mut() {
                         if let Some(entry) = st.peripherals.get_mut(&p_key) {
-                            objc_retain(ch);
-                            entry.cmd_char = Some(ch as usize);
+                            if entry.cmd_char.is_none() || uuid.eq_ignore_ascii_case("649D4AC9-8EB7-4E6C-AF44-1EA54FE5F005") {
+                                if let Some(old) = entry.cmd_char.take() {
+                                    objc_release(old as Id);
+                                }
+                                objc_retain(ch);
+                                entry.cmd_char = Some(ch as usize);
+                                entry.cmd_write_type = write_type;
+                            }
                         }
                     }
                 }
-                let pkt = switch2_keepalive_packet(0);
-                let data: Id = msg2(
-                    cls("NSData"),
-                    "dataWithBytes:length:",
-                    pkt.as_ptr() as *const c_void,
-                    pkt.len(),
-                );
-                let _: () = msg3(
-                    peripheral,
-                    "writeValue:forCharacteristic:type:",
-                    data,
-                    ch,
-                    CB_CHARACTERISTIC_WRITE_WITHOUT_RESPONSE,
-                );
+                // Stop blinking & lock Player 1 LED solid + initialize optical mouse sensor.
+                let led_pkt = switch2_player_led_packet(1);
+                write_ctrl_bytes(peripheral, ch, write_type, &led_pkt);
+                for opt_pkt in switch2_optical_init_packets() {
+                    write_ctrl_bytes(peripheral, ch, write_type, &opt_pkt);
+                }
             }
         }
     }
@@ -473,15 +581,41 @@ extern "C" fn on_characteristic_value(
             if let Some(st) = guard.as_mut() {
                 let cfg = st.store.config();
                 if let Some(entry) = st.peripherals.get_mut(&p_key) {
-                    if let Some(parsed) = parse_switch2_ble_report(entry.kind, bytes, &cfg) {
+                    if !cfg.is_device_enabled(&entry.device_id) {
+                        None
+                    } else if let Some((state, (opt_dx, opt_dy))) =
+                        parse_switch2_ble_report(entry.kind, bytes, &cfg, &mut entry.cal)
+                    {
                         let dt = now.saturating_sub(entry.last_report_us);
                         entry.last_report_us = now;
                         let hz = if dt > 500 && dt < 250_000 {
                             (1_000_000 / dt) as u32
                         } else {
-                            125
+                            60
                         };
-                        Some((entry.device_id.clone(), parsed, dt, hz))
+
+                        if cfg.mouse_mode_enabled {
+                            let sens = cfg.mouse_sensitivity;
+                            let left_click = state.r1 || state.l1;
+                            let right_click = state.r2 > 0.5 || state.l2 > 0.5;
+                            if left_click != entry.prev_left_click {
+                                entry.prev_left_click = left_click;
+                                emit_mouse_button(0, left_click);
+                            }
+                            if right_click != entry.prev_right_click {
+                                entry.prev_right_click = right_click;
+                                emit_mouse_button(1, right_click);
+                            }
+                            if opt_dx.abs() >= 2 || opt_dy.abs() >= 2 {
+                                let mx = ((opt_dx as f32) * sens * 0.45).round() as i32;
+                                let my = ((opt_dy as f32) * sens * 0.45).round() as i32;
+                                if mx != 0 || my != 0 {
+                                    emit_mouse_delta(mx, my, left_click);
+                                }
+                            }
+                        }
+
+                        Some((entry.device_id.clone(), state, dt, hz))
                     } else {
                         None
                     }
@@ -513,20 +647,11 @@ extern "C" fn keepalive_tick_on_queue(_ctx: *mut c_void) {
                     if let Some(ch_ptr) = entry.cmd_char {
                         entry.keepalive_seq = entry.keepalive_seq.wrapping_add(1);
                         let pkt = switch2_keepalive_packet(entry.keepalive_seq);
-                        let data: Id = msg2(
-                            cls("NSData"),
-                            "dataWithBytes:length:",
-                            pkt.as_ptr() as *const c_void,
-                            pkt.len(),
-                        );
-                        let p = entry.peripheral as Id;
-                        let ch = ch_ptr as Id;
-                        let _: () = msg3(
-                            p,
-                            "writeValue:forCharacteristic:type:",
-                            data,
-                            ch,
-                            CB_CHARACTERISTIC_WRITE_WITHOUT_RESPONSE,
+                        write_ctrl_bytes(
+                            entry.peripheral as Id,
+                            ch_ptr as Id,
+                            entry.cmd_write_type,
+                            &pkt,
                         );
                     }
                 }
@@ -604,18 +729,17 @@ impl BleBackend {
 
         let running = Arc::new(AtomicBool::new(true));
         let flag = running.clone();
-        // 1 Hz keep-alive prevents macOS from dropping Switch 2 BLE links after ~15s.
         let keepalive_thread = thread::Builder::new()
             .name("pear-controller-ble-keepalive".to_string())
             .spawn(move || {
                 while flag.load(Ordering::Acquire) {
-                    thread::sleep(Duration::from_secs(1));
+                    thread::sleep(Duration::from_secs(2));
                     if !flag.load(Ordering::Acquire) {
                         break;
                     }
                     if let Ok(guard) = ble_state().lock() {
                         if let Some(st) = guard.as_ref() {
-                            if st.queue != 0 {
+                            if st.queue != 0 && !st.peripherals.is_empty() {
                                 unsafe {
                                     dispatch_async_f(
                                         st.queue as *const c_void,

@@ -64,28 +64,6 @@ impl ControllerKind {
                 | Self::Switch1Pro
         )
     }
-
-    pub fn is_switch2_joycon_side(self) -> Option<JoyConSide> {
-        match self {
-            Self::Switch2JoyConLeft => Some(JoyConSide::Left),
-            Self::Switch2JoyConRight => Some(JoyConSide::Right),
-            _ => None,
-        }
-    }
-
-    pub fn is_switch1_joycon_side(self) -> Option<JoyConSide> {
-        match self {
-            Self::Switch1JoyConLeft => Some(JoyConSide::Left),
-            Self::Switch1JoyConRight => Some(JoyConSide::Right),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum JoyConSide {
-    Left,
-    Right,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,6 +124,9 @@ pub struct ControllerConfig {
     pub nintendo_button_layout: bool,
     pub ble_switch2_enabled: bool,
     pub prefer_direct_hid: bool,
+    pub mouse_mode_enabled: bool,
+    pub mouse_sensitivity: f32,
+    pub disabled_device_ids: Vec<String>,
 }
 
 impl Default for ControllerConfig {
@@ -160,6 +141,9 @@ impl Default for ControllerConfig {
             nintendo_button_layout: false,
             ble_switch2_enabled: true,
             prefer_direct_hid: true,
+            mouse_mode_enabled: false,
+            mouse_sensitivity: 1.0,
+            disabled_device_ids: Vec::new(),
         }
     }
 }
@@ -194,7 +178,20 @@ impl ControllerConfig {
         if let Some(v) = extract_bool(json, "preferDirectHID") {
             cfg.prefer_direct_hid = v;
         }
+        if let Some(v) = extract_bool(json, "mouseModeEnabled") {
+            cfg.mouse_mode_enabled = v;
+        }
+        if let Some(v) = extract_f32(json, "mouseSensitivity") {
+            cfg.mouse_sensitivity = v.clamp(0.1, 5.0);
+        }
+        if let Some(arr) = extract_str_array(json, "disabledDeviceIds") {
+            cfg.disabled_device_ids = arr;
+        }
         cfg
+    }
+
+    pub fn is_device_enabled(&self, id: &str) -> bool {
+        !self.disabled_device_ids.iter().any(|d| d == id)
     }
 }
 
@@ -214,10 +211,10 @@ pub struct ControllerState {
     pub dpad_down: bool,
     pub dpad_left: bool,
     pub dpad_right: bool,
-    pub menu: bool,    // Plus / Start / Options
-    pub options: bool, // Minus / Select / Create / Share
-    pub home: bool,    // Home / PS / Xbox
-    pub capture: bool, // Capture / Touchpad / Mute / C
+    pub menu: bool,
+    pub options: bool,
+    pub home: bool,
+    pub capture: bool,
     pub c_button: bool,
     pub gl: bool,
     pub gr: bool,
@@ -228,8 +225,6 @@ pub struct ControllerState {
 }
 
 impl ControllerState {
-    /// Apply Nintendo A/B & X/Y swap when `nintendo_button_layout == false`
-    /// so Nintendo face buttons match standard Xbox / iOS GCExtendedGamepad positions.
     pub fn apply_nintendo_layout(&mut self, keep_nintendo_labels: bool) {
         if !keep_nintendo_labels {
             std::mem::swap(&mut self.a, &mut self.b);
@@ -276,6 +271,7 @@ pub struct ControllerDevice {
     pub latency_us: u64,
     pub report_rate_hz: u32,
     pub connected: bool,
+    pub enabled: bool,
     pub state: ControllerState,
 }
 
@@ -289,7 +285,7 @@ impl ControllerDevice {
             concat!(
                 "{{\"id\":\"{}\",\"name\":\"{}\",\"kind\":\"{}\",\"kindDisplay\":\"{}\",",
                 "\"transport\":\"{}\",\"vendorId\":{},\"productId\":{},",
-                "\"batteryPercent\":{},\"latencyUs\":{},\"reportRateHz\":{},\"connected\":{},",
+                "\"batteryPercent\":{},\"latencyUs\":{},\"reportRateHz\":{},\"connected\":{},\"enabled\":{},",
                 "\"state\":{{\"leftX\":{:.4},\"leftY\":{:.4},\"rightX\":{:.4},\"rightY\":{:.4},",
                 "\"l2\":{:.4},\"r2\":{:.4},\"buttons\":{}}}}}"
             ),
@@ -304,6 +300,7 @@ impl ControllerDevice {
             self.latency_us,
             self.report_rate_hz,
             self.connected,
+            self.enabled,
             self.state.left_x,
             self.state.left_y,
             self.state.right_x,
@@ -375,9 +372,7 @@ fn extract_bool(json: &str, key: &str) -> Option<bool> {
 
 fn extract_u32(json: &str, key: &str) -> Option<u32> {
     let v = find_json_value(json, key)?;
-    let end = v
-        .find(|c: char| !c.is_ascii_digit())
-        .unwrap_or(v.len());
+    let end = v.find(|c: char| !c.is_ascii_digit()).unwrap_or(v.len());
     v[..end].parse().ok()
 }
 
@@ -397,4 +392,25 @@ fn extract_str(json: &str, key: &str) -> Option<String> {
     let rest = &v[1..];
     let end = rest.find('"')?;
     Some(rest[..end].to_string())
+}
+
+fn extract_str_array(json: &str, key: &str) -> Option<Vec<String>> {
+    let v = find_json_value(json, key)?;
+    if !v.starts_with('[') {
+        return None;
+    }
+    let end = v.find(']')?;
+    let inner = &v[1..end];
+    let mut out = Vec::new();
+    let mut rest = inner;
+    while let Some(q1) = rest.find('"') {
+        let after = &rest[q1 + 1..];
+        if let Some(q2) = after.find('"') {
+            out.push(after[..q2].to_string());
+            rest = &after[q2 + 1..];
+        } else {
+            break;
+        }
+    }
+    Some(out)
 }
