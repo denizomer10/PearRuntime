@@ -128,18 +128,33 @@ pub fn switch2_configure_vibration_packet() -> [u8; 28] {
     ]
 }
 
-/// Switch 2 Rumble pulse command (`0x50`).
-pub fn switch2_rumble_packet(seq: u8, on: bool) -> [u8; 8] {
-    [
-        0x50,
-        0x50 | (seq & 0x0F),
-        if on { 0x01 } else { 0x00 },
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-    ]
+/// Switch 2 Rumble pulse command (`0x50`) — 42-byte motor block for vibration characteristic,
+/// matching `JoyCon2Mac/BLEManager.mm` (`FillJoyConVibrationMotorBlock`).
+pub fn switch2_vibration_block_packet(seq: u8, amplitude: u8) -> [u8; 42] {
+    let mut pkt = [0u8; 42];
+    if amplitude > 0 {
+        let amp10: u64 = 64 + (((amplitude as u64) * 704 + 127) / 255);
+        let freq0: u64 = 512;
+        let freq1: u64 = 512;
+        let packed: u64 = ((amp10 & 0x3FF) << 30)
+            | ((freq1 & 0x3FF) << 20)
+            | ((amp10 & 0x3FF) << 10)
+            | (freq0 & 0x3FF);
+        let header = 0x50 | (seq & 0x0F);
+        for offset in [1usize, 17usize] {
+            pkt[offset] = header;
+            for i in 0..5 {
+                pkt[offset + 1 + i] = ((packed >> (8 * i)) & 0xFF) as u8;
+            }
+        }
+    }
+    pkt
+}
+
+/// Switch 2 built-in vibration pulse command (`0A 91 01 02 ...`) for `UUID_COMMAND`,
+/// matching `JoyCon2Mac/BLEManager.mm` (`sendPairingVibrationToContext`).
+pub fn switch2_pairing_vibration_packet() -> [u8; 12] {
+    [0x0A, 0x91, 0x01, 0x02, 0x00, 0x04, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00]
 }
 
 fn decode_12bit_stick(b0: u8, b1: u8, b2: u8) -> (u16, u16) {

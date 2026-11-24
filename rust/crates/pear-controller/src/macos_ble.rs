@@ -16,9 +16,10 @@ use pear_objc::{
 use crate::protocols::switch2::{
     classify_by_char_uuid, classify_by_name, is_switch2_ctrl_char, is_switch2_input_char,
     parse_manufacturer_data, parse_switch2_ble_report, switch2_configure_vibration_packet,
-    switch2_imu_init_packets, switch2_player_led_packet, switch2_rumble_packet, Switch2StickCal,
-    NINTENDO_VID, PID_JOYCON2_LEFT, PID_JOYCON2_RIGHT, PID_PRO2, SWITCH2_RESPONSE_CHAR_UUID,
-    SWITCH2_SERVICE_UUID,
+    switch2_imu_init_packets, switch2_pairing_vibration_packet, switch2_player_led_packet,
+    switch2_vibration_block_packet, Switch2StickCal, NINTENDO_VID, PID_JOYCON2_LEFT,
+    PID_JOYCON2_RIGHT, PID_PRO2, SWITCH2_COMMON_INPUT_UUID, SWITCH2_CTRL_CHAR_UUID,
+    SWITCH2_RESPONSE_CHAR_UUID, SWITCH2_SERVICE_UUID,
 };
 use crate::types::{ControllerDevice, ControllerKind, ControllerState, TransportKind};
 use crate::{now_us, SharedStore};
@@ -39,6 +40,7 @@ const RTLD_LAZY: i32 = 1;
 const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
 const CB_MANAGER_STATE_POWERED_ON: isize = 5;
 const CB_CHAR_PROP_WRITE_WITHOUT_RESPONSE: usize = 0x04;
+const CB_CHAR_PROP_WRITE: usize = 0x08;
 const CB_CHAR_WRITE_WITH_RESPONSE: usize = 0;
 const CB_CHAR_WRITE_WITHOUT_RESPONSE: usize = 1;
 
@@ -47,6 +49,8 @@ struct BlePeripheralEntry {
     peripheral: usize,
     cmd_char: Option<usize>,
     cmd_write_type: usize,
+    vib_char: Option<usize>,
+    vib_write_type: usize,
     kind: ControllerKind,
     pid: u16,
     name: String,
@@ -291,7 +295,9 @@ extern "C" fn on_discover_peripheral(
                                 device_id: format!("ble:{}", uuid_str),
                                 peripheral: p_key,
                                 cmd_char: None,
-                                cmd_write_type: CB_CHAR_WRITE_WITHOUT_RESPONSE,
+                                cmd_write_type: CB_CHAR_WRITE_WITH_RESPONSE,
+                                vib_char: None,
+                                vib_write_type: CB_CHAR_WRITE_WITHOUT_RESPONSE,
                                 kind,
                                 pid,
                                 name: display_name,
@@ -393,6 +399,9 @@ extern "C" fn on_fail_to_connect_peripheral(
                         if let Some(c) = entry.cmd_char {
                             objc_release(c as Id);
                         }
+                        if let Some(v) = entry.vib_char {
+                            objc_release(v as Id);
+                        }
                         st.store.remove_device(&entry.device_id);
                     }
                     rescan = st.scanning_wanted;
@@ -426,6 +435,9 @@ extern "C" fn on_disconnect_peripheral(
                     if let Some(entry) = st.peripherals.remove(&p_key) {
                         if let Some(c) = entry.cmd_char {
                             objc_release(c as Id);
+                        }
+                        if let Some(v) = entry.vib_char {
+                            objc_release(v as Id);
                         }
                         st.store.remove_device(&entry.device_id);
                     }
@@ -488,11 +500,15 @@ extern "C" fn on_discover_characteristics(
             }
             let p_key = peripheral as usize;
             let count: usize = msg0(chars, "count");
+            let mut found_cmd_index: Option<usize> = None;
+            let mut char_list: Vec<(Id, String, usize)> = Vec::with_capacity(count);
             for i in 0..count {
                 let ch: Id = msg1(chars, "objectAtIndex:", i);
                 let cuuid: Id = msg0(ch, "UUID");
                 let ustr_id: Id = msg0(cuuid, "UUIDString");
                 let uuid = nsstring_to_rust(ustr_id);
+                let props: usize = msg0(ch, "properties");
+                char_list.push((ch, uuid.clone(), props));
 
                 if is_switch2_input_char(&uuid) {
                     if let Some(exact_kind) = classify_by_char_uuid(&uuid) {
@@ -505,21 +521,28 @@ extern "C" fn on_discover_characteristics(
                             }
                         }
                     }
-                    let _: () = msg2(peripheral, "setNotifyValue:forCharacteristic:", 1i8, ch);
+                    // Subscribe only to `AB7DE9BE-89FE-49AD-828F-118F09DF7FD2` (matching JoyCon2Mac)
+                    // so alternate compact report characteristics don't interleave incompatible frames.
+                    if uuid.eq_ignore_ascii_case(SWITCH2_COMMON_INPUT_UUID) {
+                        let _: () = msg2(peripheral, "setNotifyValue:forCharacteristic:", 1i8, ch);
+                    }
                 } else if uuid.eq_ignore_ascii_case(SWITCH2_RESPONSE_CHAR_UUID) {
                     let _: () = msg2(peripheral, "setNotifyValue:forCharacteristic:", 1i8, ch);
                 } else if is_switch2_ctrl_char(&uuid) {
-                    let props: usize = msg0(ch, "properties");
-                    let write_type = if (props & CB_CHAR_PROP_WRITE_WITHOUT_RESPONSE) != 0 {
-                        CB_CHAR_WRITE_WITHOUT_RESPONSE
-                    } else {
+                    if uuid.eq_ignore_ascii_case(SWITCH2_CTRL_CHAR_UUID) {
+                        found_cmd_index = Some(i);
+                    }
+                    // JoyCon2Mac prefers CBCharacteristicWriteWithResponse when supported.
+                    let write_type = if (props & CB_CHAR_PROP_WRITE) != 0 {
                         CB_CHAR_WRITE_WITH_RESPONSE
+                    } else {
+                        CB_CHAR_WRITE_WITHOUT_RESPONSE
                     };
                     if let Ok(mut guard) = ble_state().lock() {
                         if let Some(st) = guard.as_mut() {
                             if let Some(entry) = st.peripherals.get_mut(&p_key) {
                                 if entry.cmd_char.is_none()
-                                    || uuid.eq_ignore_ascii_case("649D4AC9-8EB7-4E6C-AF44-1EA54FE5F005")
+                                    || uuid.eq_ignore_ascii_case(SWITCH2_CTRL_CHAR_UUID)
                                 {
                                     if let Some(old) = entry.cmd_char.take() {
                                         objc_release(old as Id);
@@ -535,38 +558,73 @@ extern "C" fn on_discover_characteristics(
                     // Timed JoyCon2Mac init sequence:
                     //   t=500ms:  0C 91 01 02 (enable 6-axis IMU step 1)
                     //   t=1000ms: 0C 91 01 04 (enable 6-axis IMU step 2)
-                    //   t=1200ms: 09 91 01 07 (lock Player 1 LED solid)
-                    //   t=1400ms: 0A 91 01 08 (configure HD Rumble haptics)
+                    //   t=1200ms: 0A 91 01 08 (configure HD Rumble haptics) + 09 91 01 07 (Player 1 LED)
                     let imu_pkts = switch2_imu_init_packets();
                     thread::spawn(move || {
-                        let send_if_alive = |bytes: &[u8]| {
-                            if let Ok(guard) = ble_state().lock() {
-                                if let Some(st) = guard.as_ref() {
-                                    if let Some(entry) = st.peripherals.get(&p_key) {
-                                        if let Some(ch_ptr) = entry.cmd_char {
-                                            write_ctrl_bytes(
-                                                entry.peripheral as Id,
-                                                ch_ptr as Id,
-                                                entry.cmd_write_type,
-                                                bytes,
-                                            );
+                        autorelease_pool(|| {
+                            let send_if_alive = |bytes: &[u8]| {
+                                if let Ok(guard) = ble_state().lock() {
+                                    if let Some(st) = guard.as_ref() {
+                                        if let Some(entry) = st.peripherals.get(&p_key) {
+                                            if let Some(ch_ptr) = entry.cmd_char {
+                                                write_ctrl_bytes(
+                                                    entry.peripheral as Id,
+                                                    ch_ptr as Id,
+                                                    entry.cmd_write_type,
+                                                    bytes,
+                                                );
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        };
+                            };
 
-                        thread::sleep(Duration::from_millis(500));
-                        send_if_alive(&imu_pkts[0]);
-                        thread::sleep(Duration::from_millis(500));
-                        send_if_alive(&imu_pkts[1]);
-                        thread::sleep(Duration::from_millis(200));
-                        let led_pkt = switch2_player_led_packet(1);
-                        send_if_alive(&led_pkt);
-                        thread::sleep(Duration::from_millis(200));
-                        let vib_pkt = switch2_configure_vibration_packet();
-                        send_if_alive(&vib_pkt);
+                            thread::sleep(Duration::from_millis(500));
+                            send_if_alive(&imu_pkts[0]);
+                            thread::sleep(Duration::from_millis(500));
+                            send_if_alive(&imu_pkts[1]);
+                            thread::sleep(Duration::from_millis(200));
+                            let vib_pkt = switch2_configure_vibration_packet();
+                            send_if_alive(&vib_pkt);
+                            thread::sleep(Duration::from_millis(80));
+                            let led_pkt = switch2_player_led_packet(1);
+                            send_if_alive(&led_pkt);
+                        });
                     });
+                }
+            }
+
+            // Discover vibrationCharacteristic (writable characteristic before UUID_COMMAND,
+            // matching JoyCon2Mac/BLEManager.mm).
+            if let Some(cmd_idx) = found_cmd_index {
+                for i in (0..cmd_idx).rev() {
+                    let (ch, ref uuid, props) = char_list[i];
+                    if is_switch2_input_char(uuid)
+                        || uuid.eq_ignore_ascii_case(SWITCH2_RESPONSE_CHAR_UUID)
+                        || is_switch2_ctrl_char(uuid)
+                    {
+                        continue;
+                    }
+                    if (props & (CB_CHAR_PROP_WRITE_WITHOUT_RESPONSE | CB_CHAR_PROP_WRITE)) != 0 {
+                        let vib_wt = if (props & CB_CHAR_PROP_WRITE_WITHOUT_RESPONSE) != 0 {
+                            CB_CHAR_WRITE_WITHOUT_RESPONSE
+                        } else {
+                            CB_CHAR_WRITE_WITH_RESPONSE
+                        };
+                        if let Ok(mut guard) = ble_state().lock() {
+                            if let Some(st) = guard.as_mut() {
+                                if let Some(entry) = st.peripherals.get_mut(&p_key) {
+                                    if let Some(old) = entry.vib_char.take() {
+                                        objc_release(old as Id);
+                                    }
+                                    objc_retain(ch);
+                                    entry.vib_char = Some(ch as usize);
+                                    entry.vib_write_type = vib_wt;
+                                }
+                            }
+                        }
+                        break;
+                    }
                 }
             }
         });
@@ -724,37 +782,48 @@ impl BleBackend {
 
     pub fn test_haptics(&self) {
         thread::spawn(|| unsafe {
-            let mut targets: Vec<(usize, usize, usize, u8)> = Vec::new();
-            if let Ok(mut guard) = ble_state().lock() {
-                if let Some(st) = guard.as_mut() {
-                    for entry in st.peripherals.values_mut() {
-                        if let Some(ch_ptr) = entry.cmd_char {
-                            entry.rumble_seq = entry.rumble_seq.wrapping_add(1);
-                            let pkt = switch2_rumble_packet(entry.rumble_seq, true);
-                            write_ctrl_bytes(
-                                entry.peripheral as Id,
-                                ch_ptr as Id,
-                                entry.cmd_write_type,
-                                &pkt,
-                            );
-                            targets.push((
-                                entry.peripheral,
-                                ch_ptr,
-                                entry.cmd_write_type,
-                                entry.rumble_seq,
-                            ));
+            autorelease_pool(|| {
+                let mut vib_targets: Vec<(usize, usize, usize, u8)> = Vec::new();
+                if let Ok(mut guard) = ble_state().lock() {
+                    if let Some(st) = guard.as_mut() {
+                        let pairing_vib = switch2_pairing_vibration_packet();
+                        for entry in st.peripherals.values_mut() {
+                            if let Some(cmd_ch) = entry.cmd_char {
+                                write_ctrl_bytes(
+                                    entry.peripheral as Id,
+                                    cmd_ch as Id,
+                                    entry.cmd_write_type,
+                                    &pairing_vib,
+                                );
+                            }
+                            if let Some(vib_ch) = entry.vib_char {
+                                entry.rumble_seq = entry.rumble_seq.wrapping_add(1);
+                                let pkt = switch2_vibration_block_packet(entry.rumble_seq, 255);
+                                write_ctrl_bytes(
+                                    entry.peripheral as Id,
+                                    vib_ch as Id,
+                                    entry.vib_write_type,
+                                    &pkt,
+                                );
+                                vib_targets.push((
+                                    entry.peripheral,
+                                    vib_ch,
+                                    entry.vib_write_type,
+                                    entry.rumble_seq,
+                                ));
+                            }
                         }
                     }
                 }
-            }
-            if targets.is_empty() {
-                return;
-            }
-            thread::sleep(Duration::from_millis(220));
-            for (p, ch, wt, seq) in targets {
-                let off_pkt = switch2_rumble_packet(seq.wrapping_add(1), false);
-                write_ctrl_bytes(p as Id, ch as Id, wt, &off_pkt);
-            }
+                if vib_targets.is_empty() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(220));
+                for (p, ch, wt, seq) in vib_targets {
+                    let off_pkt = switch2_vibration_block_packet(seq.wrapping_add(1), 0);
+                    write_ctrl_bytes(p as Id, ch as Id, wt, &off_pkt);
+                }
+            });
         });
     }
 
@@ -788,6 +857,9 @@ impl BleBackend {
                             );
                             if let Some(c) = entry.cmd_char {
                                 objc_release(c as Id);
+                            }
+                            if let Some(v) = entry.vib_char {
+                                objc_release(v as Id);
                             }
                             objc_release(entry.peripheral as Id);
                         }
