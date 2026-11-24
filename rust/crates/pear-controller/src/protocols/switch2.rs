@@ -205,35 +205,22 @@ pub fn parse_switch2_ble_report(
         }
 
         let mut mouse_delta = (0i16, 0i16);
-        // Check both full-report (16..20) and compact-0x20 (10..14) optical offsets.
-        let opt_off = if data.len() >= 20
-            && (data[16] != 0 || data[17] != 0 || data[18] != 0 || data[19] != 0)
-        {
-            Some(16)
-        } else if data.len() >= 14
-            && (data[10] != 0 || data[11] != 0 || data[12] != 0 || data[13] != 0)
-        {
-            Some(10)
-        } else {
-            None
-        };
-        if let Some(off) = opt_off {
-            let cur_x = u16::from_le_bytes([data[off], data[off + 1]]);
-            let cur_y = u16::from_le_bytes([data[off + 2], data[off + 3]]);
+        if data.len() >= 24 && data[23] == 0 {
+            let cur_x = u16::from_le_bytes([data[16], data[17]]);
+            let cur_y = u16::from_le_bytes([data[18], data[19]]);
             if let (Some(px), Some(py)) = (cal.prev_opt_x, cal.prev_opt_y) {
                 let dx = cur_x.wrapping_sub(px) as i16;
                 let dy = cur_y.wrapping_sub(py) as i16;
                 if dx.abs() <= 200 && dy.abs() <= 200 {
                     mouse_delta = (
-                        if dx.abs() > 2 { dx } else { 0 },
-                        if dy.abs() > 2 { dy } else { 0 },
+                        if dx.abs() > 1 { dx } else { 0 },
+                        if dy.abs() > 1 { dy } else { 0 },
                     );
                 }
             }
             cal.prev_opt_x = Some(cur_x);
             cal.prev_opt_y = Some(cur_y);
         } else {
-            // Reset previous optical anchor on lift-off so re-touching the desk does not jump.
             cal.prev_opt_x = None;
             cal.prev_opt_y = None;
         }
@@ -338,20 +325,32 @@ pub fn parse_switch2_ble_report(
         }
     }
 
-    // Optical mouse sensor (bytes 15..20: [flag, x_lo, x_hi, y_lo, y_hi])
+    // Optical mouse sensor (JoyCon2Mac / joycon2cpp):
+    //   0x10..0x11 (16..18): rawX (i16 LE)
+    //   0x12..0x13 (18..20): rawY (i16 LE)
+    //   0x17       (23):     mouseDistance (0 = touching surface, > 0 = airborne)
     let mut mouse_delta = (0i16, 0i16);
-    if data.len() >= 20 {
-        let cur_x = u16::from_le_bytes([data[16], data[17]]);
-        let cur_y = u16::from_le_bytes([data[18], data[19]]);
-        if let (Some(px), Some(py)) = (cal.prev_opt_x, cal.prev_opt_y) {
-            let dx = cur_x.wrapping_sub(px) as i16;
-            let dy = cur_y.wrapping_sub(py) as i16;
-            if dx.abs() <= 400 && dy.abs() <= 400 {
-                mouse_delta = (dx, dy);
+    if data.len() >= 24 {
+        let on_surface = data[23] == 0;
+        if on_surface {
+            let cur_x = u16::from_le_bytes([data[16], data[17]]);
+            let cur_y = u16::from_le_bytes([data[18], data[19]]);
+            if let (Some(px), Some(py)) = (cal.prev_opt_x, cal.prev_opt_y) {
+                let dx = cur_x.wrapping_sub(px) as i16;
+                let dy = cur_y.wrapping_sub(py) as i16;
+                if dx.abs() <= 200 && dy.abs() <= 200 {
+                    mouse_delta = (
+                        if dx.abs() > 1 { dx } else { 0 },
+                        if dy.abs() > 1 { dy } else { 0 },
+                    );
+                }
             }
+            cal.prev_opt_x = Some(cur_x);
+            cal.prev_opt_y = Some(cur_y);
+        } else {
+            cal.prev_opt_x = None;
+            cal.prev_opt_y = None;
         }
-        cal.prev_opt_x = Some(cur_x);
-        cal.prev_opt_y = Some(cur_y);
     }
 
     state.apply_nintendo_layout(cfg.nintendo_button_layout);

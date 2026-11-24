@@ -562,19 +562,46 @@ extern "C" fn on_discover_characteristics(
                         }
                     }
                 }
-                // Stop blinking & lock Player 1 LED solid (BlueRetro 0x09 0x91 0x01 0x07).
-                let led_pkt = switch2_player_led_packet(1);
-                write_ctrl_bytes(peripheral, ch, write_type, &led_pkt);
-                let mouse_on = ble_state()
-                    .lock()
-                    .ok()
-                    .and_then(|g| g.as_ref().map(|s| s.store.config().mouse_mode_enabled))
-                    .unwrap_or(false);
-                if mouse_on {
-                    for opt_pkt in switch2_optical_init_packets() {
-                        write_ctrl_bytes(peripheral, ch, write_type, &opt_pkt);
+                // JoyCon2Mac / joycon2cpp timed init sequence:
+                //   t=0ms:   0C 91 01 02 00 04 00 00 FF 00 00 00 (enable optical/IMU step 1)
+                //   t=500ms: 0C 91 01 04 00 04 00 00 FF 00 00 00 (enable optical/IMU step 2)
+                //   t=700ms: 09 91 01 07 00 08 00 00 01 ...      (lock Player 1 LED solid)
+                // Back-to-back writes without 500ms spacing are discarded by Joy-Con 2 firmware.
+                let opt_pkts = switch2_optical_init_packets();
+                write_ctrl_bytes(peripheral, ch, write_type, &opt_pkts[0]);
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(500));
+                    if let Ok(guard) = ble_state().lock() {
+                        if let Some(st) = guard.as_ref() {
+                            if let Some(entry) = st.peripherals.get(&p_key) {
+                                if let Some(ch_ptr) = entry.cmd_char {
+                                    write_ctrl_bytes(
+                                        entry.peripheral as Id,
+                                        ch_ptr as Id,
+                                        entry.cmd_write_type,
+                                        &opt_pkts[1],
+                                    );
+                                }
+                            }
+                        }
                     }
-                }
+                    thread::sleep(Duration::from_millis(200));
+                    if let Ok(guard) = ble_state().lock() {
+                        if let Some(st) = guard.as_ref() {
+                            if let Some(entry) = st.peripherals.get(&p_key) {
+                                if let Some(ch_ptr) = entry.cmd_char {
+                                    let led_pkt = switch2_player_led_packet(1);
+                                    write_ctrl_bytes(
+                                        entry.peripheral as Id,
+                                        ch_ptr as Id,
+                                        entry.cmd_write_type,
+                                        &led_pkt,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                });
             }
         }
     }
