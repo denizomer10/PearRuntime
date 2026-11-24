@@ -124,8 +124,6 @@ pub struct ControllerConfig {
     pub nintendo_button_layout: bool,
     pub ble_switch2_enabled: bool,
     pub prefer_direct_hid: bool,
-    pub mouse_mode_enabled: bool,
-    pub mouse_sensitivity: f32,
     pub disabled_device_ids: Vec<String>,
 }
 
@@ -141,8 +139,6 @@ impl Default for ControllerConfig {
             nintendo_button_layout: false,
             ble_switch2_enabled: true,
             prefer_direct_hid: true,
-            mouse_mode_enabled: false,
-            mouse_sensitivity: 1.0,
             disabled_device_ids: Vec::new(),
         }
     }
@@ -177,12 +173,6 @@ impl ControllerConfig {
         }
         if let Some(v) = extract_bool(json, "preferDirectHID") {
             cfg.prefer_direct_hid = v;
-        }
-        if let Some(v) = extract_bool(json, "mouseModeEnabled") {
-            cfg.mouse_mode_enabled = v;
-        }
-        if let Some(v) = extract_f32(json, "mouseSensitivity") {
-            cfg.mouse_sensitivity = v.clamp(0.1, 5.0);
         }
         if let Some(arr) = extract_str_array(json, "disabledDeviceIds") {
             cfg.disabled_device_ids = arr;
@@ -222,6 +212,12 @@ pub struct ControllerState {
     pub left_y: f32,
     pub right_x: f32,
     pub right_y: f32,
+    pub gyro_x: f32,
+    pub gyro_y: f32,
+    pub gyro_z: f32,
+    pub accel_x: f32,
+    pub accel_y: f32,
+    pub accel_z: f32,
 }
 
 impl ControllerState {
@@ -289,7 +285,9 @@ impl ControllerDevice {
                 "\"batteryPercent\":{},\"latencyUs\":{},\"reportRateHz\":{},\"connected\":{},\"enabled\":{},",
                 "\"rawHex\":\"{}\",",
                 "\"state\":{{\"leftX\":{:.4},\"leftY\":{:.4},\"rightX\":{:.4},\"rightY\":{:.4},",
-                "\"l2\":{:.4},\"r2\":{:.4},\"buttons\":{}}}}}"
+                "\"l2\":{:.4},\"r2\":{:.4},",
+                "\"gyroX\":{:.2},\"gyroY\":{:.2},\"gyroZ\":{:.2},",
+                "\"accelX\":{:.3},\"accelY\":{:.3},\"accelZ\":{:.3},\"buttons\":{}}}}}"
             ),
             escape_json(&self.id),
             escape_json(&self.name),
@@ -310,6 +308,12 @@ impl ControllerDevice {
             self.state.right_y,
             self.state.l2,
             self.state.r2,
+            self.state.gyro_x,
+            self.state.gyro_y,
+            self.state.gyro_z,
+            self.state.accel_x,
+            self.state.accel_y,
+            self.state.accel_z,
             self.state.pressed_buttons_json(),
         )
     }

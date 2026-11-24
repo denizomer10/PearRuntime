@@ -26,8 +26,6 @@ pub struct Switch2StickCal {
     pub ly_center: Option<u16>,
     pub rx_center: Option<u16>,
     pub ry_center: Option<u16>,
-    pub prev_opt_x: Option<u16>,
-    pub prev_opt_y: Option<u16>,
 }
 
 pub fn is_switch2_input_char(uuid: &str) -> bool {
@@ -72,8 +70,6 @@ pub fn parse_manufacturer_data(data: &[u8]) -> Option<(u16, ControllerKind)> {
     }
     let company = u16::from_le_bytes([data[0], data[1]]);
     if company == NINTENDO_BLE_COMPANY_ID && data.len() >= 8 {
-        // Switch 2 BLE advertisement: [53 05] 01 00 03 7e 05 <subtype> ...
-        // Subtype byte at index 7 (or index 5 of payload): 0x66 = Right, 0x67 = Left, 0x69 = Pro 2
         if data[4] == 0x03 && data[5] == 0x7E && data[6] == 0x05 {
             let pid = 0x2000 | (data[7] as u16);
             if let Some(kind) = classify_by_pid(pid) {
@@ -116,26 +112,33 @@ pub fn switch2_player_led_packet(player_num: u8) -> [u8; 16] {
     ]
 }
 
-/// Optical mouse sensor initialization commands (`649d4ac9-...`).
-pub fn switch2_optical_init_packets() -> [[u8; 12]; 2] {
+/// Switch 2 IMU (Gyro + Accelerometer) enable sequence (`0x0C 0x91 0x01 0x02` / `0x04`).
+pub fn switch2_imu_init_packets() -> [[u8; 12]; 2] {
     [
         [0x0C, 0x91, 0x01, 0x02, 0x00, 0x04, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00],
         [0x0C, 0x91, 0x01, 0x04, 0x00, 0x04, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00],
     ]
 }
 
-pub fn switch2_keepalive_packet(seq: u8) -> [u8; 10] {
+/// Switch 2 Haptics / Vibration configuration command (`0x0A 0x91 0x01 0x08`) from JoyCon2Mac.
+pub fn switch2_configure_vibration_packet() -> [u8; 28] {
     [
+        0x0A, 0x91, 0x01, 0x08, 0x00, 0x14, 0x00, 0x00, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0x35, 0x00, 0x46, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ]
+}
+
+/// Switch 2 Rumble pulse command (`0x50`).
+pub fn switch2_rumble_packet(seq: u8, on: bool) -> [u8; 8] {
+    [
+        0x50,
+        0x50 | (seq & 0x0F),
+        if on { 0x01 } else { 0x00 },
         0x00,
-        seq & 0x0F,
         0x00,
-        0x01,
-        0x40,
-        0x40,
         0x00,
-        0x01,
-        0x40,
-        0x40,
+        0x00,
+        0x00,
     ]
 }
 
@@ -149,7 +152,6 @@ fn normalize_12bit(raw: u16, center: &mut Option<u16>) -> f32 {
     let c = match *center {
         Some(v) => v,
         None => {
-            // Auto-calibrate center from the first neutral reading (~1998/2048).
             let init = if (1350..=2650).contains(&raw) {
                 raw
             } else {
@@ -162,18 +164,39 @@ fn normalize_12bit(raw: u16, center: &mut Option<u16>) -> f32 {
     (((raw as f32) - (c as f32)) / 1250.0).clamp(-1.0, 1.0)
 }
 
-/// Parse a Switch 2 BLE input notification payload (buttons, sticks, and optical mouse delta).
+fn decode_imu(data: &[u8], state: &mut ControllerState) {
+    // IMU layout from JoyConDecoder.cpp:
+    //   Accel X/Y/Z at 0x30/0x32/0x34 (scale 4096 = 1G)
+    //   Gyro  X/Y/Z at 0x36/0x38/0x3A (scale 48000 = 360 deg/s)
+    if data.len() < 0x3C {
+        return;
+    }
+    let ax = i16::from_le_bytes([data[0x30], data[0x31]]) as f32 / 4096.0;
+    let ay = i16::from_le_bytes([data[0x32], data[0x33]]) as f32 / 4096.0;
+    let az = i16::from_le_bytes([data[0x34], data[0x35]]) as f32 / 4096.0;
+    let gx = i16::from_le_bytes([data[0x36], data[0x37]]) as f32 * (360.0 / 48000.0);
+    let gy = i16::from_le_bytes([data[0x38], data[0x39]]) as f32 * (360.0 / 48000.0);
+    let gz = i16::from_le_bytes([data[0x3A], data[0x3B]]) as f32 * (360.0 / 48000.0);
+    state.accel_x = ax;
+    state.accel_y = ay;
+    state.accel_z = az;
+    state.gyro_x = gx;
+    state.gyro_y = gy;
+    state.gyro_z = gz;
+}
+
+/// Parse a Switch 2 BLE input notification payload (buttons, sticks, and 6-axis IMU).
 pub fn parse_switch2_ble_report(
     kind: ControllerKind,
     data: &[u8],
     cfg: &ControllerConfig,
     cal: &mut Switch2StickCal,
-) -> Option<(ControllerState, (i16, i16))> {
+) -> Option<ControllerState> {
     if data.len() < 9 {
         return None;
     }
 
-    // Compact optical/report-0x20 format (`data[1] == 0x20` or `[0x07, ..., 0x30]` tag):
+    // Compact report-0x20 format (`data[1] == 0x20` or `[0x07, ..., 0x30]` tag):
     // [counter, 0x20, btn_lo, btn_hi, status(0x07), stick[0..3], tag(0x30), ...]
     if data[1] == 0x20 || (data[4] == 0x07 && data[8] == 0x30) {
         let mut state = ControllerState::default();
@@ -205,28 +228,9 @@ pub fn parse_switch2_ble_report(
             state.l2 = if (b & 0x80) != 0 { 1.0 } else { 0.0 };
         }
 
-        let mut mouse_delta = (0i16, 0i16);
-        if data.len() >= 24 && data[23] == 0 {
-            let cur_x = u16::from_le_bytes([data[16], data[17]]);
-            let cur_y = u16::from_le_bytes([data[18], data[19]]);
-            if let (Some(px), Some(py)) = (cal.prev_opt_x, cal.prev_opt_y) {
-                let dx = cur_x.wrapping_sub(px) as i16;
-                let dy = cur_y.wrapping_sub(py) as i16;
-                if dx.abs() <= 200 && dy.abs() <= 200 {
-                    mouse_delta = (
-                        if dx.abs() > 1 { dx } else { 0 },
-                        if dy.abs() > 1 { dy } else { 0 },
-                    );
-                }
-            }
-            cal.prev_opt_x = Some(cur_x);
-            cal.prev_opt_y = Some(cur_y);
-        } else {
-            cal.prev_opt_x = None;
-            cal.prev_opt_y = None;
-        }
+        decode_imu(data, &mut state);
         state.apply_nintendo_layout(cfg.nintendo_button_layout);
-        return Some((state, mouse_delta));
+        return Some(state);
     }
 
     if data.len() < 16 {
@@ -245,8 +249,8 @@ pub fn parse_switch2_ble_report(
             state.x = (b4 & 0x02) != 0;
             state.b = (b4 & 0x04) != 0;
             state.a = (b4 & 0x08) != 0;
-            state.gr = (b4 & 0x10) != 0; // R-SR
-            state.gl = (b4 & 0x20) != 0; // R-SL
+            state.gr = (b4 & 0x10) != 0;
+            state.gl = (b4 & 0x20) != 0;
             state.r1 = (b4 & 0x40) != 0;
             state.r2 = if (b4 & 0x80) != 0 { 1.0 } else { 0.0 };
 
@@ -263,7 +267,7 @@ pub fn parse_switch2_ble_report(
             state.right_y = ry;
         }
         ControllerKind::Switch2JoyConLeft => {
-            state.options = (b5 & 0x01) != 0; // Minus
+            state.options = (b5 & 0x01) != 0;
             state.l3 = (b5 & 0x08) != 0;
             state.capture = (b5 & 0x20) != 0;
 
@@ -271,8 +275,8 @@ pub fn parse_switch2_ble_report(
             state.dpad_up = (b6 & 0x02) != 0;
             state.dpad_right = (b6 & 0x04) != 0;
             state.dpad_left = (b6 & 0x08) != 0;
-            state.gr = (b6 & 0x10) != 0; // L-SR
-            state.gl = (b6 & 0x20) != 0; // L-SL
+            state.gr = (b6 & 0x10) != 0;
+            state.gl = (b6 & 0x20) != 0;
             state.l1 = (b6 & 0x40) != 0;
             state.l2 = if (b6 & 0x80) != 0 { 1.0 } else { 0.0 };
 
@@ -284,7 +288,6 @@ pub fn parse_switch2_ble_report(
             state.left_y = ly;
         }
         _ => {
-            // Switch 2 Pro Controller / full layout
             state.y = (b4 & 0x01) != 0;
             state.x = (b4 & 0x02) != 0;
             state.b = (b4 & 0x04) != 0;
@@ -326,34 +329,7 @@ pub fn parse_switch2_ble_report(
         }
     }
 
-    // Optical mouse sensor (JoyCon2Mac / joycon2cpp):
-    //   0x10..0x11 (16..18): rawX (i16 LE)
-    //   0x12..0x13 (18..20): rawY (i16 LE)
-    //   0x17       (23):     mouseDistance (0 = touching surface, > 0 = airborne)
-    let mut mouse_delta = (0i16, 0i16);
-    if data.len() >= 24 {
-        let on_surface = data[23] == 0;
-        if on_surface {
-            let cur_x = u16::from_le_bytes([data[16], data[17]]);
-            let cur_y = u16::from_le_bytes([data[18], data[19]]);
-            if let (Some(px), Some(py)) = (cal.prev_opt_x, cal.prev_opt_y) {
-                let dx = cur_x.wrapping_sub(px) as i16;
-                let dy = cur_y.wrapping_sub(py) as i16;
-                if dx.abs() <= 200 && dy.abs() <= 200 {
-                    mouse_delta = (
-                        if dx.abs() > 1 { dx } else { 0 },
-                        if dy.abs() > 1 { dy } else { 0 },
-                    );
-                }
-            }
-            cal.prev_opt_x = Some(cur_x);
-            cal.prev_opt_y = Some(cur_y);
-        } else {
-            cal.prev_opt_x = None;
-            cal.prev_opt_y = None;
-        }
-    }
-
+    decode_imu(data, &mut state);
     state.apply_nintendo_layout(cfg.nintendo_button_layout);
-    Some((state, mouse_delta))
+    Some(state)
 }

@@ -67,6 +67,12 @@ fn merge_pair_state(left: &ControllerState, right: &ControllerState) -> Controll
         left_y: left.left_y,
         right_x: right.right_x,
         right_y: right.right_y,
+        gyro_x: right.gyro_x,
+        gyro_y: right.gyro_y,
+        gyro_z: right.gyro_z,
+        accel_x: right.accel_x,
+        accel_y: right.accel_y,
+        accel_z: right.accel_z,
     }
 }
 

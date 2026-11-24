@@ -104,6 +104,7 @@ pub fn parse_switch1_report(
         right_x: rx,
         right_y: ry,
         c_button: false,
+        ..Default::default()
     };
 
     let _ = kind;

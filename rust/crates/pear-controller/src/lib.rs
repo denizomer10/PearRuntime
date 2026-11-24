@@ -302,9 +302,17 @@ pub extern "C" fn pear_controller_set_config_json(config_json: *const c_char) {
             inst.store.set_config(cfg.clone());
             if let Some(ble) = inst.ble.as_ref() {
                 ble.set_scanning(cfg.ble_switch2_enabled);
-                if cfg.mouse_mode_enabled {
-                    ble.enable_optical_mode();
-                }
+            }
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn pear_controller_test_haptics() {
+    if let Ok(guard) = runtime_slot().lock() {
+        if let Some(inst) = guard.as_ref() {
+            if let Some(ble) = inst.ble.as_ref() {
+                ble.test_haptics();
             }
         }
     }
@@ -381,40 +389,28 @@ mod tests {
     }
 
     #[test]
-    fn parses_switch2_ble_report_with_autocal_and_optical_delta() {
+    fn parses_switch2_ble_report_with_autocal_and_imu() {
         let mut pkt = [0u8; 64];
         // Right Joy-Con 2: A button = bit 3 on byte 4, R1 = bit 6 on byte 4
         pkt[4] = 0x08 | 0x40;
-        // Neutral stick ~2000 (0x7D0 -> b0=0xD0, b1=0x07, b2=0x7D -> 0xD0, 0x07, 0x7D)
+        // Neutral stick ~2000
         pkt[13] = 0xD0;
         pkt[14] = 0x07;
         pkt[15] = 0x7D;
-        // Optical sample 1: x=100, y=200
-        pkt[16..18].copy_from_slice(&100u16.to_le_bytes());
-        pkt[18..20].copy_from_slice(&200u16.to_le_bytes());
+        // Accel Z = +1G (4096 = 0x1000) at 0x34..0x35
+        pkt[0x34..0x36].copy_from_slice(&4096i16.to_le_bytes());
 
         let mut cfg = ControllerConfig::default();
         cfg.nintendo_button_layout = false;
         let mut cal = Switch2StickCal::default();
-        let (st, delta1) =
-            parse_switch2_ble_report(ControllerKind::Switch2JoyConRight, &pkt, &cfg, &mut cal)
-                .unwrap();
-        // With Xbox/iOS layout, Nintendo A becomes B!
+        let st = parse_switch2_ble_report(ControllerKind::Switch2JoyConRight, &pkt, &cfg, &mut cal)
+            .unwrap();
         assert!(st.b);
         assert!(!st.a);
         assert!(st.r1);
-        // Auto-calibrated rest position must be 0.0 (not pinned to -1.0!)
         assert_eq!(st.right_x, 0.0);
         assert_eq!(st.right_y, 0.0);
-        assert_eq!(delta1, (0, 0));
-
-        // Optical sample 2: x=115, y=190 -> dx=+15, dy=-10
-        pkt[16..18].copy_from_slice(&115u16.to_le_bytes());
-        pkt[18..20].copy_from_slice(&190u16.to_le_bytes());
-        let (_, delta2) =
-            parse_switch2_ble_report(ControllerKind::Switch2JoyConRight, &pkt, &cfg, &mut cal)
-                .unwrap();
-        assert_eq!(delta2, (15, -10));
+        assert!((st.accel_z - 1.0).abs() < 0.01);
     }
 
     #[test]
@@ -512,8 +508,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_controller_config_json_with_mouse_and_disabled() {
-        let json = r#"{"lowLatencyMode":true,"pollingHz":500,"leftDeadzone":0.12,"rightDeadzone":0.09,"joyconCombineMode":"separate","nintendoButtonLayout":true,"bleSwitch2Enabled":false,"mouseModeEnabled":true,"mouseSensitivity":1.5,"disabledDeviceIds":["ble:abc"]}"#;
+    fn parses_controller_config_json_with_disabled() {
+        let json = r#"{"lowLatencyMode":true,"pollingHz":500,"leftDeadzone":0.12,"rightDeadzone":0.09,"joyconCombineMode":"separate","nintendoButtonLayout":true,"bleSwitch2Enabled":false,"disabledDeviceIds":["ble:abc"]}"#;
         let cfg = ControllerConfig::from_json(json);
         assert!(cfg.low_latency_mode);
         assert_eq!(cfg.polling_hz, 500);
@@ -522,8 +518,6 @@ mod tests {
         assert_eq!(cfg.joycon_combine_mode, JoyConCombineMode::Separate);
         assert!(cfg.nintendo_button_layout);
         assert!(!cfg.ble_switch2_enabled);
-        assert!(cfg.mouse_mode_enabled);
-        assert!((cfg.mouse_sensitivity - 1.5).abs() < 0.001);
         assert_eq!(cfg.disabled_device_ids, vec!["ble:abc".to_string()]);
         assert!(!cfg.is_device_enabled("ble:abc"));
     }

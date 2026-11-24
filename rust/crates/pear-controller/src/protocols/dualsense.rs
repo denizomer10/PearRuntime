@@ -95,5 +95,6 @@ pub fn parse_sony_report(
         c_button: false,
         gl: false,
         gr: false,
+        ..Default::default()
     })
 }
