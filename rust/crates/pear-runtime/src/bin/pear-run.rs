@@ -45,8 +45,21 @@ fn resolve_executable(input: &str) -> PathBuf {
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
-        eprintln!("Usage: pearruntime <macho-binary-or-.app> [--plan] [--inspect-only] [--check-load] [--list-missing]");
+        eprintln!("Usage: pearruntime <macho-binary-or-.app> [--plan] [--inspect-only] [--check-load] [--list-missing] [--window-test]");
         process::exit(if args.is_empty() { 2 } else { 0 });
+    }
+    if args.iter().any(|a| a == "--window-test") {
+        pear_runtime::init();
+        let host = pear_runtime::pear_host::host();
+        host.initialize();
+        let win = host.create_window(
+            pear_runtime::pear_host::GuestObject(std::ptr::null_mut()),
+            pear_runtime::pear_host::Rect { x: 80.0, y: 60.0, width: 960.0, height: 600.0 },
+        );
+        host.show_window(win, true);
+        println!("pearruntime: opened host window (DISPLAY={:?})", env::var("DISPLAY").ok());
+        host.run(Box::new(|| {}));
+        return;
     }
     let exe_path = resolve_executable(&args[0]);
     let plan_only = args.iter().any(|a| a == "--plan");

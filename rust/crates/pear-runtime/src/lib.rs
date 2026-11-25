@@ -723,6 +723,19 @@ extern "C" fn unwind_resume_trap() -> ! {
     std::process::abort()
 }
 
+struct DefaultGuestEvents;
+
+impl pear_host::GuestEvents for DefaultGuestEvents {
+    fn pointer(&self, _: pear_host::GuestObject, _: pear_host::TouchPhase, _: f64, _: f64, _: f64) {}
+    fn key(&self, _: pear_host::KeyEvent) {}
+    fn text(&self, _: &str) {}
+    fn edit_command(&self, _: pear_host::EditCommand) {}
+    fn text_input_active(&self) -> bool { false }
+    fn window_resized(&self, _: pear_host::GuestObject, _: pear_host::Size, _: f64) {}
+    fn window_became_key(&self, _: pear_host::GuestObject) {}
+    fn lifecycle(&self, _: pear_host::Lifecycle) {}
+}
+
 /// Initializes the portable PearRuntime subsystems (ObjC runtime, Foundation,
 /// and the platform's host backend when running on Linux).
 pub fn init() {
@@ -732,6 +745,7 @@ pub fn init() {
     init_guest_frameworks();
     #[cfg(target_os = "linux")]
     {
+        let _ = pear_host::install_events(Box::new(DefaultGuestEvents));
         pear_host_linux::LinuxHost::install().initialize();
     }
 }

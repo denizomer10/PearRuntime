@@ -45,9 +45,12 @@ mod x11_ffi {
         pub x_root_window: unsafe extern "C" fn(*mut c_void, c_int) -> c_ulong,
         pub x_default_screen: unsafe extern "C" fn(*mut c_void) -> c_int,
         pub x_map_window: unsafe extern "C" fn(*mut c_void, c_ulong) -> c_int,
+        pub x_store_name: unsafe extern "C" fn(*mut c_void, c_ulong, *const c_char) -> c_int,
+        pub x_set_window_background: unsafe extern "C" fn(*mut c_void, c_ulong, c_ulong) -> c_int,
+        pub x_clear_window: unsafe extern "C" fn(*mut c_void, c_ulong) -> c_int,
         pub x_flush: unsafe extern "C" fn(*mut c_void) -> c_int,
-        pub _x_pending: unsafe extern "C" fn(*mut c_void) -> c_int,
-        pub _x_next_event: unsafe extern "C" fn(*mut c_void, *mut u8) -> c_int,
+        pub x_pending: unsafe extern "C" fn(*mut c_void) -> c_int,
+        pub x_next_event: unsafe extern "C" fn(*mut c_void, *mut u8) -> c_int,
     }
 
     unsafe impl Send for X11Lib {}
@@ -79,9 +82,12 @@ mod x11_ffi {
                 x_root_window: std::mem::transmute(dlsym(h, c"XRootWindow".as_ptr())),
                 x_default_screen: std::mem::transmute(dlsym(h, c"XDefaultScreen".as_ptr())),
                 x_map_window: std::mem::transmute(dlsym(h, c"XMapWindow".as_ptr())),
+                x_store_name: std::mem::transmute(dlsym(h, c"XStoreName".as_ptr())),
+                x_set_window_background: std::mem::transmute(dlsym(h, c"XSetWindowBackground".as_ptr())),
+                x_clear_window: std::mem::transmute(dlsym(h, c"XClearWindow".as_ptr())),
                 x_flush: std::mem::transmute(dlsym(h, c"XFlush".as_ptr())),
-                _x_pending: std::mem::transmute(dlsym(h, c"XPending".as_ptr())),
-                _x_next_event: std::mem::transmute(dlsym(h, c"XNextEvent".as_ptr())),
+                x_pending: std::mem::transmute(dlsym(h, c"XPending".as_ptr())),
+                x_next_event: std::mem::transmute(dlsym(h, c"XNextEvent".as_ptr())),
             })
         }
     }
@@ -187,11 +193,14 @@ impl HostPlatform for LinuxHost {
                         frame.y as i32,
                         w,
                         h,
-                        0,
-                        0,
-                        0,
+                        2,
+                        0x4FD1_C5,
+                        0x1418_24,
                     ) as u64;
+                    (x11.x_store_name)(x11.display, x11_window as _, c"PearRuntime (Linux ARM64)".as_ptr());
+                    (x11.x_set_window_background)(x11.display, x11_window as _, 0x1418_24);
                     (x11.x_map_window)(x11.display, x11_window as _);
+                    (x11.x_clear_window)(x11.display, x11_window as _);
                     (x11.x_flush)(x11.display);
                 }
             }
@@ -339,7 +348,20 @@ impl HostPlatform for LinuxHost {
         self.running.store(true, Ordering::Release);
         did_finish_launching();
         events().lifecycle(Lifecycle::DidBecomeActive);
+        #[cfg(target_os = "linux")]
+        let x11 = if !self.use_wayland { x11_ffi::try_open() } else { None };
+        let mut ev_buf = [0u8; 192];
         while self.running.load(Ordering::Acquire) {
+            #[cfg(target_os = "linux")]
+            if let Some(ref x) = x11 {
+                unsafe {
+                    while (x.x_pending)(x.display) > 0 {
+                        (x.x_next_event)(x.display, ev_buf.as_mut_ptr());
+                    }
+                    (x.x_flush)(x.display);
+                }
+            }
+            let _ = &mut ev_buf;
             std::thread::sleep(std::time::Duration::from_millis(16));
         }
         events().lifecycle(Lifecycle::WillTerminate);
