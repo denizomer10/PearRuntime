@@ -52,6 +52,47 @@ mod x11_ffi {
         pub x_flush: unsafe extern "C" fn(*mut c_void) -> c_int,
         pub x_pending: unsafe extern "C" fn(*mut c_void) -> c_int,
         pub x_next_event: unsafe extern "C" fn(*mut c_void, *mut u8) -> c_int,
+        pub x_select_input: unsafe extern "C" fn(*mut c_void, c_ulong, i64) -> c_int,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct XButtonEvent {
+        pub ev_type: c_int,
+        pub serial: c_ulong,
+        pub send_event: c_int,
+        pub display: *mut c_void,
+        pub window: c_ulong,
+        pub root: c_ulong,
+        pub subwindow: c_ulong,
+        pub time: c_ulong,
+        pub x: c_int,
+        pub y: c_int,
+        pub x_root: c_int,
+        pub y_root: c_int,
+        pub state: u32,
+        pub button: u32,
+        pub same_screen: c_int,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct XMotionEvent {
+        pub ev_type: c_int,
+        pub serial: c_ulong,
+        pub send_event: c_int,
+        pub display: *mut c_void,
+        pub window: c_ulong,
+        pub root: c_ulong,
+        pub subwindow: c_ulong,
+        pub time: c_ulong,
+        pub x: c_int,
+        pub y: c_int,
+        pub x_root: c_int,
+        pub y_root: c_int,
+        pub state: u32,
+        pub is_hint: u8,
+        pub same_screen: c_int,
     }
 
     unsafe impl Send for X11Lib {}
@@ -89,6 +130,7 @@ mod x11_ffi {
                 x_flush: std::mem::transmute(dlsym(h, c"XFlush".as_ptr())),
                 x_pending: std::mem::transmute(dlsym(h, c"XPending".as_ptr())),
                 x_next_event: std::mem::transmute(dlsym(h, c"XNextEvent".as_ptr())),
+                x_select_input: std::mem::transmute(dlsym(h, c"XSelectInput".as_ptr())),
             })
         }
     }
@@ -355,13 +397,92 @@ impl HostPlatform for LinuxHost {
         events().lifecycle(Lifecycle::DidBecomeActive);
         #[cfg(target_os = "linux")]
         let x11 = if !self.use_wayland { x11_ffi::try_open() } else { None };
+        #[cfg(target_os = "linux")]
+        let mut selected_windows = std::collections::HashSet::<u64>::new();
+        #[cfg(target_os = "linux")]
+        let mut mouse_down = false;
         let mut ev_buf = [0u8; 192];
         while self.running.load(Ordering::Acquire) {
             #[cfg(target_os = "linux")]
             if let Some(ref x) = x11 {
+                let pending_wins: Vec<(u64, usize)> = {
+                    let g = self.state.lock().unwrap();
+                    g.windows
+                        .values()
+                        .filter(|w| w.x11_window != 0 && !selected_windows.contains(&w.x11_window))
+                        .map(|w| (w.x11_window, w._owner))
+                        .collect()
+                };
+                if !pending_wins.is_empty() {
+                    const INPUT_MASK: i64 = 0x0000_0004 | 0x0000_0008 | 0x0000_0040 | 0x0000_0100 | 0x0002_0000;
+                    unsafe {
+                        for (xw, _) in pending_wins {
+                            (x.x_select_input)(x.display, xw as _, INPUT_MASK);
+                            selected_windows.insert(xw);
+                        }
+                        (x.x_flush)(x.display);
+                    }
+                }
+                let scale = self.screen().scale.max(1.0);
+                let resolve_owner = |xw: u64| -> GuestObject {
+                    let g = self.state.lock().unwrap();
+                    let ptr = g
+                        .windows
+                        .values()
+                        .find(|w| w.x11_window == xw)
+                        .or_else(|| g.windows.values().next())
+                        .map(|w| w._owner)
+                        .unwrap_or(0);
+                    GuestObject(ptr as *mut c_void)
+                };
                 unsafe {
                     while (x.x_pending)(x.display) > 0 {
                         (x.x_next_event)(x.display, ev_buf.as_mut_ptr());
+                        let ev_type = *(ev_buf.as_ptr() as *const i32);
+                        match ev_type {
+                            4 => {
+                                let bev = *(ev_buf.as_ptr() as *const x11_ffi::XButtonEvent);
+                                if bev.button == 1 {
+                                    mouse_down = true;
+                                    let ts = (bev.time as f64) / 1000.0;
+                                    events().pointer(
+                                        resolve_owner(bev.window as u64),
+                                        pear_host::TouchPhase::Began,
+                                        (bev.x as f64) / scale,
+                                        (bev.y as f64) / scale,
+                                        ts,
+                                    );
+                                }
+                            }
+                            5 => {
+                                let bev = *(ev_buf.as_ptr() as *const x11_ffi::XButtonEvent);
+                                if bev.button == 1 {
+                                    mouse_down = false;
+                                    let ts = (bev.time as f64) / 1000.0;
+                                    events().pointer(
+                                        resolve_owner(bev.window as u64),
+                                        pear_host::TouchPhase::Ended,
+                                        (bev.x as f64) / scale,
+                                        (bev.y as f64) / scale,
+                                        ts,
+                                    );
+                                }
+                            }
+                            6 => {
+                                let mev = *(ev_buf.as_ptr() as *const x11_ffi::XMotionEvent);
+                                if mouse_down || (mev.state & 0x100) != 0 {
+                                    let ts = (mev.time as f64) / 1000.0;
+                                    events().pointer(
+                                        resolve_owner(mev.window as u64),
+                                        pear_host::TouchPhase::Moved,
+                                        (mev.x as f64) / scale,
+                                        (mev.y as f64) / scale,
+                                        ts,
+                                    );
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                     (x.x_flush)(x.display);
                 }

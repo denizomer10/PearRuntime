@@ -68,6 +68,7 @@ foundation_class!(NSTHREAD_CLASS, NSTHREAD_META);
 foundation_class!(NSCALENDAR_CLASS, NSCALENDAR_META);
 foundation_class!(NSDATECOMPONENTS_CLASS, NSDATECOMPONENTS_META);
 foundation_class!(NSEXCEPTION_CLASS, NSEXCEPTION_META);
+foundation_class!(NSENUMERATOR_CLASS, NSENUMERATOR_META);
 foundation_class!(NSURLSESSION_CLASS, NSURLSESSION_META);
 foundation_class!(NSURLSESSIONCONFIGURATION_CLASS, NSURLSESSIONCONFIGURATION_META);
 foundation_class!(NSOPERATIONQUEUE_CLASS, NSOPERATIONQUEUE_META);
@@ -2142,6 +2143,8 @@ pub fn init_foundation() {
                 ("writeToFile:atomically:", i(dict_write_to_file as *const ())),
                 ("writeToURL:error:", i(dict_write_to_url_err as *const ())),
                 ("countByEnumeratingWithState:objects:count:", i(fast_enum_arr as *const ())),
+                ("objectEnumerator", i(col_object_enumerator as *const ())),
+                ("reverseObjectEnumerator", i(arr_reverse_object_enumerator as *const ())),
                 ("copy", i(arr_copy as *const ())),
                 ("mutableCopy", i(arr_mcopy as *const ())),
                 ("copyWithZone:", i(arr_copy_zone as *const ())),
@@ -2194,6 +2197,8 @@ pub fn init_foundation() {
                 ("isEqualToArray:", i(arr_is_equal as *const ())),
                 ("isEqual:", i(arr_is_equal as *const ())),
                 ("countByEnumeratingWithState:objects:count:", i(fast_enum_arr as *const ())),
+                ("objectEnumerator", i(col_object_enumerator as *const ())),
+                ("reverseObjectEnumerator", i(arr_reverse_object_enumerator as *const ())),
                 ("removeObject:", i(arr_remove_obj as *const ())),
                 ("removeLastObject", i(arr_remove_last as *const ())),
                 ("removeObjectAtIndex:", i(arr_remove_at as *const ())),
@@ -2232,6 +2237,8 @@ pub fn init_foundation() {
                 ("writeToFile:atomically:", i(dict_write_to_file as *const ())),
                 ("writeToURL:error:", i(dict_write_to_url_err as *const ())),
                 ("countByEnumeratingWithState:objects:count:", i(fast_enum_dict as *const ())),
+                ("keyEnumerator", i(dict_key_enumerator as *const ())),
+                ("objectEnumerator", i(dict_object_enumerator as *const ())),
                 ("copy", i(dict_copy as *const ())),
                 ("mutableCopy", i(dict_mcopy as *const ())),
                 ("copyWithZone:", i(dict_copy_zone as *const ())),
@@ -2269,6 +2276,8 @@ pub fn init_foundation() {
                 ("writeToURL:error:", i(dict_write_to_url_err as *const ())),
                 ("initWithCapacity:", i(dict_init_cap as *const ())),
                 ("countByEnumeratingWithState:objects:count:", i(fast_enum_dict as *const ())),
+                ("keyEnumerator", i(dict_key_enumerator as *const ())),
+                ("objectEnumerator", i(dict_object_enumerator as *const ())),
                 ("setObject:forKey:", i(dict_set as *const ())),
                 ("setValue:forKey:", i(dict_set as *const ())),
                 ("setObject:forKeyedSubscript:", i(dict_set as *const ())),
@@ -2532,10 +2541,17 @@ pub fn init_foundation() {
             &[
                 ("count", i(arr_count as *const ())),
                 ("countByEnumeratingWithState:objects:count:", i(fast_enum_arr as *const ())),
+                ("objectEnumerator", i(col_object_enumerator as *const ())),
+                ("reverseObjectEnumerator", i(arr_reverse_object_enumerator as *const ())),
                 ("containsObject:", i(arr_contains as *const ())),
+                ("anyObject", i(set_any_object as *const ())),
+                ("allObjects", i(set_all_objects as *const ())),
                 ("dealloc", i(f_dealloc as *const ())),
             ],
-            &[("set", i(set_empty as *const ()))],
+            &[
+                ("set", i(set_empty as *const ())),
+                ("setWithObject:", i(set_with_object as *const ())),
+            ],
         );
         runtime::register_builtin(
             NSMUTABLESET_CLASS.ptr(),
@@ -2545,11 +2561,31 @@ pub fn init_foundation() {
             &[
                 ("count", i(arr_count as *const ())),
                 ("countByEnumeratingWithState:objects:count:", i(fast_enum_arr as *const ())),
+                ("objectEnumerator", i(col_object_enumerator as *const ())),
+                ("reverseObjectEnumerator", i(arr_reverse_object_enumerator as *const ())),
                 ("containsObject:", i(arr_contains as *const ())),
+                ("anyObject", i(set_any_object as *const ())),
+                ("allObjects", i(set_all_objects as *const ())),
                 ("addObject:", i(arr_add as *const ())),
                 ("dealloc", i(f_dealloc as *const ())),
             ],
-            &[("set", i(mset_empty as *const ()))],
+            &[
+                ("set", i(mset_empty as *const ())),
+                ("setWithObject:", i(set_with_object as *const ())),
+            ],
+        );
+        runtime::register_builtin(
+            NSENUMERATOR_CLASS.ptr(),
+            NSENUMERATOR_META.ptr(),
+            "NSEnumerator",
+            16,
+            &[
+                ("nextObject", i(enum_next_object as *const ())),
+                ("allObjects", i(enum_all_objects as *const ())),
+                ("countByEnumeratingWithState:objects:count:", i(fast_enum_arr as *const ())),
+                ("dealloc", i(enum_dealloc as *const ())),
+            ],
+            &[],
         );
         runtime::register_builtin(
             NSUSERDEFAULTS_CLASS.ptr(),
@@ -3126,6 +3162,165 @@ extern "C" fn mset_empty(_self: Id, _cmd: Sel) -> Id {
     unsafe { alloc_with_backing(NSMUTABLESET_CLASS.ptr(), Backing::Arr(Vec::new())) }
 }
 
+extern "C" fn set_with_object(cls: Id, _cmd: Sel, obj: Id) -> Id {
+    let mut items = Vec::new();
+    if !obj.is_null() {
+        items.push(retain(obj) as usize);
+    }
+    let target = if cls.is_null() { NSSET_CLASS.ptr() } else { cls as *const ClassT };
+    unsafe { alloc_with_backing(target, Backing::Arr(items)) }
+}
+
+extern "C" fn set_any_object(this: Id, _cmd: Sel) -> Id {
+    if this.is_null() {
+        return std::ptr::null_mut();
+    }
+    match store().lock().unwrap().get(&(this as usize)) {
+        Some(Backing::Arr(v)) => v.first().copied().unwrap_or(0) as Id,
+        _ => std::ptr::null_mut(),
+    }
+}
+
+extern "C" fn set_all_objects(this: Id, _cmd: Sel) -> Id {
+    let items: Vec<usize> = if this.is_null() {
+        Vec::new()
+    } else {
+        match store().lock().unwrap().get(&(this as usize)) {
+            Some(Backing::Arr(v)) => v.iter().map(|&p| retain(p as Id) as usize).collect(),
+            _ => Vec::new(),
+        }
+    };
+    unsafe { alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(items)) }
+}
+
+/// Allocates an `NSSet` containing retained pointers to `items`.
+pub fn ns_set_with_objects(items: &[Id]) -> Id {
+    let retained: Vec<usize> = items
+        .iter()
+        .copied()
+        .filter(|p| !p.is_null())
+        .map(|p| retain(p) as usize)
+        .collect();
+    unsafe { alloc_with_backing(NSSET_CLASS.ptr(), Backing::Arr(retained)) }
+}
+
+static ENUM_CURSORS: Mutex<Option<HashMap<usize, usize>>> = Mutex::new(None);
+
+fn make_enumerator(mut items: Vec<usize>, reverse: bool) -> Id {
+    if reverse {
+        items.reverse();
+    }
+    let retained: Vec<usize> = items.into_iter().map(|p| retain(p as Id) as usize).collect();
+    let en = unsafe { alloc_with_backing(NSENUMERATOR_CLASS.ptr(), Backing::Arr(retained)) };
+    ENUM_CURSORS
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert(en as usize, 0);
+    en
+}
+
+extern "C" fn col_object_enumerator(this: Id, _cmd: Sel) -> Id {
+    let items = if this.is_null() {
+        Vec::new()
+    } else {
+        match store().lock().unwrap().get(&(this as usize)) {
+            Some(Backing::Arr(v)) => v.clone(),
+            _ => Vec::new(),
+        }
+    };
+    make_enumerator(items, false)
+}
+
+extern "C" fn arr_reverse_object_enumerator(this: Id, _cmd: Sel) -> Id {
+    let items = if this.is_null() {
+        Vec::new()
+    } else {
+        match store().lock().unwrap().get(&(this as usize)) {
+            Some(Backing::Arr(v)) => v.clone(),
+            _ => Vec::new(),
+        }
+    };
+    make_enumerator(items, true)
+}
+
+extern "C" fn dict_key_enumerator(this: Id, _cmd: Sel) -> Id {
+    let items = if this.is_null() {
+        Vec::new()
+    } else {
+        match store().lock().unwrap().get(&(this as usize)) {
+            Some(Backing::Dict(m)) => m.keys().map(|k| nsstring_from_rust(k) as usize).collect(),
+            _ => Vec::new(),
+        }
+    };
+    let en = unsafe { alloc_with_backing(NSENUMERATOR_CLASS.ptr(), Backing::Arr(items)) };
+    ENUM_CURSORS
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert(en as usize, 0);
+    en
+}
+
+extern "C" fn dict_object_enumerator(this: Id, _cmd: Sel) -> Id {
+    let items = if this.is_null() {
+        Vec::new()
+    } else {
+        match store().lock().unwrap().get(&(this as usize)) {
+            Some(Backing::Dict(m)) => m.values().copied().collect(),
+            _ => Vec::new(),
+        }
+    };
+    make_enumerator(items, false)
+}
+
+extern "C" fn enum_next_object(this: Id, _cmd: Sel) -> Id {
+    if this.is_null() {
+        return std::ptr::null_mut();
+    }
+    let idx = {
+        let mut g = ENUM_CURSORS.lock().unwrap();
+        let entry = g.get_or_insert_with(HashMap::new).entry(this as usize).or_insert(0);
+        let cur = *entry;
+        *entry = cur.saturating_add(1);
+        cur
+    };
+    match store().lock().unwrap().get(&(this as usize)) {
+        Some(Backing::Arr(v)) if idx < v.len() => v[idx] as Id,
+        _ => std::ptr::null_mut(),
+    }
+}
+
+extern "C" fn enum_all_objects(this: Id, _cmd: Sel) -> Id {
+    if this.is_null() {
+        return unsafe { alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(Vec::new())) };
+    }
+    let idx = {
+        let mut g = ENUM_CURSORS.lock().unwrap();
+        let entry = g.get_or_insert_with(HashMap::new).entry(this as usize).or_insert(0);
+        let cur = *entry;
+        cur
+    };
+    let rest: Vec<usize> = match store().lock().unwrap().get(&(this as usize)) {
+        Some(Backing::Arr(v)) if idx < v.len() => {
+            let slice = v[idx..].to_vec();
+            if let Some(m) = ENUM_CURSORS.lock().unwrap().as_mut() {
+                m.insert(this as usize, v.len());
+            }
+            slice.into_iter().map(|p| retain(p as Id) as usize).collect()
+        }
+        _ => Vec::new(),
+    };
+    unsafe { alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(rest)) }
+}
+
+extern "C" fn enum_dealloc(this: Id, _cmd: Sel) {
+    if let Some(m) = ENUM_CURSORS.lock().unwrap().as_mut() {
+        m.remove(&(this as usize));
+    }
+    f_dealloc(this, _cmd);
+}
+
 extern "C" fn ud_standard(_self: Id, _cmd: Sel) -> Id {
     static S: OnceLock<usize> = OnceLock::new();
     *S.get_or_init(|| unsafe { alloc_with_backing(NSUSERDEFAULTS_CLASS.ptr(), Backing::Dict(HashMap::new())) } as usize) as Id
@@ -3374,6 +3569,7 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_OBJC_CLASS_$_NSURL" => Some(NSURL_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSSet" => Some(NSSET_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSMutableSet" => Some(NSMUTABLESET_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSEnumerator" => Some(NSENUMERATOR_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSUserDefaults" => Some(NSUSERDEFAULTS_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSJSONSerialization" => Some(NSJSONSERIALIZATION_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSCharacterSet" => Some(NSCHARACTERSET_CLASS.ptr() as usize),

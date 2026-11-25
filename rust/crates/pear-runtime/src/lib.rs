@@ -226,6 +226,242 @@ static VIEW_LAYERS: std::sync::Mutex<Option<std::collections::HashMap<usize, usi
     std::sync::Mutex::new(None);
 static DISPLAY_LINKS: std::sync::Mutex<Option<std::collections::HashMap<usize, (usize, usize, bool, bool)>>> =
     std::sync::Mutex::new(None);
+static VIEW_SUBVIEWS: std::sync::Mutex<Option<std::collections::HashMap<usize, Vec<usize>>>> =
+    std::sync::Mutex::new(None);
+
+#[derive(Clone, Copy)]
+struct TouchState {
+    x: f64,
+    y: f64,
+    prev_x: f64,
+    prev_y: f64,
+    timestamp: f64,
+    phase: isize,
+    tap_count: isize,
+    view: usize,
+    window: usize,
+}
+
+static TOUCH_DATA: std::sync::Mutex<Option<std::collections::HashMap<usize, TouchState>>> =
+    std::sync::Mutex::new(None);
+static EVENT_TOUCHES: std::sync::Mutex<Option<std::collections::HashMap<usize, (usize, f64)>>> =
+    std::sync::Mutex::new(None);
+static ACTIVE_TOUCH_OBJ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+extern "C" fn touches_noop(_self: Id, _cmd: Sel, _touches: Id, _event: Id) {}
+
+extern "C" fn trigger_layout_recursive(view: Id) {
+    if view.is_null() {
+        return;
+    }
+    unsafe {
+        let sel = objc_rt::sel("layoutSubviews");
+        let d = pear_libobjc::message::lookup_for_send(view, sel);
+        if !d.imp.is_null() {
+            let f: extern "C" fn(Id, Sel) = std::mem::transmute(d.imp);
+            f(d.receiver, sel);
+        }
+    }
+    let children: Vec<usize> = VIEW_SUBVIEWS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&(view as usize)).cloned())
+        .unwrap_or_default();
+    for ch in children {
+        trigger_layout_recursive(ch as Id);
+    }
+}
+
+extern "C" fn uiview_add_subview(self_obj: Id, _cmd: Sel, child: Id) {
+    if self_obj.is_null() || child.is_null() || self_obj == child {
+        return;
+    }
+    let inserted = {
+        let mut g = VIEW_SUBVIEWS.lock().unwrap();
+        let map = g.get_or_insert_with(std::collections::HashMap::new);
+        let list = map.entry(self_obj as usize).or_default();
+        if !list.contains(&(child as usize)) {
+            pear_libobjc::object::retain(child);
+            list.push(child as usize);
+            true
+        } else {
+            false
+        }
+    };
+    if inserted {
+        trigger_layout_recursive(child);
+    }
+}
+
+extern "C" fn uiview_remove_from_superview(self_obj: Id, _cmd: Sel) {
+    if self_obj.is_null() {
+        return;
+    }
+    let mut removed = false;
+    {
+        let mut g = VIEW_SUBVIEWS.lock().unwrap();
+        if let Some(map) = g.as_mut() {
+            for list in map.values_mut() {
+                let before = list.len();
+                list.retain(|&p| p != self_obj as usize);
+                if list.len() != before {
+                    removed = true;
+                }
+            }
+        }
+    }
+    if removed {
+        pear_libobjc::object::release(self_obj);
+    }
+}
+
+extern "C" fn uiview_subviews(self_obj: Id, _cmd: Sel) -> Id {
+    let children: Vec<usize> = if self_obj.is_null() {
+        Vec::new()
+    } else {
+        VIEW_SUBVIEWS
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.get(&(self_obj as usize)).cloned())
+            .unwrap_or_default()
+    };
+    unsafe {
+        let cls = objc_rt::class_named("NSMutableArray").unwrap_or(std::ptr::null());
+        if cls.is_null() {
+            return std::ptr::null_mut();
+        }
+        let d_arr = pear_libobjc::message::lookup_for_send(cls as Id, objc_rt::sel("array"));
+        let f_arr: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_arr.imp);
+        let arr = f_arr(d_arr.receiver, objc_rt::sel("array"));
+        if !arr.is_null() {
+            let sel_add = objc_rt::sel("addObject:");
+            for ch in children {
+                let d_add = pear_libobjc::message::lookup_for_send(arr, sel_add);
+                let f_add: extern "C" fn(Id, Sel, Id) = std::mem::transmute(d_add.imp);
+                f_add(d_add.receiver, sel_add, ch as Id);
+            }
+        }
+        arr
+    }
+}
+
+extern "C" fn uiview_convert_point(
+    _self: Id,
+    _cmd: Sel,
+    pt: pear_graphics::CGPoint,
+    _other: Id,
+) -> pear_graphics::CGPoint {
+    pt
+}
+
+extern "C" fn uitouch_location_in_view(self_obj: Id, _cmd: Sel, _view: Id) -> pear_graphics::CGPoint {
+    let st = TOUCH_DATA
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&(self_obj as usize)).copied());
+    match st {
+        Some(t) => pear_graphics::CGPoint { x: t.x, y: t.y },
+        None => pear_graphics::CGPoint { x: 0.0, y: 0.0 },
+    }
+}
+
+extern "C" fn uitouch_prev_location_in_view(
+    self_obj: Id,
+    _cmd: Sel,
+    _view: Id,
+) -> pear_graphics::CGPoint {
+    let st = TOUCH_DATA
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&(self_obj as usize)).copied());
+    match st {
+        Some(t) => pear_graphics::CGPoint { x: t.prev_x, y: t.prev_y },
+        None => pear_graphics::CGPoint { x: 0.0, y: 0.0 },
+    }
+}
+
+extern "C" fn uitouch_timestamp(self_obj: Id, _cmd: Sel) -> f64 {
+    TOUCH_DATA
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&(self_obj as usize)).map(|t| t.timestamp))
+        .unwrap_or(0.0)
+}
+
+extern "C" fn uitouch_phase(self_obj: Id, _cmd: Sel) -> isize {
+    TOUCH_DATA
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&(self_obj as usize)).map(|t| t.phase))
+        .unwrap_or(0)
+}
+
+extern "C" fn uitouch_tap_count(self_obj: Id, _cmd: Sel) -> isize {
+    TOUCH_DATA
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&(self_obj as usize)).map(|t| t.tap_count))
+        .unwrap_or(1)
+}
+
+extern "C" fn uitouch_view(self_obj: Id, _cmd: Sel) -> Id {
+    TOUCH_DATA
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&(self_obj as usize)).map(|t| t.view))
+        .unwrap_or(0) as Id
+}
+
+extern "C" fn uitouch_window(self_obj: Id, _cmd: Sel) -> Id {
+    TOUCH_DATA
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&(self_obj as usize)).map(|t| t.window))
+        .unwrap_or(0) as Id
+}
+
+extern "C" fn uitouch_dealloc(self_obj: Id, _cmd: Sel) {
+    if let Some(m) = TOUCH_DATA.lock().unwrap().as_mut() {
+        m.remove(&(self_obj as usize));
+    }
+}
+
+extern "C" fn uievent_all_touches(self_obj: Id, _cmd: Sel) -> Id {
+    EVENT_TOUCHES
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&(self_obj as usize)).map(|p| p.0))
+        .unwrap_or(0) as Id
+}
+
+extern "C" fn uievent_touches_for(self_obj: Id, _cmd: Sel, _arg: Id) -> Id {
+    uievent_all_touches(self_obj, _cmd)
+}
+
+extern "C" fn uievent_timestamp(self_obj: Id, _cmd: Sel) -> f64 {
+    EVENT_TOUCHES
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&(self_obj as usize)).map(|p| p.1))
+        .unwrap_or(0.0)
+}
+
+extern "C" fn uievent_dealloc(self_obj: Id, _cmd: Sel) {
+    if let Some(m) = EVENT_TOUCHES.lock().unwrap().as_mut() {
+        m.remove(&(self_obj as usize));
+    }
+}
 
 extern "C" fn uiview_init_frame(self_obj: Id, _cmd: Sel, _frame: pear_graphics::CGRect) -> Id {
     self_obj
@@ -370,7 +606,8 @@ extern "C" fn ui_window_set_root_vc(self_obj: Id, _cmd: Sel, vc: Id) {
         }
     }
     if !vc.is_null() {
-        let _ = uivc_view(vc, objc_rt::sel("view"));
+        let v = uivc_view(vc, objc_rt::sel("view"));
+        trigger_layout_recursive(v);
     }
 }
 extern "C" fn ui_window_root_vc(self_obj: Id, _cmd: Sel) -> Id {
@@ -545,6 +782,12 @@ extern "C" fn ui_window_make_key_and_visible(self_obj: Id, _cmd: Sel) {
     if !win.0.is_null() {
         pear_host::host().show_window(win, true);
     }
+    let vc = ui_window_root_vc(self_obj, objc_rt::sel("rootViewController"));
+    if !vc.is_null() {
+        let v = uivc_view_if_loaded(vc, objc_rt::sel("viewIfLoaded"));
+        trigger_layout_recursive(v);
+    }
+    trigger_layout_recursive(self_obj);
 }
 
 fn ensure_egl_surface(drawable: Option<Id>, api: usize) -> bool {
@@ -686,8 +929,6 @@ fn init_guest_frameworks() {
             (&UIALERTVIEW_CLASS, &UIALERTVIEW_META, "UIAlertView"),
             (&UIPASTEBOARD_CLASS, &UIPASTEBOARD_META, "UIPasteboard"),
             (&UIWINDOWSCENE_CLASS, &UIWINDOWSCENE_META, "UIWindowScene"),
-            (&UITOUCH_CLASS, &UITOUCH_META, "UITouch"),
-            (&UIEVENT_CLASS, &UIEVENT_META, "UIEvent"),
             (&AVAUDIOSESSION_CLASS, &AVAUDIOSESSION_META, "AVAudioSession"),
             (&AVAUDIOPLAYER_CLASS, &AVAUDIOPLAYER_META, "AVAudioPlayer"),
             (&AVPLAYER_CLASS, &AVPLAYER_META, "AVPlayer"),
@@ -796,7 +1037,13 @@ fn init_guest_frameworks() {
                 ("frame", i(uiview_bounds as *const ())),
                 ("setFrame:", i(uiview_init_frame as *const ())),
                 ("layer", i(uiview_layer as *const ())),
-                ("addSubview:", i(app_noop1 as *const ())),
+                ("addSubview:", i(uiview_add_subview as *const ())),
+                ("subviews", i(uiview_subviews as *const ())),
+                ("layoutSubviews", i(noop_method as *const ())),
+                ("convertPoint:fromView:", i(uiview_convert_point as *const ())),
+                ("convertPoint:toView:", i(uiview_convert_point as *const ())),
+                ("convertPoint:fromView:", i(uiview_convert_point as *const ())),
+                ("convertPoint:toView:", i(uiview_convert_point as *const ())),
                 ("setBackgroundColor:", i(app_noop1 as *const ())),
                 ("setOpaque:", i(app_noop1 as *const ())),
                 ("setMultipleTouchEnabled:", i(app_noop1 as *const ())),
@@ -811,7 +1058,11 @@ fn init_guest_frameworks() {
                 ("setClipsToBounds:", i(app_noop1 as *const ())),
                 ("setHidden:", i(app_noop1 as *const ())),
                 ("isHidden", i(app_false as *const ())),
-                ("removeFromSuperview", i(noop_method as *const ())),
+                ("removeFromSuperview", i(uiview_remove_from_superview as *const ())),
+                ("touchesBegan:withEvent:", i(touches_noop as *const ())),
+                ("touchesMoved:withEvent:", i(touches_noop as *const ())),
+                ("touchesEnded:withEvent:", i(touches_noop as *const ())),
+                ("touchesCancelled:withEvent:", i(touches_noop as *const ())),
             ],
             &[("layerClass", i(uiview_layer_class as *const ()))],
         );
@@ -889,6 +1140,42 @@ fn init_guest_frameworks() {
                 ("presentingViewController", i(uivc_nil as *const ())),
                 ("presentViewController:animated:completion:", i(uivc_present as *const ())),
                 ("dismissViewControllerAnimated:completion:", i(uivc_dismiss as *const ())),
+                ("touchesBegan:withEvent:", i(touches_noop as *const ())),
+                ("touchesMoved:withEvent:", i(touches_noop as *const ())),
+                ("touchesEnded:withEvent:", i(touches_noop as *const ())),
+                ("touchesCancelled:withEvent:", i(touches_noop as *const ())),
+            ],
+            &[],
+        );
+        objc_rt::register_builtin(
+            UITOUCH_CLASS.ptr(),
+            UITOUCH_META.ptr(),
+            "UITouch",
+            32,
+            &[
+                ("locationInView:", i(uitouch_location_in_view as *const ())),
+                ("previousLocationInView:", i(uitouch_prev_location_in_view as *const ())),
+                ("timestamp", i(uitouch_timestamp as *const ())),
+                ("phase", i(uitouch_phase as *const ())),
+                ("tapCount", i(uitouch_tap_count as *const ())),
+                ("view", i(uitouch_view as *const ())),
+                ("window", i(uitouch_window as *const ())),
+                ("dealloc", i(uitouch_dealloc as *const ())),
+            ],
+            &[],
+        );
+        objc_rt::register_builtin(
+            UIEVENT_CLASS.ptr(),
+            UIEVENT_META.ptr(),
+            "UIEvent",
+            32,
+            &[
+                ("allTouches", i(uievent_all_touches as *const ())),
+                ("touchesForView:", i(uievent_touches_for as *const ())),
+                ("touchesForWindow:", i(uievent_touches_for as *const ())),
+                ("touchesForGestureRecognizer:", i(uievent_touches_for as *const ())),
+                ("timestamp", i(uievent_timestamp as *const ())),
+                ("dealloc", i(uievent_dealloc as *const ())),
             ],
             &[],
         );
@@ -951,7 +1238,15 @@ fn init_guest_frameworks() {
                 ("rootViewController", i(ui_window_root_vc as *const ())),
                 ("setRootViewController:", i(ui_window_set_root_vc as *const ())),
                 ("setBackgroundColor:", i(app_noop1 as *const ())),
-                ("addSubview:", i(app_noop1 as *const ())),
+                ("addSubview:", i(uiview_add_subview as *const ())),
+                ("subviews", i(uiview_subviews as *const ())),
+                ("layoutSubviews", i(noop_method as *const ())),
+                ("convertPoint:fromView:", i(uiview_convert_point as *const ())),
+                ("convertPoint:toView:", i(uiview_convert_point as *const ())),
+                ("touchesBegan:withEvent:", i(touches_noop as *const ())),
+                ("touchesMoved:withEvent:", i(touches_noop as *const ())),
+                ("touchesEnded:withEvent:", i(touches_noop as *const ())),
+                ("touchesCancelled:withEvent:", i(touches_noop as *const ())),
             ],
             &[],
         );
@@ -2920,8 +3215,211 @@ extern "C" fn unwind_resume_trap() -> ! {
 struct DefaultGuestEvents;
 
 #[cfg(target_os = "linux")]
+fn find_touch_target(win: Id) -> (Id, Id) {
+    let sel_began = objc_rt::sel("touchesBegan:withEvent:");
+    let noop_imp = touches_noop as *const () as usize;
+    let overrides_touches = |obj: Id| -> bool {
+        if obj.is_null() {
+            return false;
+        }
+        let d = pear_libobjc::message::lookup_for_send(obj, sel_began);
+        !d.imp.is_null() && (d.imp as usize) != noop_imp
+    };
+    let vc = if !win.is_null() {
+        ui_window_root_vc(win, objc_rt::sel("rootViewController"))
+    } else {
+        std::ptr::null_mut()
+    };
+    let root_view = if !vc.is_null() {
+        uivc_view_if_loaded(vc, objc_rt::sel("viewIfLoaded"))
+    } else {
+        std::ptr::null_mut()
+    };
+
+    let mut stack: Vec<Id> = Vec::new();
+    if !root_view.is_null() {
+        stack.push(root_view);
+    }
+    if !win.is_null() {
+        let win_subs = VIEW_SUBVIEWS
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.get(&(win as usize)).cloned())
+            .unwrap_or_default();
+        for s in win_subs {
+            if s != root_view as usize {
+                stack.push(s as Id);
+            }
+        }
+    }
+    let mut visited = std::collections::HashSet::new();
+    let mut best_view: Id = root_view;
+    let mut dfs = Vec::new();
+    for s in stack {
+        dfs.push(s);
+    }
+    while let Some(v) = dfs.pop() {
+        if v.is_null() || !visited.insert(v as usize) {
+            continue;
+        }
+        if overrides_touches(v) {
+            best_view = v;
+        }
+        let subs = VIEW_SUBVIEWS
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.get(&(v as usize)).cloned())
+            .unwrap_or_default();
+        for ch in subs {
+            dfs.push(ch as Id);
+        }
+    }
+    if !best_view.is_null() && overrides_touches(best_view) {
+        return (best_view, best_view);
+    }
+    if overrides_touches(vc) {
+        return (vc, if !root_view.is_null() { root_view } else { win });
+    }
+    if !best_view.is_null() {
+        return (best_view, best_view);
+    }
+    (win, win)
+}
+
+#[cfg(target_os = "linux")]
 impl pear_host::GuestEvents for DefaultGuestEvents {
-    fn pointer(&self, _: pear_host::GuestObject, _: pear_host::TouchPhase, _: f64, _: f64, _: f64) {}
+    fn pointer(
+        &self,
+        window: pear_host::GuestObject,
+        phase: pear_host::TouchPhase,
+        x: f64,
+        y: f64,
+        timestamp: f64,
+    ) {
+        use std::sync::atomic::Ordering;
+        let mut win = window.0 as Id;
+        if win.is_null() {
+            win = app_key_window(std::ptr::null_mut(), objc_rt::sel("keyWindow"));
+        }
+        if win.is_null() {
+            return;
+        }
+        let (target, touch_view) = find_touch_target(win);
+        if target.is_null() {
+            return;
+        }
+        let sel_name = match phase {
+            pear_host::TouchPhase::Began => "touchesBegan:withEvent:",
+            pear_host::TouchPhase::Ended => "touchesEnded:withEvent:",
+            pear_host::TouchPhase::Cancelled => "touchesCancelled:withEvent:",
+            _ => "touchesMoved:withEvent:",
+        };
+        let phase_val = phase as isize;
+        let existing_touch = ACTIVE_TOUCH_OBJ.load(Ordering::Acquire);
+        let touch: Id = if phase == pear_host::TouchPhase::Began || existing_touch == 0 {
+            if existing_touch != 0 {
+                if let Some(m) = TOUCH_DATA.lock().unwrap().as_mut() {
+                    m.remove(&existing_touch);
+                }
+                pear_libobjc::object::release(existing_touch as Id);
+            }
+            let t = unsafe { alloc(UITOUCH_CLASS.ptr()) };
+            TOUCH_DATA
+                .lock()
+                .unwrap()
+                .get_or_insert_with(std::collections::HashMap::new)
+                .insert(
+                    t as usize,
+                    TouchState {
+                        x,
+                        y,
+                        prev_x: x,
+                        prev_y: y,
+                        timestamp,
+                        phase: phase_val,
+                        tap_count: 1,
+                        view: touch_view as usize,
+                        window: win as usize,
+                    },
+                );
+            ACTIVE_TOUCH_OBJ.store(t as usize, Ordering::Release);
+            t
+        } else {
+            let t = existing_touch as Id;
+            let mut g = TOUCH_DATA.lock().unwrap();
+            let map = g.get_or_insert_with(std::collections::HashMap::new);
+            let prev = map.get(&(t as usize)).copied().unwrap_or(TouchState {
+                x,
+                y,
+                prev_x: x,
+                prev_y: y,
+                timestamp,
+                phase: phase_val,
+                tap_count: 1,
+                view: touch_view as usize,
+                window: win as usize,
+            });
+            map.insert(
+                t as usize,
+                TouchState {
+                    x,
+                    y,
+                    prev_x: prev.x,
+                    prev_y: prev.y,
+                    timestamp,
+                    phase: phase_val,
+                    tap_count: 1,
+                    view: touch_view as usize,
+                    window: win as usize,
+                },
+            );
+            t
+        };
+
+        let touches_set = pear_foundation::ns_set_with_objects(&[touch]);
+        let ev = unsafe { alloc(UIEVENT_CLASS.ptr()) };
+        EVENT_TOUCHES
+            .lock()
+            .unwrap()
+            .get_or_insert_with(std::collections::HashMap::new)
+            .insert(ev as usize, (touches_set as usize, timestamp));
+
+        unsafe {
+            let sel = objc_rt::sel(sel_name);
+            let d = pear_libobjc::message::lookup_for_send(target, sel);
+            if !d.imp.is_null() {
+                let f: extern "C" fn(Id, Sel, Id, Id) = std::mem::transmute(d.imp);
+                f(d.receiver, sel, touches_set, ev);
+            }
+        }
+
+        if let Some(m) = EVENT_TOUCHES.lock().unwrap().as_mut() {
+            m.remove(&(ev as usize));
+        }
+        pear_libobjc::object::release(ev);
+        pear_libobjc::object::release(touches_set);
+        if matches!(
+            phase,
+            pear_host::TouchPhase::Ended | pear_host::TouchPhase::Cancelled
+        ) {
+            if ACTIVE_TOUCH_OBJ
+                .compare_exchange(
+                    touch as usize,
+                    0,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                if let Some(m) = TOUCH_DATA.lock().unwrap().as_mut() {
+                    m.remove(&(touch as usize));
+                }
+                pear_libobjc::object::release(touch);
+            }
+        }
+    }
     fn key(&self, _: pear_host::KeyEvent) {}
     fn text(&self, _: &str) {}
     fn edit_command(&self, _: pear_host::EditCommand) {}
