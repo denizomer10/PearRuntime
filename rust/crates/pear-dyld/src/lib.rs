@@ -108,6 +108,7 @@ pub struct LoadedImage {
     pub dylibs: Vec<String>,
     /// The image's sections (unslid addresses; see [`LoadedImage::address`]).
     pub sections: Vec<pear_macho::Section>,
+    pub entry_offset: Option<u64>,
 }
 
 impl LoadedImage {
@@ -162,6 +163,12 @@ impl LoadedImage {
     /// An exported symbol's address (Mach-O name, with its `_`).
     pub fn symbol(&self, name: &str) -> Option<*const c_void> {
         self.symbol_with_resolver(name, None)
+    }
+
+    /// The `LC_MAIN` entry point address if present.
+    pub fn entry(&self) -> Option<*const c_void> {
+        self.entry_offset
+            .map(|off| self.address(self.header + off) as *const c_void)
     }
 
     #[doc(hidden)]
@@ -221,6 +228,7 @@ pub fn load(data: &[u8], resolver: &dyn Resolver, options: Options) -> Result<Lo
         install_name: m.install_name.clone(),
         dylibs: m.dylibs.iter().map(|d| d.path.clone()).collect(),
         sections: m.sections.clone(),
+        entry_offset: m.entry_offset,
     };
 
     let fixups = m.fixups()?;
@@ -239,6 +247,7 @@ pub fn load(data: &[u8], resolver: &dyn Resolver, options: Options) -> Result<Lo
         return Err(Error::MissingSymbols(missing));
     }
     let slide = image.slide() as u64;
+    let trace_missing = std::env::var_os("PEAR_DYLD_TRACE").is_some();
     for f in &fixups.fixups {
         let value = match f.kind {
             FixupKind::Rebase { target, high8 } => target.wrapping_add(slide) | (high8 as u64) << 56,
@@ -246,7 +255,15 @@ pub fn load(data: &[u8], resolver: &dyn Resolver, options: Options) -> Result<Lo
                 Some(address) => (address as u64).wrapping_add(addend as u64),
                 // dyld leaves weak imports that are missing at 0.
                 None if fixups.imports[import].weak => 0,
-                None => missing_symbol_called as *const () as usize as u64,
+                None => {
+                    if trace_missing {
+                        eprintln!(
+                            "[pear-dyld][missing-bind] addr=0x{:x} sym={} ord={:?}",
+                            f.address, fixups.imports[import].name, fixups.imports[import].ordinal
+                        );
+                    }
+                    missing_symbol_called as *const () as usize as u64
+                }
             },
         };
         unsafe { (image.address(f.address) as *mut u64).write_unaligned(value) };

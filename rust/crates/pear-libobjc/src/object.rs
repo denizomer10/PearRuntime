@@ -255,8 +255,17 @@ pub unsafe fn alloc(cls: *const ClassT) -> Id {
     runtime::ensure_initialized(cls);
     let size = runtime::class(cls).map_or(16, |c| c.size().max(8));
     let obj = calloc(1, size);
-    *(obj as *mut *const ClassT) = cls;
+    if !obj.is_null() {
+        *(obj as *mut *const ClassT) = cls;
+        track_allocated(obj);
+    }
     obj
+}
+
+pub fn track_allocated(obj: Id) {
+    if !obj.is_null() {
+        state().lock().unwrap().heap_allocated.insert(obj as usize);
+    }
 }
 
 extern "C" fn c_alloc(cls: Id, _: Sel) -> Id {
@@ -268,6 +277,8 @@ extern "C" fn c_new(cls: Id, _: Sel) -> Id {
 
 #[derive(Default)]
 struct State {
+    /// Heap-allocated ObjC objects (static/constant Mach-O objects are not in this set).
+    heap_allocated: std::collections::HashSet<usize>,
     /// Retain count minus one, for objects retained more than once.
     extra: HashMap<usize, usize>,
     deallocating: std::collections::HashSet<usize>,
@@ -282,7 +293,10 @@ fn state() -> &'static Mutex<State> {
 
 pub fn retain_default(obj: Id) -> Id {
     if !obj.is_null() {
-        *state().lock().unwrap().extra.entry(obj as usize).or_insert(0) += 1;
+        let mut st = state().lock().unwrap();
+        if st.heap_allocated.contains(&(obj as usize)) {
+            *st.extra.entry(obj as usize).or_insert(0) += 1;
+        }
     }
     obj
 }
@@ -304,6 +318,9 @@ pub fn release_default(obj: Id) {
     }
     let dealloc = {
         let mut st = state().lock().unwrap();
+        if !st.heap_allocated.contains(&(obj as usize)) {
+            return;
+        }
         match st.extra.get_mut(&(obj as usize)) {
             Some(n) if *n > 0 => {
                 *n -= 1;
@@ -349,15 +366,18 @@ pub unsafe fn dispose(obj: Id) {
         c = runtime::superclass(c);
     }
     crate::props::objc_remove_associated_objects(obj);
-    {
+    let was_heap = {
         let mut st = state().lock().unwrap();
         for location in st.weak.remove(&(obj as usize)).unwrap_or_default() {
             *(location as *mut Id) = std::ptr::null_mut();
         }
         st.deallocating.remove(&(obj as usize));
         st.extra.remove(&(obj as usize));
+        st.heap_allocated.remove(&(obj as usize))
+    };
+    if was_heap {
+        free(obj);
     }
-    free(obj);
 }
 
 // ---- weak references -------------------------------------------------------

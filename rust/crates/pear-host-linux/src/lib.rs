@@ -366,11 +366,23 @@ impl HostPlatform for LinuxHost {
                     (x.x_flush)(x.display);
                 }
             }
+            let tick = FRAME_TICK.load(Ordering::Acquire);
+            if tick != 0 {
+                let cb: extern "C" fn() = unsafe { std::mem::transmute(tick) };
+                cb();
+            }
             let _ = &mut ev_buf;
             std::thread::sleep(std::time::Duration::from_millis(16));
         }
         events().lifecycle(Lifecycle::WillTerminate);
     }
+}
+
+static FRAME_TICK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Registers a callback invoked once per host run-loop frame (~60 Hz) on the main thread.
+pub fn set_frame_tick(cb: extern "C" fn()) {
+    FRAME_TICK.store(cb as usize, Ordering::Release);
 }
 
 #[cfg(test)]

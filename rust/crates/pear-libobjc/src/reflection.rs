@@ -863,6 +863,7 @@ pub unsafe extern "C" fn class_create_instance(cls: *const ClassT, extra_bytes: 
     let obj = calloc(1, sz);
     if !obj.is_null() {
         *(obj as *mut *const ClassT) = cls;
+        crate::object::track_allocated(obj);
     }
     obj
 }

@@ -83,6 +83,10 @@ fn main() {
         return;
     }
     let exe_path = resolve_executable(&args[0]);
+    let raw_p = Path::new(&args[0]);
+    if raw_p.is_dir() && args[0].ends_with(".app") {
+        env::set_var("PEAR_BUNDLE_PATH", raw_p);
+    }
     let plan_only = args.iter().any(|a| a == "--plan");
     let inspect_only = args.iter().any(|a| a == "--inspect-only");
     let check_load = args.iter().any(|a| a == "--check-load");
@@ -197,10 +201,13 @@ fn main() {
                 report.categories,
                 report.selectors,
             );
-            if let Some(entry) = img.symbol("_main") {
-                let main_fn: extern "C" fn(i32, *const *const i8) -> i32 =
+            if let Some(entry) = img.symbol("_main").or_else(|| img.entry()) {
+                let main_fn: extern "C" fn(i32, *const *const std::os::raw::c_char) -> i32 =
                     unsafe { std::mem::transmute(entry) };
-                let rc = main_fn(0, std::ptr::null());
+                let arg0 = std::ffi::CString::new(exe_path.to_string_lossy().as_bytes())
+                    .unwrap_or_default();
+                let argv = [arg0.as_ptr(), std::ptr::null()];
+                let rc = main_fn(1, argv.as_ptr());
                 process::exit(rc);
             }
         }

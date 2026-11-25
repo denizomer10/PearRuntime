@@ -129,6 +129,316 @@ extern "C" fn current_device_stub(_self: Id, _cmd: Sel) -> Id {
 extern "C" fn device_system_name(_self: Id, _cmd: Sel) -> Id {
     pear_foundation::nsstring_from_rust("iOS")
 }
+extern "C" fn device_system_version(_self: Id, _cmd: Sel) -> Id {
+    pear_foundation::nsstring_from_rust("17.0")
+}
+extern "C" fn device_model(_self: Id, _cmd: Sel) -> Id {
+    pear_foundation::nsstring_from_rust("iPhone")
+}
+extern "C" fn device_name(_self: Id, _cmd: Sel) -> Id {
+    pear_foundation::nsstring_from_rust("PearRuntime")
+}
+extern "C" fn device_idiom(_self: Id, _cmd: Sel) -> isize { 0 }
+extern "C" fn device_multitasking(_self: Id, _cmd: Sel) -> bool { true }
+extern "C" fn device_battery_level(_self: Id, _cmd: Sel) -> f32 { 1.0 }
+extern "C" fn device_battery_state(_self: Id, _cmd: Sel) -> isize { 2 }
+extern "C" fn device_orientation(_self: Id, _cmd: Sel) -> isize { 1 }
+extern "C" fn device_vendor_uuid(_self: Id, _cmd: Sel) -> Id {
+    unsafe {
+        let cls = objc_rt::class_named("NSUUID").unwrap_or(std::ptr::null());
+        if cls.is_null() { return std::ptr::null_mut(); }
+        let d = pear_libobjc::message::lookup_for_send(cls as Id, objc_rt::sel("UUID"));
+        let f: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d.imp);
+        f(d.receiver, objc_rt::sel("UUID"))
+    }
+}
+
+extern "C" fn screen_bounds(_self: Id, _cmd: Sel) -> pear_graphics::CGRect {
+    let s = pear_host::host().screen();
+    pear_graphics::CGRect {
+        origin: pear_graphics::CGPoint { x: 0.0, y: 0.0 },
+        size: pear_graphics::CGSize { width: s.points.width, height: s.points.height },
+    }
+}
+extern "C" fn screen_native_bounds(_self: Id, _cmd: Sel) -> pear_graphics::CGRect {
+    let s = pear_host::host().screen();
+    pear_graphics::CGRect {
+        origin: pear_graphics::CGPoint { x: 0.0, y: 0.0 },
+        size: pear_graphics::CGSize {
+            width: s.points.width * s.scale,
+            height: s.points.height * s.scale,
+        },
+    }
+}
+extern "C" fn screen_max_fps(_self: Id, _cmd: Sel) -> isize {
+    pear_host::host().screen().max_fps as isize
+}
+extern "C" fn screen_brightness(_self: Id, _cmd: Sel) -> f64 { 1.0 }
+
+static APP_DELEGATE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+extern "C" fn app_delegate(_self: Id, _cmd: Sel) -> Id {
+    APP_DELEGATE.load(std::sync::atomic::Ordering::Acquire) as Id
+}
+extern "C" fn app_set_delegate(_self: Id, _cmd: Sel, d: Id) {
+    APP_DELEGATE.store(d as usize, std::sync::atomic::Ordering::Release);
+}
+extern "C" fn app_windows(_self: Id, _cmd: Sel) -> Id {
+    unsafe {
+        let cls = objc_rt::class_named("NSArray").unwrap_or(std::ptr::null());
+        if cls.is_null() { return std::ptr::null_mut(); }
+        let d = pear_libobjc::message::lookup_for_send(cls as Id, objc_rt::sel("array"));
+        let f: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d.imp);
+        f(d.receiver, objc_rt::sel("array"))
+    }
+}
+extern "C" fn app_key_window(_self: Id, _cmd: Sel) -> Id {
+    HOST_WINDOWS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.keys().next().copied())
+        .unwrap_or(0) as Id
+}
+extern "C" fn app_state(_self: Id, _cmd: Sel) -> isize { 0 }
+extern "C" fn app_orientation(_self: Id, _cmd: Sel) -> isize { 1 }
+extern "C" fn app_true(_self: Id, _cmd: Sel) -> bool { true }
+extern "C" fn app_false(_self: Id, _cmd: Sel) -> bool { false }
+extern "C" fn app_false1(_self: Id, _cmd: Sel, _arg: Id) -> bool { false }
+extern "C" fn app_noop1(_self: Id, _cmd: Sel, _arg: isize) {}
+
+extern "C" fn uicolor_rgba(cls: Id, _cmd: Sel, _r: f64, _g: f64, _b: f64, _a: f64) -> Id {
+    unsafe { alloc(cls as *const ClassT) }
+}
+extern "C" fn uicolor_wa(cls: Id, _cmd: Sel, _w: f64, _a: f64) -> Id {
+    unsafe { alloc(cls as *const ClassT) }
+}
+extern "C" fn uicolor_preset(cls: Id, _cmd: Sel) -> Id {
+    unsafe { alloc(cls as *const ClassT) }
+}
+
+static VC_VIEWS: std::sync::Mutex<Option<std::collections::HashMap<usize, usize>>> =
+    std::sync::Mutex::new(None);
+static VC_LOADING: std::sync::Mutex<Option<std::collections::HashSet<usize>>> =
+    std::sync::Mutex::new(None);
+static WINDOW_ROOT_VC: std::sync::Mutex<Option<std::collections::HashMap<usize, usize>>> =
+    std::sync::Mutex::new(None);
+static VIEW_LAYERS: std::sync::Mutex<Option<std::collections::HashMap<usize, usize>>> =
+    std::sync::Mutex::new(None);
+static DISPLAY_LINKS: std::sync::Mutex<Option<std::collections::HashMap<usize, (usize, usize, bool, bool)>>> =
+    std::sync::Mutex::new(None);
+
+extern "C" fn uiview_init_frame(self_obj: Id, _cmd: Sel, _frame: pear_graphics::CGRect) -> Id {
+    self_obj
+}
+extern "C" fn uiview_bounds(_self: Id, _cmd: Sel) -> pear_graphics::CGRect {
+    screen_bounds(_self, _cmd)
+}
+extern "C" fn uiview_layer(self_obj: Id, _cmd: Sel) -> Id {
+    let mut g = VIEW_LAYERS.lock().unwrap();
+    let map = g.get_or_insert_with(std::collections::HashMap::new);
+    if let Some(&layer) = map.get(&(self_obj as usize)) {
+        return layer as Id;
+    }
+    let layer = unsafe { alloc(CAEAGLLAYER_CLASS.ptr()) };
+    map.insert(self_obj as usize, layer as usize);
+    layer
+}
+extern "C" fn uiview_layer_class(_cls: Id, _cmd: Sel) -> Id {
+    CAEAGLLAYER_CLASS.ptr() as Id
+}
+extern "C" fn uiview_scale(_self: Id, _cmd: Sel) -> f64 {
+    pear_host::host().screen().scale
+}
+extern "C" fn uivc_view(self_obj: Id, _cmd: Sel) -> Id {
+    if self_obj.is_null() {
+        return std::ptr::null_mut();
+    }
+    if let Some(&v) = VC_VIEWS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&(self_obj as usize)))
+    {
+        return v as Id;
+    }
+    let already_loading = {
+        let mut g = VC_LOADING.lock().unwrap();
+        !g.get_or_insert_with(std::collections::HashSet::new)
+            .insert(self_obj as usize)
+    };
+    if !already_loading {
+        unsafe {
+            let sel_load = objc_rt::sel("loadView");
+            let d_load = pear_libobjc::message::lookup_for_send(self_obj, sel_load);
+            let f_load: extern "C" fn(Id, Sel) = std::mem::transmute(d_load.imp);
+            f_load(d_load.receiver, sel_load);
+        }
+        if let Some(s) = VC_LOADING.lock().unwrap().as_mut() {
+            s.remove(&(self_obj as usize));
+        }
+        let existing = VC_VIEWS
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.get(&(self_obj as usize)).copied());
+        let v = existing.unwrap_or_else(|| {
+            let created = unsafe { alloc(UIVIEW_CLASS.ptr()) } as usize;
+            VC_VIEWS
+                .lock()
+                .unwrap()
+                .get_or_insert_with(std::collections::HashMap::new)
+                .insert(self_obj as usize, created);
+            created
+        });
+        unsafe {
+            let sel_vdl = objc_rt::sel("viewDidLoad");
+            let d_vdl = pear_libobjc::message::lookup_for_send(self_obj, sel_vdl);
+            let f_vdl: extern "C" fn(Id, Sel) = std::mem::transmute(d_vdl.imp);
+            f_vdl(d_vdl.receiver, sel_vdl);
+        }
+        return v as Id;
+    }
+    let v = unsafe { alloc(UIVIEW_CLASS.ptr()) };
+    VC_VIEWS
+        .lock()
+        .unwrap()
+        .get_or_insert_with(std::collections::HashMap::new)
+        .insert(self_obj as usize, v as usize);
+    v
+}
+extern "C" fn uivc_set_view(self_obj: Id, _cmd: Sel, view: Id) {
+    if !view.is_null() {
+        pear_libobjc::object::retain(view);
+    }
+    let old = {
+        let mut g = VC_VIEWS.lock().unwrap();
+        let map = g.get_or_insert_with(std::collections::HashMap::new);
+        if view.is_null() {
+            map.remove(&(self_obj as usize))
+        } else {
+            map.insert(self_obj as usize, view as usize)
+        }
+    };
+    if let Some(prev) = old {
+        if prev != 0 && prev != view as usize {
+            pear_libobjc::object::release(prev as Id);
+        }
+    }
+}
+extern "C" fn uivc_is_view_loaded(self_obj: Id, _cmd: Sel) -> bool {
+    if self_obj.is_null() {
+        return false;
+    }
+    VC_VIEWS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|m| m.contains_key(&(self_obj as usize)))
+}
+extern "C" fn uivc_view_if_loaded(self_obj: Id, _cmd: Sel) -> Id {
+    if self_obj.is_null() {
+        return std::ptr::null_mut();
+    }
+    VC_VIEWS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&(self_obj as usize)).copied())
+        .unwrap_or(0) as Id
+}
+extern "C" fn uivc_nil(_self: Id, _cmd: Sel) -> Id {
+    std::ptr::null_mut()
+}
+extern "C" fn uivc_present(_self: Id, _cmd: Sel, _vc: Id, _anim: bool, _comp: Id) {}
+extern "C" fn uivc_dismiss(_self: Id, _cmd: Sel, _anim: bool, _comp: Id) {}
+extern "C" fn ui_window_set_root_vc(self_obj: Id, _cmd: Sel, vc: Id) {
+    if !vc.is_null() {
+        pear_libobjc::object::retain(vc);
+    }
+    let old = {
+        let mut g = WINDOW_ROOT_VC.lock().unwrap();
+        let map = g.get_or_insert_with(std::collections::HashMap::new);
+        if vc.is_null() {
+            map.remove(&(self_obj as usize))
+        } else {
+            map.insert(self_obj as usize, vc as usize)
+        }
+    };
+    if let Some(prev) = old {
+        if prev != 0 && prev != vc as usize {
+            pear_libobjc::object::release(prev as Id);
+        }
+    }
+    if !vc.is_null() {
+        let _ = uivc_view(vc, objc_rt::sel("view"));
+    }
+}
+extern "C" fn ui_window_root_vc(self_obj: Id, _cmd: Sel) -> Id {
+    WINDOW_ROOT_VC
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&(self_obj as usize)).copied())
+        .unwrap_or(0) as Id
+}
+extern "C" fn dl_create(cls: Id, _cmd: Sel, target: Id, sel_ptr: Sel) -> Id {
+    let link = unsafe { alloc(cls as *const ClassT) };
+    if !target.is_null() {
+        pear_libobjc::object::retain(target);
+    }
+    let mut g = DISPLAY_LINKS.lock().unwrap();
+    g.get_or_insert_with(std::collections::HashMap::new)
+        .insert(link as usize, (target as usize, sel_ptr as usize, false, false));
+    link
+}
+extern "C" fn dl_add_runloop(self_obj: Id, _cmd: Sel, _rl: Id, _mode: Id) {
+    if let Some(map) = DISPLAY_LINKS.lock().unwrap().as_mut() {
+        if let Some(entry) = map.get_mut(&(self_obj as usize)) {
+            entry.3 = true;
+        }
+    }
+}
+extern "C" fn dl_set_paused(self_obj: Id, _cmd: Sel, paused: bool) {
+    if let Some(map) = DISPLAY_LINKS.lock().unwrap().as_mut() {
+        if let Some(entry) = map.get_mut(&(self_obj as usize)) {
+            entry.2 = paused;
+        }
+    }
+}
+extern "C" fn dl_invalidate(self_obj: Id, _cmd: Sel) {
+    if let Some(map) = DISPLAY_LINKS.lock().unwrap().as_mut() {
+        map.remove(&(self_obj as usize));
+    }
+}
+extern "C" fn dl_timestamp(_self: Id, _cmd: Sel) -> f64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()
+}
+extern "C" fn dl_duration(_self: Id, _cmd: Sel) -> f64 {
+    1.0 / 60.0
+}
+extern "C" fn pump_display_links() {
+    let items: Vec<(usize, usize, usize)> = DISPLAY_LINKS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|m| {
+            m.iter()
+                .filter(|(_, (_, _, paused, scheduled))| !*paused && *scheduled)
+                .map(|(&link, &(target, sel_ptr, _, _))| (link, target, sel_ptr))
+                .collect()
+        })
+        .unwrap_or_default();
+    for (link, target, sel_ptr) in items {
+        if target != 0 && sel_ptr != 0 {
+            unsafe {
+                let d = pear_libobjc::message::lookup_for_send(target as Id, sel_ptr as Sel);
+                let f: extern "C" fn(Id, Sel, Id) = std::mem::transmute(d.imp);
+                f(d.receiver, sel_ptr as Sel, link as Id);
+            }
+        }
+    }
+}
 
 extern "C" fn noop_method(_self: Id, _cmd: Sel) {}
 
@@ -143,6 +453,8 @@ extern "C" fn ui_application_main(
     } else {
         None
     };
+    #[cfg(target_os = "linux")]
+    pear_host_linux::set_frame_tick(pump_display_links);
     pear_host::host().run(Box::new(move || {
         if let Some(name) = delegate_name {
             if let Some(cls) = objc_rt::class_named(&name) {
@@ -153,10 +465,17 @@ extern "C" fn ui_application_main(
                     let d_init = pear_libobjc::message::lookup_for_send(del, sel_init);
                     let f_init: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_init.imp);
                     let del = f_init(d_init.receiver, sel_init);
+                    app_set_delegate(app, objc_rt::sel("setDelegate:"), del);
                     let sel_did = objc_rt::sel("application:didFinishLaunchingWithOptions:");
                     let d_did = pear_libobjc::message::lookup_for_send(del, sel_did);
                     let f_did: extern "C" fn(Id, Sel, Id, Id) -> bool = std::mem::transmute(d_did.imp);
                     let _ = f_did(d_did.receiver, sel_did, app, std::ptr::null_mut());
+                    let sel_active = objc_rt::sel("applicationDidBecomeActive:");
+                    if pear_libobjc::runtime::lookup(cls, sel_active).is_some() {
+                        let d_act = pear_libobjc::message::lookup_for_send(del, sel_active);
+                        let f_act: extern "C" fn(Id, Sel, Id) = std::mem::transmute(d_act.imp);
+                        f_act(d_act.receiver, sel_active, app);
+                    }
                 }
             }
         }
@@ -166,7 +485,14 @@ extern "C" fn ui_application_main(
 
 static HOST_WINDOWS: std::sync::Mutex<Option<std::collections::HashMap<usize, (usize, usize)>>> =
     std::sync::Mutex::new(None);
-static ACTIVE_EGL_CTX: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
+static CURRENT_EAGL_OBJ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static ACTIVE_EGL_SURFACE: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
+static EAGL_CTX_API: std::sync::Mutex<Option<std::collections::HashMap<usize, usize>>> =
+    std::sync::Mutex::new(None);
+static EAGL_LAST_BOUND_FBO: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static EAGL_WINDOW_FBO: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(u32::MAX);
+static EAGL_SURFACE_SIZE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new((1280u64 << 32) | 720u64);
 
 extern "C" fn ui_window_init_with_frame(
     self_obj: Id,
@@ -221,35 +547,86 @@ extern "C" fn ui_window_make_key_and_visible(self_obj: Id, _cmd: Sel) {
     }
 }
 
-extern "C" fn eagl_init_with_api(self_obj: Id, _cmd: Sel, _api: usize) -> Id {
+fn ensure_egl_surface(drawable: Option<Id>, api: usize) -> bool {
+    if ACTIVE_EGL_SURFACE.lock().unwrap().is_some() {
+        return true;
+    }
+    let layer = drawable
+        .and_then(|d| pear_host::host().surface(pear_host::LayerRef(d as *mut c_void)))
+        .or_else(|| {
+            let root = HOST_WINDOWS
+                .lock()
+                .unwrap()
+                .as_ref()
+                .and_then(|m| m.values().next().copied())
+                .map(|(_, l)| l)?;
+            pear_host::host().surface(pear_host::LayerRef(root as *mut c_void))
+        });
+    if let Some(info) = layer {
+        let w = (info.pixels.width.max(1.0)) as u32;
+        let h = (info.pixels.height.max(1.0)) as u32;
+        EAGL_SURFACE_SIZE.store(((w as u64) << 32) | (h as u64), std::sync::atomic::Ordering::Release);
+        if let pear_host::NativeSurface::Xlib { display, window } = info.surface {
+            if let Some(egl) = egl_bridge::EglSurfaceCtx::create_for_api(display, window, api) {
+                let boxed = Box::into_raw(Box::new(egl)) as usize;
+                *ACTIVE_EGL_SURFACE.lock().unwrap() = Some(boxed);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+extern "C" fn eagl_init_with_api(self_obj: Id, _cmd: Sel, api: usize) -> Id {
+    EAGL_CTX_API
+        .lock()
+        .unwrap()
+        .get_or_insert_with(std::collections::HashMap::new)
+        .insert(self_obj as usize, api);
     self_obj
 }
 
+extern "C" fn eagl_current_context(_cls: Id, _cmd: Sel) -> Id {
+    CURRENT_EAGL_OBJ.load(std::sync::atomic::Ordering::Acquire) as Id
+}
+
 extern "C" fn eagl_set_current_context(_self_cls: Id, _cmd: Sel, ctx: Id) -> bool {
-    *ACTIVE_EGL_CTX.lock().unwrap() = Some(ctx as usize);
+    CURRENT_EAGL_OBJ.store(ctx as usize, std::sync::atomic::Ordering::Release);
+    if !ctx.is_null() {
+        let api = EAGL_CTX_API
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.get(&(ctx as usize)).copied())
+            .unwrap_or(2);
+        let _ = ensure_egl_surface(None, api);
+    }
     true
 }
 
 extern "C" fn eagl_renderbuffer_storage(
-    _self_obj: Id,
+    self_obj: Id,
     _cmd: Sel,
     _target: usize,
     drawable: Id,
 ) -> bool {
-    if let Some(info) = pear_host::host().surface(pear_host::LayerRef(drawable as *mut c_void)) {
-        if let pear_host::NativeSurface::Xlib { display, window } = info.surface {
-            if let Some(egl) = egl_bridge::EglSurfaceCtx::create_from_x11(display, window) {
-                let boxed = Box::into_raw(Box::new(egl)) as usize;
-                *ACTIVE_EGL_CTX.lock().unwrap() = Some(boxed);
-                return true;
-            }
-        }
+    let api = EAGL_CTX_API
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&(self_obj as usize)).copied())
+        .unwrap_or(2);
+    let _ = ensure_egl_surface(Some(drawable), api);
+    let cur_fbo = EAGL_LAST_BOUND_FBO.load(std::sync::atomic::Ordering::Acquire);
+    if cur_fbo != 0 {
+        EAGL_WINDOW_FBO.store(cur_fbo, std::sync::atomic::Ordering::Release);
+        eagl_real_bind_fbo(0x8D40, 0);
     }
     true
 }
 
 extern "C" fn eagl_present_renderbuffer(_self_obj: Id, _cmd: Sel, _target: usize) -> bool {
-    if let Some(ptr) = *ACTIVE_EGL_CTX.lock().unwrap() {
+    if let Some(ptr) = *ACTIVE_EGL_SURFACE.lock().unwrap() {
         if ptr > 0x10000 {
             let egl = unsafe { &*(ptr as *const egl_bridge::EglSurfaceCtx) };
             egl.swap_buffers();
@@ -278,22 +655,12 @@ fn init_guest_frameworks() {
     ONCE.call_once(|| {
         let i = |p: *const ()| p as Imp;
         for (cls, meta, name) in [
-            (&CALAYER_CLASS, &CALAYER_META, "CALayer"),
             (&CAMETALLAYER_CLASS, &CAMETALLAYER_META, "CAMetalLayer"),
-            (&CAEAGLLAYER_CLASS, &CAEAGLLAYER_META, "CAEAGLLayer"),
             (&CATRANSACTION_CLASS, &CATRANSACTION_META, "CATransaction"),
-            (&CADISPLAYLINK_CLASS, &CADISPLAYLINK_META, "CADisplayLink"),
-            (&UIVIEW_CLASS, &UIVIEW_META, "UIView"),
-            (&UICOLOR_CLASS, &UICOLOR_META, "UIColor"),
             (&UIIMAGE_CLASS, &UIIMAGE_META, "UIImage"),
             (&UILABEL_CLASS, &UILABEL_META, "UILabel"),
             (&UIFONT_CLASS, &UIFONT_META, "UIFont"),
             (&UIRESPONDER_CLASS, &UIRESPONDER_META, "UIResponder"),
-            (&UIVIEWCONTROLLER_CLASS, &UIVIEWCONTROLLER_META, "UIViewController"),
-            (&UIGESTURERECOGNIZER_CLASS, &UIGESTURERECOGNIZER_META, "UIGestureRecognizer"),
-            (&UILONGPRESSGESTURERECOGNIZER_CLASS, &UILONGPRESSGESTURERECOGNIZER_META, "UILongPressGestureRecognizer"),
-            (&UITAPGESTURERECOGNIZER_CLASS, &UITAPGESTURERECOGNIZER_META, "UITapGestureRecognizer"),
-            (&UIPANGESTURERECOGNIZER_CLASS, &UIPANGESTURERECOGNIZER_META, "UIPanGestureRecognizer"),
             (&UISTORYBOARD_CLASS, &UISTORYBOARD_META, "UIStoryboard"),
             (&UICONTROL_CLASS, &UICONTROL_META, "UIControl"),
             (&UIBUTTON_CLASS, &UIBUTTON_META, "UIButton"),
@@ -346,7 +713,19 @@ fn init_guest_frameworks() {
             UIAPPLICATION_META.ptr(),
             "UIApplication",
             32,
-            &[],
+            &[
+                ("delegate", i(app_delegate as *const ())),
+                ("setDelegate:", i(app_set_delegate as *const ())),
+                ("windows", i(app_windows as *const ())),
+                ("keyWindow", i(app_key_window as *const ())),
+                ("applicationState", i(app_state as *const ())),
+                ("statusBarOrientation", i(app_orientation as *const ())),
+                ("isStatusBarHidden", i(app_true as *const ())),
+                ("setIdleTimerDisabled:", i(app_noop1 as *const ())),
+                ("canOpenURL:", i(app_false1 as *const ())),
+                ("openURL:", i(app_false1 as *const ())),
+                ("isRegisteredForRemoteNotifications", i(app_false as *const ())),
+            ],
             &[("sharedApplication", i(shared_app_stub as *const ()))],
         );
         objc_rt::register_builtin(
@@ -354,7 +733,15 @@ fn init_guest_frameworks() {
             UISCREEN_META.ptr(),
             "UIScreen",
             32,
-            &[("scale", i(screen_scale_stub as *const ()))],
+            &[
+                ("scale", i(screen_scale_stub as *const ())),
+                ("nativeScale", i(screen_scale_stub as *const ())),
+                ("bounds", i(screen_bounds as *const ())),
+                ("nativeBounds", i(screen_native_bounds as *const ())),
+                ("applicationFrame", i(screen_bounds as *const ())),
+                ("maximumFramesPerSecond", i(screen_max_fps as *const ())),
+                ("brightness", i(screen_brightness as *const ())),
+            ],
             &[("mainScreen", i(main_screen_stub as *const ()))],
         );
         objc_rt::register_builtin(
@@ -364,9 +751,192 @@ fn init_guest_frameworks() {
             32,
             &[
                 ("systemName", i(device_system_name as *const ())),
+                ("systemVersion", i(device_system_version as *const ())),
+                ("model", i(device_model as *const ())),
+                ("localizedModel", i(device_model as *const ())),
+                ("name", i(device_name as *const ())),
+                ("userInterfaceIdiom", i(device_idiom as *const ())),
+                ("identifierForVendor", i(device_vendor_uuid as *const ())),
+                ("isMultitaskingSupported", i(device_multitasking as *const ())),
+                ("batteryLevel", i(device_battery_level as *const ())),
+                ("batteryState", i(device_battery_state as *const ())),
+                ("orientation", i(device_orientation as *const ())),
+                ("setBatteryMonitoringEnabled:", i(app_noop1 as *const ())),
                 ("beginGeneratingDeviceOrientationNotifications", i(noop_method as *const ())),
+                ("endGeneratingDeviceOrientationNotifications", i(noop_method as *const ())),
             ],
             &[("currentDevice", i(current_device_stub as *const ()))],
+        );
+        objc_rt::register_builtin(
+            UICOLOR_CLASS.ptr(),
+            UICOLOR_META.ptr(),
+            "UIColor",
+            32,
+            &[],
+            &[
+                ("colorWithRed:green:blue:alpha:", i(uicolor_rgba as *const ())),
+                ("colorWithWhite:alpha:", i(uicolor_wa as *const ())),
+                ("clearColor", i(uicolor_preset as *const ())),
+                ("blackColor", i(uicolor_preset as *const ())),
+                ("whiteColor", i(uicolor_preset as *const ())),
+                ("grayColor", i(uicolor_preset as *const ())),
+                ("redColor", i(uicolor_preset as *const ())),
+                ("greenColor", i(uicolor_preset as *const ())),
+                ("blueColor", i(uicolor_preset as *const ())),
+            ],
+        );
+        objc_rt::register_builtin(
+            UIVIEW_CLASS.ptr(),
+            UIVIEW_META.ptr(),
+            "UIView",
+            64,
+            &[
+                ("initWithFrame:", i(uiview_init_frame as *const ())),
+                ("bounds", i(uiview_bounds as *const ())),
+                ("frame", i(uiview_bounds as *const ())),
+                ("setFrame:", i(uiview_init_frame as *const ())),
+                ("layer", i(uiview_layer as *const ())),
+                ("addSubview:", i(app_noop1 as *const ())),
+                ("setBackgroundColor:", i(app_noop1 as *const ())),
+                ("setOpaque:", i(app_noop1 as *const ())),
+                ("setMultipleTouchEnabled:", i(app_noop1 as *const ())),
+                ("setUserInteractionEnabled:", i(app_noop1 as *const ())),
+                ("setContentScaleFactor:", i(app_noop1 as *const ())),
+                ("contentScaleFactor", i(uiview_scale as *const ())),
+                ("window", i(app_key_window as *const ())),
+                ("layoutSubviews", i(noop_method as *const ())),
+                ("addGestureRecognizer:", i(app_noop1 as *const ())),
+                ("removeGestureRecognizer:", i(app_noop1 as *const ())),
+                ("setAutoresizingMask:", i(app_noop1 as *const ())),
+                ("setClipsToBounds:", i(app_noop1 as *const ())),
+                ("setHidden:", i(app_noop1 as *const ())),
+                ("isHidden", i(app_false as *const ())),
+                ("removeFromSuperview", i(noop_method as *const ())),
+            ],
+            &[("layerClass", i(uiview_layer_class as *const ()))],
+        );
+        extern "C" fn gr_init_target_action(self_obj: Id, _cmd: Sel, _t: Id, _a: Sel) -> Id {
+            self_obj
+        }
+        extern "C" fn gr_state(_self: Id, _cmd: Sel) -> isize { 0 }
+        extern "C" fn gr_loc(_self: Id, _cmd: Sel, _v: Id) -> pear_graphics::CGPoint {
+            pear_graphics::CGPoint { x: 0.0, y: 0.0 }
+        }
+        extern "C" fn gr_noop_f64(_self: Id, _cmd: Sel, _v: f64) {}
+        for (cls, meta, name) in [
+            (&UIGESTURERECOGNIZER_CLASS, &UIGESTURERECOGNIZER_META, "UIGestureRecognizer"),
+            (&UILONGPRESSGESTURERECOGNIZER_CLASS, &UILONGPRESSGESTURERECOGNIZER_META, "UILongPressGestureRecognizer"),
+            (&UITAPGESTURERECOGNIZER_CLASS, &UITAPGESTURERECOGNIZER_META, "UITapGestureRecognizer"),
+            (&UIPANGESTURERECOGNIZER_CLASS, &UIPANGESTURERECOGNIZER_META, "UIPanGestureRecognizer"),
+        ] {
+            objc_rt::register_builtin(
+                cls.ptr(),
+                meta.ptr(),
+                name,
+                32,
+                &[
+                    ("initWithTarget:action:", i(gr_init_target_action as *const ())),
+                    ("addTarget:action:", i(gr_init_target_action as *const ())),
+                    ("removeTarget:action:", i(gr_init_target_action as *const ())),
+                    ("setDelegate:", i(app_noop1 as *const ())),
+                    ("setEnabled:", i(app_noop1 as *const ())),
+                    ("isEnabled", i(app_true as *const ())),
+                    ("setMinimumPressDuration:", i(gr_noop_f64 as *const ())),
+                    ("setAllowableMovement:", i(gr_noop_f64 as *const ())),
+                    ("setNumberOfTapsRequired:", i(app_noop1 as *const ())),
+                    ("setNumberOfTouchesRequired:", i(app_noop1 as *const ())),
+                    ("setCancelsTouchesInView:", i(app_noop1 as *const ())),
+                    ("cancelsTouchesInView", i(app_false as *const ())),
+                    ("setDelaysTouchesBegan:", i(app_noop1 as *const ())),
+                    ("setDelaysTouchesEnded:", i(app_noop1 as *const ())),
+                    ("setRequiresExclusiveTouchType:", i(app_noop1 as *const ())),
+                    ("state", i(gr_state as *const ())),
+                    ("locationInView:", i(gr_loc as *const ())),
+                ],
+                &[],
+            );
+        }
+        objc_rt::register_builtin(
+            UIVIEWCONTROLLER_CLASS.ptr(),
+            UIVIEWCONTROLLER_META.ptr(),
+            "UIViewController",
+            32,
+            &[
+                ("view", i(uivc_view as *const ())),
+                ("setView:", i(uivc_set_view as *const ())),
+                ("isViewLoaded", i(uivc_is_view_loaded as *const ())),
+                ("viewIfLoaded", i(uivc_view_if_loaded as *const ())),
+                ("loadView", i(noop_method as *const ())),
+                ("viewDidLoad", i(noop_method as *const ())),
+                ("viewWillAppear:", i(app_noop1 as *const ())),
+                ("viewDidAppear:", i(app_noop1 as *const ())),
+                ("viewWillDisappear:", i(app_noop1 as *const ())),
+                ("viewDidDisappear:", i(app_noop1 as *const ())),
+                ("viewWillLayoutSubviews", i(noop_method as *const ())),
+                ("viewDidLayoutSubviews", i(noop_method as *const ())),
+                ("interfaceOrientation", i(app_orientation as *const ())),
+                ("preferredInterfaceOrientationForPresentation", i(app_orientation as *const ())),
+                ("shouldAutorotate", i(app_true as *const ())),
+                ("supportedInterfaceOrientations", i(app_orientation as *const ())),
+                ("prefersStatusBarHidden", i(app_true as *const ())),
+                ("prefersHomeIndicatorAutoHidden", i(app_true as *const ())),
+                ("preferredStatusBarStyle", i(app_state as *const ())),
+                ("setNeedsStatusBarAppearanceUpdate", i(noop_method as *const ())),
+                ("setNeedsUpdateOfScreenEdgesDeferringSystemGestures", i(noop_method as *const ())),
+                ("childViewControllers", i(ret_empty_array as *const ())),
+                ("parentViewController", i(uivc_nil as *const ())),
+                ("presentedViewController", i(uivc_nil as *const ())),
+                ("presentingViewController", i(uivc_nil as *const ())),
+                ("presentViewController:animated:completion:", i(uivc_present as *const ())),
+                ("dismissViewControllerAnimated:completion:", i(uivc_dismiss as *const ())),
+            ],
+            &[],
+        );
+        objc_rt::register_builtin(
+            CALAYER_CLASS.ptr(),
+            CALAYER_META.ptr(),
+            "CALayer",
+            32,
+            &[
+                ("bounds", i(uiview_bounds as *const ())),
+                ("frame", i(uiview_bounds as *const ())),
+                ("contentsScale", i(uiview_scale as *const ())),
+                ("setContentsScale:", i(app_noop1 as *const ())),
+                ("setOpaque:", i(app_noop1 as *const ())),
+            ],
+            &[],
+        );
+        objc_rt::register_builtin(
+            CAEAGLLAYER_CLASS.ptr(),
+            CAEAGLLAYER_META.ptr(),
+            "CAEAGLLayer",
+            32,
+            &[
+                ("bounds", i(uiview_bounds as *const ())),
+                ("frame", i(uiview_bounds as *const ())),
+                ("contentsScale", i(uiview_scale as *const ())),
+                ("setContentsScale:", i(app_noop1 as *const ())),
+                ("setOpaque:", i(app_noop1 as *const ())),
+                ("setDrawableProperties:", i(app_noop1 as *const ())),
+            ],
+            &[],
+        );
+        objc_rt::register_builtin(
+            CADISPLAYLINK_CLASS.ptr(),
+            CADISPLAYLINK_META.ptr(),
+            "CADisplayLink",
+            32,
+            &[
+                ("addToRunLoop:forMode:", i(dl_add_runloop as *const ())),
+                ("invalidate", i(dl_invalidate as *const ())),
+                ("setPaused:", i(dl_set_paused as *const ())),
+                ("setPreferredFramesPerSecond:", i(app_noop1 as *const ())),
+                ("setFrameInterval:", i(app_noop1 as *const ())),
+                ("frameInterval", i(app_orientation as *const ())),
+                ("timestamp", i(dl_timestamp as *const ())),
+                ("duration", i(dl_duration as *const ())),
+            ],
+            &[("displayLinkWithTarget:selector:", i(dl_create as *const ()))],
         );
         objc_rt::register_builtin(
             UIWINDOW_CLASS.ptr(),
@@ -376,9 +946,33 @@ fn init_guest_frameworks() {
             &[
                 ("initWithFrame:", i(ui_window_init_with_frame as *const ())),
                 ("makeKeyAndVisible", i(ui_window_make_key_and_visible as *const ())),
+                ("bounds", i(uiview_bounds as *const ())),
+                ("frame", i(uiview_bounds as *const ())),
+                ("rootViewController", i(ui_window_root_vc as *const ())),
+                ("setRootViewController:", i(ui_window_set_root_vc as *const ())),
+                ("setBackgroundColor:", i(app_noop1 as *const ())),
+                ("addSubview:", i(app_noop1 as *const ())),
             ],
             &[],
         );
+extern "C" fn ret_self1(self_obj: Id, _cmd: Sel, _arg: Id) -> Id {
+    self_obj
+}
+extern "C" fn ret_singleton(cls: Id, _cmd: Sel) -> Id {
+    unsafe { alloc(cls as *const ClassT) }
+}
+extern "C" fn ret_empty_array(_self: Id, _cmd: Sel) -> Id {
+    unsafe {
+        let cls = objc_rt::class_named("NSArray").unwrap_or(std::ptr::null());
+        if cls.is_null() { return std::ptr::null_mut(); }
+        let d = pear_libobjc::message::lookup_for_send(cls as Id, objc_rt::sel("array"));
+        let f: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d.imp);
+        f(d.receiver, objc_rt::sel("array"))
+    }
+}
+extern "C" fn noop3(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize) -> bool { true }
+extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: isize) -> bool { true }
+
         objc_rt::register_builtin(
             EAGLCONTEXT_CLASS.ptr(),
             EAGLCONTEXT_META.ptr(),
@@ -389,7 +983,137 @@ fn init_guest_frameworks() {
                 ("renderbufferStorage:fromDrawable:", i(eagl_renderbuffer_storage as *const ())),
                 ("presentRenderbuffer:", i(eagl_present_renderbuffer as *const ())),
             ],
-            &[("setCurrentContext:", i(eagl_set_current_context as *const ()))],
+            &[
+                ("setCurrentContext:", i(eagl_set_current_context as *const ())),
+                ("currentContext", i(eagl_current_context as *const ())),
+            ],
+        );
+        objc_rt::register_builtin(
+            SKPAYMENTQUEUE_CLASS.ptr(),
+            SKPAYMENTQUEUE_META.ptr(),
+            "SKPaymentQueue",
+            32,
+            &[
+                ("addTransactionObserver:", i(app_noop1 as *const ())),
+                ("removeTransactionObserver:", i(app_noop1 as *const ())),
+                ("addPayment:", i(app_noop1 as *const ())),
+                ("finishTransaction:", i(app_noop1 as *const ())),
+                ("restoreCompletedTransactions", i(noop_method as *const ())),
+                ("transactions", i(ret_empty_array as *const ())),
+            ],
+            &[
+                ("defaultQueue", i(ret_singleton as *const ())),
+                ("canMakePayments", i(app_false as *const ())),
+            ],
+        );
+        objc_rt::register_builtin(
+            SKPRODUCTSREQUEST_CLASS.ptr(),
+            SKPRODUCTSREQUEST_META.ptr(),
+            "SKProductsRequest",
+            32,
+            &[
+                ("initWithProductIdentifiers:", i(ret_self1 as *const ())),
+                ("setDelegate:", i(app_noop1 as *const ())),
+                ("start", i(noop_method as *const ())),
+                ("cancel", i(noop_method as *const ())),
+            ],
+            &[],
+        );
+        objc_rt::register_builtin(
+            SKREQUEST_CLASS.ptr(),
+            SKREQUEST_META.ptr(),
+            "SKRequest",
+            32,
+            &[
+                ("setDelegate:", i(app_noop1 as *const ())),
+                ("start", i(noop_method as *const ())),
+                ("cancel", i(noop_method as *const ())),
+            ],
+            &[],
+        );
+        objc_rt::register_builtin(
+            SKPAYMENT_CLASS.ptr(),
+            SKPAYMENT_META.ptr(),
+            "SKPayment",
+            32,
+            &[("productIdentifier", i(ret_singleton as *const ()))],
+            &[
+                ("paymentWithProduct:", i(ret_self1 as *const ())),
+                ("paymentWithProductIdentifier:", i(ret_self1 as *const ())),
+            ],
+        );
+        objc_rt::register_builtin(
+            AVAUDIOSESSION_CLASS.ptr(),
+            AVAUDIOSESSION_META.ptr(),
+            "AVAudioSession",
+            32,
+            &[
+                ("setCategory:error:", i(noop3 as *const ())),
+                ("setCategory:withOptions:error:", i(noop4 as *const ())),
+                ("setCategory:mode:options:error:", i(noop4 as *const ())),
+                ("setActive:error:", i(noop3 as *const ())),
+                ("setActive:withOptions:error:", i(noop4 as *const ())),
+                ("isOtherAudioPlaying", i(app_false as *const ())),
+                ("secondaryAudioShouldBeSilencedHint", i(app_false as *const ())),
+                ("currentRoute", i(ret_empty_array as *const ())),
+            ],
+            &[("sharedInstance", i(ret_singleton as *const ()))],
+        );
+        objc_rt::register_builtin(
+            UIACCELEROMETER_CLASS.ptr(),
+            UIACCELEROMETER_META.ptr(),
+            "UIAccelerometer",
+            32,
+            &[
+                ("setUpdateInterval:", i(app_noop1 as *const ())),
+                ("setDelegate:", i(app_noop1 as *const ())),
+            ],
+            &[("sharedAccelerometer", i(ret_singleton as *const ()))],
+        );
+        objc_rt::register_builtin(
+            CATRANSACTION_CLASS.ptr(),
+            CATRANSACTION_META.ptr(),
+            "CATransaction",
+            16,
+            &[],
+            &[
+                ("begin", i(noop_method as *const ())),
+                ("commit", i(noop_method as *const ())),
+                ("flush", i(noop_method as *const ())),
+                ("setDisableActions:", i(app_noop1 as *const ())),
+            ],
+        );
+        extern "C" fn alert_init(
+            self_obj: Id,
+            _cmd: Sel,
+            title: Id,
+            message: Id,
+            _del: Id,
+            _cancel: Id,
+            _other: Id,
+        ) -> Id {
+            let t = pear_foundation::rust_str_from_nsstring(title).unwrap_or_default();
+            let m = pear_foundation::rust_str_from_nsstring(message).unwrap_or_default();
+            eprintln!("[UIAlertView] title={t:?} message={m:?}");
+            self_obj
+        }
+        extern "C" fn alert_add_btn(_self: Id, _cmd: Sel, _t: Id) -> isize { 0 }
+        extern "C" fn alert_dismiss(_self: Id, _cmd: Sel, _idx: isize, _anim: bool) {}
+        objc_rt::register_builtin(
+            UIALERTVIEW_CLASS.ptr(),
+            UIALERTVIEW_META.ptr(),
+            "UIAlertView",
+            32,
+            &[
+                ("initWithTitle:message:delegate:cancelButtonTitle:otherButtonTitles:", i(alert_init as *const ())),
+                ("setTitle:", i(app_noop1 as *const ())),
+                ("setMessage:", i(app_noop1 as *const ())),
+                ("setDelegate:", i(app_noop1 as *const ())),
+                ("addButtonWithTitle:", i(alert_add_btn as *const ())),
+                ("show", i(noop_method as *const ())),
+                ("dismissWithClickedButtonIndex:animated:", i(alert_dismiss as *const ())),
+            ],
+            &[],
         );
     });
 }
@@ -409,43 +1133,517 @@ extern "C" {
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
 }
 
-fn gles_dlsym(macho_sym: &str) -> usize {
-    static HANDLE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    let h = *HANDLE.get_or_init(|| unsafe {
-        let mut p = std::ptr::null_mut();
+fn resolve_raw_gles_proc(cname: &str) -> usize {
+    static LIBS: std::sync::OnceLock<(usize, usize, usize)> = std::sync::OnceLock::new();
+    let (h_v1, h_v2, egl_get_proc) = *LIBS.get_or_init(|| unsafe {
+        let mut h1 = std::ptr::null_mut();
+        let mut h2 = std::ptr::null_mut();
         if let Ok(custom) = std::env::var("PEAR_GLES_LIB") {
             if let Ok(c) = std::ffi::CString::new(custom) {
-                p = dlopen(c.as_ptr(), 1);
+                h2 = dlopen(c.as_ptr(), 1);
             }
         }
-        if p.is_null() {
-            #[cfg(target_os = "macos")]
-            let candidates = [
-                c"libGLESv2.dylib".as_ptr(),
-                c"build/host/PearANGLE/libGLESv2.dylib".as_ptr(),
-            ];
-            #[cfg(not(target_os = "macos"))]
-            let candidates = [c"libGLESv2.so.2".as_ptr(), c"libGLESv2.so".as_ptr()];
-            for &cand in &candidates {
-                p = dlopen(cand, 1);
+        #[cfg(target_os = "macos")]
+        {
+            if h2.is_null() {
+                for cand in [c"libGLESv2.dylib".as_ptr(), c"build/host/PearANGLE/libGLESv2.dylib".as_ptr()] {
+                    h2 = dlopen(cand, 1);
+                    if !h2.is_null() { break; }
+                }
+            }
+            for cand in [c"libGLESv1_CM.dylib".as_ptr()] {
+                h1 = dlopen(cand, 1);
+                if !h1.is_null() { break; }
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            for cand in [c"libGLESv1_CM.so.1".as_ptr(), c"libGLESv1_CM.so".as_ptr()] {
+                h1 = dlopen(cand, 1);
+                if !h1.is_null() { break; }
+            }
+            if h2.is_null() {
+                for cand in [c"libGLESv2.so.2".as_ptr(), c"libGLESv2.so".as_ptr()] {
+                    h2 = dlopen(cand, 1);
+                    if !h2.is_null() { break; }
+                }
+            }
+        }
+        let mut egl_get = 0usize;
+        #[cfg(not(target_os = "macos"))]
+        {
+            let mut hegl = dlopen(c"libEGL.so.1".as_ptr(), 1);
+            if hegl.is_null() { hegl = dlopen(c"libEGL.so".as_ptr(), 1); }
+            if !hegl.is_null() {
+                egl_get = dlsym(hegl, c"eglGetProcAddress".as_ptr()) as usize;
+            }
+        }
+        (h1 as usize, h2 as usize, egl_get)
+    });
+    if let Ok(cstr) = std::ffi::CString::new(cname) {
+        for h in [h_v1, h_v2] {
+            if h != 0 {
+                let p = unsafe { dlsym(h as *mut c_void, cstr.as_ptr()) };
                 if !p.is_null() {
-                    break;
+                    return p as usize;
                 }
             }
         }
-        p as usize
-    }) as *mut c_void;
-    if !h.is_null() {
-        if let Some(cname) = macho_sym.strip_prefix('_') {
-            if let Ok(cstr) = std::ffi::CString::new(cname) {
-                let sym = unsafe { dlsym(h, cstr.as_ptr()) };
-                if !sym.is_null() {
-                    return sym as usize;
-                }
+        if egl_get_proc != 0 {
+            let get_proc: unsafe extern "C" fn(*const c_char) -> *mut c_void =
+                unsafe { std::mem::transmute(egl_get_proc) };
+            let p = unsafe { get_proc(cstr.as_ptr()) };
+            if !p.is_null() {
+                return p as usize;
             }
         }
     }
+    0
+}
+
+fn eagl_real_bind_fbo(target: u32, fbo: u32) {
+    let p = resolve_raw_gles_proc("glBindFramebufferOES");
+    let p = if p != 0 { p } else { resolve_raw_gles_proc("glBindFramebuffer") };
+    if p != 0 {
+        let f: extern "C" fn(u32, u32) = unsafe { std::mem::transmute(p) };
+        f(target, fbo);
+    }
+}
+
+extern "C" fn eagl_gl_bind_framebuffer_oes(target: u32, fbo: u32) {
+    EAGL_LAST_BOUND_FBO.store(fbo, std::sync::atomic::Ordering::Release);
+    let win_fbo = EAGL_WINDOW_FBO.load(std::sync::atomic::Ordering::Acquire);
+    let actual = if fbo != 0 && fbo == win_fbo { 0 } else { fbo };
+    eagl_real_bind_fbo(target, actual);
+}
+
+extern "C" fn eagl_gl_framebuffer_renderbuffer_oes(target: u32, attach: u32, rbt: u32, rbo: u32) {
+    let cur = EAGL_LAST_BOUND_FBO.load(std::sync::atomic::Ordering::Acquire);
+    let win_fbo = EAGL_WINDOW_FBO.load(std::sync::atomic::Ordering::Acquire);
+    if cur != 0 && cur == win_fbo {
+        return;
+    }
+    let p = resolve_raw_gles_proc("glFramebufferRenderbufferOES");
+    let p = if p != 0 { p } else { resolve_raw_gles_proc("glFramebufferRenderbuffer") };
+    if p != 0 {
+        let f: extern "C" fn(u32, u32, u32, u32) = unsafe { std::mem::transmute(p) };
+        f(target, attach, rbt, rbo);
+    }
+}
+
+extern "C" fn eagl_gl_check_framebuffer_status_oes(target: u32) -> u32 {
+    let cur = EAGL_LAST_BOUND_FBO.load(std::sync::atomic::Ordering::Acquire);
+    let win_fbo = EAGL_WINDOW_FBO.load(std::sync::atomic::Ordering::Acquire);
+    if cur == 0 || cur == win_fbo {
+        return 0x8CD5; // GL_FRAMEBUFFER_COMPLETE_OES
+    }
+    let p = resolve_raw_gles_proc("glCheckFramebufferStatusOES");
+    let p = if p != 0 { p } else { resolve_raw_gles_proc("glCheckFramebufferStatus") };
+    if p != 0 {
+        let f: extern "C" fn(u32) -> u32 = unsafe { std::mem::transmute(p) };
+        f(target)
+    } else {
+        0x8CD5
+    }
+}
+
+extern "C" fn eagl_gl_get_renderbuffer_param_oes(target: u32, pname: u32, params: *mut i32) {
+    if !params.is_null() {
+        let packed = EAGL_SURFACE_SIZE.load(std::sync::atomic::Ordering::Acquire);
+        let w = (packed >> 32) as i32;
+        let h = (packed & 0xFFFF_FFFF) as i32;
+        match pname {
+            0x8D42 => { unsafe { *params = w }; return; } // GL_RENDERBUFFER_WIDTH_OES
+            0x8D43 => { unsafe { *params = h }; return; } // GL_RENDERBUFFER_HEIGHT_OES
+            0x8D44 => { unsafe { *params = 0x8058 }; return; } // GL_RGBA8_OES
+            _ => {}
+        }
+    }
+    let p = resolve_raw_gles_proc("glGetRenderbufferParameterivOES");
+    let p = if p != 0 { p } else { resolve_raw_gles_proc("glGetRenderbufferParameteriv") };
+    if p != 0 {
+        let f: extern "C" fn(u32, u32, *mut i32) = unsafe { std::mem::transmute(p) };
+        f(target, pname, params);
+    }
+}
+
+fn gles_dlsym(macho_sym: &str) -> usize {
+    match macho_sym {
+        "_glBindFramebufferOES" | "_glBindFramebuffer" => return eagl_gl_bind_framebuffer_oes as *const () as usize,
+        "_glFramebufferRenderbufferOES" | "_glFramebufferRenderbuffer" => {
+            return eagl_gl_framebuffer_renderbuffer_oes as *const () as usize;
+        }
+        "_glCheckFramebufferStatusOES" | "_glCheckFramebufferStatus" => {
+            return eagl_gl_check_framebuffer_status_oes as *const () as usize;
+        }
+        "_glGetRenderbufferParameterivOES" | "_glGetRenderbufferParameteriv" => {
+            return eagl_gl_get_renderbuffer_param_oes as *const () as usize;
+        }
+        _ => {}
+    }
+    if let Some(cname) = macho_sym.strip_prefix('_') {
+        let p = resolve_raw_gles_proc(cname);
+        if p != 0 {
+            return p;
+        }
+    }
     status_ok_stub as *const () as usize
+}
+
+mod darwin_varargs {
+    use super::{Id, STDERR_STUB, STDIN_STUB, STDOUT_STUB};
+    use std::ffi::{c_char, c_int, c_void, CStr};
+
+    extern "C" {
+        fn snprintf(s: *mut c_char, n: usize, fmt: *const c_char, ...) -> c_int;
+        fn sscanf(s: *const c_char, fmt: *const c_char, ...) -> c_int;
+        fn fscanf(stream: *mut c_void, fmt: *const c_char, ...) -> c_int;
+        fn fwrite(ptr: *const c_void, size: usize, nmemb: usize, stream: *mut c_void) -> usize;
+    }
+
+    pub unsafe fn format_darwin_printf(fmt: *const c_char, mut va: *const u64) -> Vec<u8> {
+        if fmt.is_null() {
+            return Vec::new();
+        }
+        let fbytes = CStr::from_ptr(fmt).to_bytes();
+        let mut out = Vec::with_capacity(fbytes.len() + 32);
+        let mut i = 0usize;
+        let pop_u64 = |cursor: &mut *const u64| -> u64 {
+            if cursor.is_null() {
+                0
+            } else {
+                let v = **cursor;
+                *cursor = (*cursor).add(1);
+                v
+            }
+        };
+
+        while i < fbytes.len() {
+            if fbytes[i] != b'%' {
+                out.push(fbytes[i]);
+                i += 1;
+                continue;
+            }
+            if i + 1 < fbytes.len() && fbytes[i + 1] == b'%' {
+                out.push(b'%');
+                i += 2;
+                continue;
+            }
+            let start = i;
+            i += 1;
+            let mut sub = String::from("%");
+            // flags
+            while i < fbytes.len() && matches!(fbytes[i], b'-' | b'+' | b' ' | b'#' | b'0' | b'\'') {
+                sub.push(fbytes[i] as char);
+                i += 1;
+            }
+            // width
+            if i < fbytes.len() && fbytes[i] == b'*' {
+                let w = pop_u64(&mut va) as i32;
+                sub.push_str(&w.to_string());
+                i += 1;
+            } else {
+                while i < fbytes.len() && fbytes[i].is_ascii_digit() {
+                    sub.push(fbytes[i] as char);
+                    i += 1;
+                }
+            }
+            // precision
+            if i < fbytes.len() && fbytes[i] == b'.' {
+                sub.push('.');
+                i += 1;
+                if i < fbytes.len() && fbytes[i] == b'*' {
+                    let p = pop_u64(&mut va) as i32;
+                    sub.push_str(&p.to_string());
+                    i += 1;
+                } else {
+                    while i < fbytes.len() && fbytes[i].is_ascii_digit() {
+                        sub.push(fbytes[i] as char);
+                        i += 1;
+                    }
+                }
+            }
+            // length
+            let mut is_long = false;
+            if i < fbytes.len() {
+                let len_start = i;
+                while i < fbytes.len() && matches!(fbytes[i], b'h' | b'l' | b'z' | b't' | b'j' | b'L' | b'q') {
+                    sub.push(fbytes[i] as char);
+                    i += 1;
+                }
+                let lslice = &fbytes[len_start..i];
+                if lslice == b"l" || lslice == b"ll" || lslice == b"z" || lslice == b"t" || lslice == b"j" || lslice == b"q" {
+                    is_long = true;
+                }
+            }
+            if i >= fbytes.len() {
+                out.extend_from_slice(&fbytes[start..]);
+                break;
+            }
+            let conv = fbytes[i];
+            i += 1;
+            sub.push(conv as char);
+
+            if conv == b'@' {
+                let obj = pop_u64(&mut va) as Id;
+                if obj.is_null() {
+                    out.extend_from_slice(b"(null)");
+                } else if let Some(s) = pear_foundation::rust_str_from_nsstring(obj) {
+                    out.extend_from_slice(s.as_bytes());
+                } else {
+                    out.extend_from_slice(b"<object>");
+                }
+                continue;
+            }
+            if conv == b'n' {
+                let _ = pop_u64(&mut va);
+                continue;
+            }
+
+            let Ok(csub) = std::ffi::CString::new(sub) else { continue };
+            let slot = pop_u64(&mut va);
+            let mut buf = [0 as c_char; 1024];
+            let n = match conv {
+                b'd' | b'i' => {
+                    if is_long {
+                        snprintf(buf.as_mut_ptr(), buf.len(), csub.as_ptr(), slot as i64)
+                    } else {
+                        snprintf(buf.as_mut_ptr(), buf.len(), csub.as_ptr(), slot as i32)
+                    }
+                }
+                b'u' | b'o' | b'x' | b'X' => {
+                    if is_long {
+                        snprintf(buf.as_mut_ptr(), buf.len(), csub.as_ptr(), slot as u64)
+                    } else {
+                        snprintf(buf.as_mut_ptr(), buf.len(), csub.as_ptr(), slot as u32)
+                    }
+                }
+                b'p' => snprintf(buf.as_mut_ptr(), buf.len(), csub.as_ptr(), slot as *const c_void),
+                b's' => {
+                    let sptr = slot as *const c_char;
+                    if sptr.is_null() {
+                        out.extend_from_slice(b"(null)");
+                        continue;
+                    }
+                    let slen = CStr::from_ptr(sptr).to_bytes().len();
+                    if slen + 64 < buf.len() {
+                        snprintf(buf.as_mut_ptr(), buf.len(), csub.as_ptr(), sptr)
+                    } else {
+                        let mut dyn_buf = vec![0 as c_char; slen + 256];
+                        let dn = snprintf(dyn_buf.as_mut_ptr(), dyn_buf.len(), csub.as_ptr(), sptr);
+                        if dn > 0 {
+                            let take = (dn as usize).min(dyn_buf.len() - 1);
+                            out.extend_from_slice(std::slice::from_raw_parts(dyn_buf.as_ptr() as *const u8, take));
+                        }
+                        continue;
+                    }
+                }
+                b'c' => snprintf(buf.as_mut_ptr(), buf.len(), csub.as_ptr(), slot as i32),
+                b'f' | b'F' | b'e' | b'E' | b'g' | b'G' | b'a' | b'A' => {
+                    snprintf(buf.as_mut_ptr(), buf.len(), csub.as_ptr(), f64::from_bits(slot))
+                }
+                _ => {
+                    out.push(b'%');
+                    out.push(conv);
+                    continue;
+                }
+            };
+            if n > 0 {
+                let take = (n as usize).min(buf.len() - 1);
+                out.extend_from_slice(std::slice::from_raw_parts(buf.as_ptr() as *const u8, take));
+            }
+        }
+        out
+    }
+
+    pub unsafe extern "C" fn darwin_vsnprintf(
+        dst: *mut c_char,
+        size: usize,
+        fmt: *const c_char,
+        ap: *const u64,
+    ) -> c_int {
+        let out = format_darwin_printf(fmt, ap);
+        if !dst.is_null() && size > 0 {
+            let copy_len = out.len().min(size - 1);
+            if copy_len > 0 {
+                std::ptr::copy_nonoverlapping(out.as_ptr(), dst as *mut u8, copy_len);
+            }
+            *dst.add(copy_len) = 0;
+        }
+        out.len() as c_int
+    }
+
+    pub unsafe extern "C" fn darwin_vsprintf(
+        dst: *mut c_char,
+        fmt: *const c_char,
+        ap: *const u64,
+    ) -> c_int {
+        darwin_vsnprintf(dst, usize::MAX / 2, fmt, ap)
+    }
+
+    pub unsafe extern "C" fn darwin_vsnprintf_chk(
+        dst: *mut c_char,
+        size: usize,
+        _flag: c_int,
+        _objlen: usize,
+        fmt: *const c_char,
+        ap: *const u64,
+    ) -> c_int {
+        darwin_vsnprintf(dst, size, fmt, ap)
+    }
+
+    pub unsafe extern "C" fn darwin_vsprintf_chk(
+        dst: *mut c_char,
+        _flag: c_int,
+        objlen: usize,
+        fmt: *const c_char,
+        ap: *const u64,
+    ) -> c_int {
+        let cap = if objlen == 0 { usize::MAX / 2 } else { objlen };
+        darwin_vsnprintf(dst, cap, fmt, ap)
+    }
+
+    pub unsafe extern "C" fn darwin_vprintf(fmt: *const c_char, ap: *const u64) -> c_int {
+        let out = format_darwin_printf(fmt, ap);
+        use std::io::Write;
+        let _ = std::io::stdout().write_all(&out);
+        out.len() as c_int
+    }
+
+    pub unsafe extern "C" fn darwin_vfprintf(
+        stream: *mut c_void,
+        fmt: *const c_char,
+        ap: *const u64,
+    ) -> c_int {
+        let out = format_darwin_printf(fmt, ap);
+        use std::io::Write;
+        if stream.is_null() || stream == (&raw const STDERR_STUB) as *mut c_void {
+            let _ = std::io::stderr().write_all(&out);
+        } else if stream == (&raw const STDOUT_STUB) as *mut c_void {
+            let _ = std::io::stdout().write_all(&out);
+        } else {
+            let _ = fwrite(out.as_ptr() as *const c_void, 1, out.len(), stream);
+        }
+        out.len() as c_int
+    }
+
+    unsafe fn count_scanf_outputs(fmt: *const c_char) -> usize {
+        if fmt.is_null() { return 0; }
+        let b = CStr::from_ptr(fmt).to_bytes();
+        let mut i = 0;
+        let mut count = 0;
+        while i < b.len() {
+            if b[i] == b'%' {
+                i += 1;
+                if i < b.len() && b[i] == b'%' {
+                    i += 1;
+                    continue;
+                }
+                let suppressed = i < b.len() && b[i] == b'*';
+                if suppressed { i += 1; }
+                while i < b.len() && (b[i].is_ascii_digit() || matches!(b[i], b'h' | b'l' | b'z' | b't' | b'j' | b'L' | b'q')) {
+                    i += 1;
+                }
+                if i < b.len() && b[i] == b'[' {
+                    i += 1;
+                    if i < b.len() && b[i] == b'^' { i += 1; }
+                    if i < b.len() && b[i] == b']' { i += 1; }
+                    while i < b.len() && b[i] != b']' { i += 1; }
+                }
+                if i < b.len() {
+                    if !suppressed && b[i] != b'n' {
+                        count += 1;
+                    }
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+        count
+    }
+
+    pub unsafe extern "C" fn darwin_sscanf_va(
+        src: *const c_char,
+        fmt: *const c_char,
+        va: *const *mut c_void,
+    ) -> c_int {
+        let n = count_scanf_outputs(fmt).min(8);
+        let arg = |idx: usize| if idx < n && !va.is_null() { *va.add(idx) } else { std::ptr::null_mut() };
+        match n {
+            0 => sscanf(src, fmt),
+            1 => sscanf(src, fmt, arg(0)),
+            2 => sscanf(src, fmt, arg(0), arg(1)),
+            3 => sscanf(src, fmt, arg(0), arg(1), arg(2)),
+            4 => sscanf(src, fmt, arg(0), arg(1), arg(2), arg(3)),
+            5 => sscanf(src, fmt, arg(0), arg(1), arg(2), arg(3), arg(4)),
+            6 => sscanf(src, fmt, arg(0), arg(1), arg(2), arg(3), arg(4), arg(5)),
+            _ => sscanf(src, fmt, arg(0), arg(1), arg(2), arg(3), arg(4), arg(5), arg(6), arg(7)),
+        }
+    }
+
+    pub unsafe extern "C" fn darwin_fscanf_va(
+        stream: *mut c_void,
+        fmt: *const c_char,
+        va: *const *mut c_void,
+    ) -> c_int {
+        if stream.is_null() || stream == (&raw const STDIN_STUB) as *mut c_void {
+            return -1;
+        }
+        let n = count_scanf_outputs(fmt).min(8);
+        let arg = |idx: usize| if idx < n && !va.is_null() { *va.add(idx) } else { std::ptr::null_mut() };
+        match n {
+            0 => fscanf(stream, fmt),
+            1 => fscanf(stream, fmt, arg(0)),
+            2 => fscanf(stream, fmt, arg(0), arg(1)),
+            3 => fscanf(stream, fmt, arg(0), arg(1), arg(2)),
+            4 => fscanf(stream, fmt, arg(0), arg(1), arg(2), arg(3)),
+            5 => fscanf(stream, fmt, arg(0), arg(1), arg(2), arg(3), arg(4)),
+            6 => fscanf(stream, fmt, arg(0), arg(1), arg(2), arg(3), arg(4), arg(5)),
+            _ => fscanf(stream, fmt, arg(0), arg(1), arg(2), arg(3), arg(4), arg(5), arg(6), arg(7)),
+        }
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    #[unsafe(naked)]
+    pub unsafe extern "C" fn darwin_snprintf() -> ! {
+        core::arch::naked_asm!("mov x3, sp", "b {dst}", dst = sym darwin_vsnprintf);
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    #[unsafe(naked)]
+    pub unsafe extern "C" fn darwin_sprintf() -> ! {
+        core::arch::naked_asm!("mov x2, sp", "b {dst}", dst = sym darwin_vsprintf);
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    #[unsafe(naked)]
+    pub unsafe extern "C" fn darwin_sprintf_chk() -> ! {
+        core::arch::naked_asm!("mov x4, sp", "b {dst}", dst = sym darwin_vsprintf_chk);
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    #[unsafe(naked)]
+    pub unsafe extern "C" fn darwin_snprintf_chk() -> ! {
+        core::arch::naked_asm!("mov x5, sp", "b {dst}", dst = sym darwin_vsnprintf_chk);
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    #[unsafe(naked)]
+    pub unsafe extern "C" fn darwin_printf() -> ! {
+        core::arch::naked_asm!("mov x1, sp", "b {dst}", dst = sym darwin_vprintf);
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    #[unsafe(naked)]
+    pub unsafe extern "C" fn darwin_fprintf() -> ! {
+        core::arch::naked_asm!("mov x2, sp", "b {dst}", dst = sym darwin_vfprintf);
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    #[unsafe(naked)]
+    pub unsafe extern "C" fn darwin_sscanf() -> ! {
+        core::arch::naked_asm!("mov x2, sp", "b {dst}", dst = sym darwin_sscanf_va);
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    #[unsafe(naked)]
+    pub unsafe extern "C" fn darwin_fscanf() -> ! {
+        core::arch::naked_asm!("mov x2, sp", "b {dst}", dst = sym darwin_fscanf_va);
+    }
 }
 
 fn libc_dlsym(macho_sym: &str) -> Option<usize> {
@@ -674,11 +1872,396 @@ extern "C" fn acosf_impl(x: f32) -> f32 { x.acos() }
 extern "C" fn asinf_impl(x: f32) -> f32 { x.asin() }
 extern "C" fn atan2f_impl(y: f32, x: f32) -> f32 { y.atan2(x) }
 extern "C" fn cxa_atexit_noop(_f: *const c_void, _arg: *const c_void, _dso: *const c_void) -> i32 { 0 }
+static MAIN_IMAGE_HEADER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static MAIN_IMAGE_SLIDE: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
 extern "C" fn dyld_image_count_stub() -> u32 { 1 }
+extern "C" fn dyld_get_image_header_stub(idx: u32) -> *const c_void {
+    if idx == 0 {
+        MAIN_IMAGE_HEADER.load(std::sync::atomic::Ordering::Acquire) as *const c_void
+    } else {
+        std::ptr::null()
+    }
+}
+extern "C" fn dyld_get_image_vmaddr_slide_stub(idx: u32) -> isize {
+    if idx == 0 {
+        MAIN_IMAGE_SLIDE.load(std::sync::atomic::Ordering::Acquire)
+    } else {
+        0
+    }
+}
 extern "C" fn dyld_get_image_name_stub(_idx: u32) -> *const c_char { c"PearGuest".as_ptr() }
 
+mod darwin_pthread {
+    use std::collections::HashMap;
+    use std::ffi::{c_int, c_void};
+    use std::sync::{Arc, Condvar, Mutex, OnceLock};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    const DARWIN_MUTEX_RECURSIVE_SIG: u32 = 0x32AA_ABA2;
+    const DARWIN_PTHREAD_MUTEX_RECURSIVE: c_int = 2;
+    const DARWIN_PTHREAD_CREATE_DETACHED: c_int = 2;
+    const LINUX_EBUSY: c_int = 16;
+    const LINUX_EINVAL: c_int = 22;
+    const LINUX_ETIMEDOUT: c_int = 110;
+
+    #[repr(C)]
+    pub struct DarwinTimespec {
+        pub tv_sec: i64,
+        pub tv_nsec: i64,
+    }
+
+    struct MtxState {
+        owner: Option<std::thread::ThreadId>,
+        depth: usize,
+        recursive: bool,
+    }
+
+    type MtxEntry = Arc<(Mutex<MtxState>, Condvar)>;
+    type CondEntry = Arc<(Mutex<u64>, Condvar)>;
+
+    fn mutexes() -> &'static Mutex<HashMap<usize, MtxEntry>> {
+        static M: OnceLock<Mutex<HashMap<usize, MtxEntry>>> = OnceLock::new();
+        M.get_or_init(Default::default)
+    }
+    fn mutex_attrs() -> &'static Mutex<HashMap<usize, bool>> {
+        static M: OnceLock<Mutex<HashMap<usize, bool>>> = OnceLock::new();
+        M.get_or_init(Default::default)
+    }
+    fn conds() -> &'static Mutex<HashMap<usize, CondEntry>> {
+        static M: OnceLock<Mutex<HashMap<usize, CondEntry>>> = OnceLock::new();
+        M.get_or_init(Default::default)
+    }
+    fn thread_attrs() -> &'static Mutex<HashMap<usize, bool>> {
+        static M: OnceLock<Mutex<HashMap<usize, bool>>> = OnceLock::new();
+        M.get_or_init(Default::default)
+    }
+
+    unsafe fn get_or_init_mutex(ptr: *const c_void) -> MtxEntry {
+        let key = ptr as usize;
+        let mut g = mutexes().lock().unwrap();
+        if let Some(e) = g.get(&key) {
+            return e.clone();
+        }
+        let sig = if ptr.is_null() { 0 } else { *(ptr as *const u32) };
+        let rec = sig == DARWIN_MUTEX_RECURSIVE_SIG;
+        let entry = Arc::new((
+            Mutex::new(MtxState {
+                owner: None,
+                depth: 0,
+                recursive: rec,
+            }),
+            Condvar::new(),
+        ));
+        g.insert(key, entry.clone());
+        entry
+    }
+
+    fn get_or_init_cond(ptr: *const c_void) -> CondEntry {
+        let key = ptr as usize;
+        let mut g = conds().lock().unwrap();
+        g.entry(key)
+            .or_insert_with(|| Arc::new((Mutex::new(0u64), Condvar::new())))
+            .clone()
+    }
+
+    pub unsafe extern "C" fn mutexattr_init(attr: *mut c_void) -> c_int {
+        if attr.is_null() { return LINUX_EINVAL; }
+        mutex_attrs().lock().unwrap().insert(attr as usize, false);
+        0
+    }
+    pub unsafe extern "C" fn mutexattr_destroy(attr: *mut c_void) -> c_int {
+        if !attr.is_null() {
+            mutex_attrs().lock().unwrap().remove(&(attr as usize));
+        }
+        0
+    }
+    pub unsafe extern "C" fn mutexattr_settype(attr: *mut c_void, kind: c_int) -> c_int {
+        if attr.is_null() { return LINUX_EINVAL; }
+        mutex_attrs()
+            .lock()
+            .unwrap()
+            .insert(attr as usize, kind == DARWIN_PTHREAD_MUTEX_RECURSIVE);
+        0
+    }
+
+    pub unsafe extern "C" fn mutex_init(mtx: *mut c_void, attr: *const c_void) -> c_int {
+        if mtx.is_null() { return LINUX_EINVAL; }
+        let rec = if attr.is_null() {
+            false
+        } else {
+            mutex_attrs().lock().unwrap().get(&(attr as usize)).copied().unwrap_or(false)
+        };
+        let entry = Arc::new((
+            Mutex::new(MtxState {
+                owner: None,
+                depth: 0,
+                recursive: rec,
+            }),
+            Condvar::new(),
+        ));
+        mutexes().lock().unwrap().insert(mtx as usize, entry);
+        0
+    }
+    pub unsafe extern "C" fn mutex_destroy(mtx: *mut c_void) -> c_int {
+        if !mtx.is_null() {
+            mutexes().lock().unwrap().remove(&(mtx as usize));
+        }
+        0
+    }
+    pub unsafe extern "C" fn mutex_lock(mtx: *mut c_void) -> c_int {
+        if mtx.is_null() { return LINUX_EINVAL; }
+        let entry = get_or_init_mutex(mtx);
+        let me = std::thread::current().id();
+        let mut st = entry.0.lock().unwrap();
+        while let Some(owner) = st.owner {
+            if owner == me && st.recursive {
+                st.depth += 1;
+                return 0;
+            }
+            st = entry.1.wait(st).unwrap();
+        }
+        st.owner = Some(me);
+        st.depth = 1;
+        0
+    }
+    pub unsafe extern "C" fn mutex_trylock(mtx: *mut c_void) -> c_int {
+        if mtx.is_null() { return LINUX_EINVAL; }
+        let entry = get_or_init_mutex(mtx);
+        let me = std::thread::current().id();
+        let mut st = entry.0.lock().unwrap();
+        match st.owner {
+            None => {
+                st.owner = Some(me);
+                st.depth = 1;
+                0
+            }
+            Some(owner) if owner == me && st.recursive => {
+                st.depth += 1;
+                0
+            }
+            _ => LINUX_EBUSY,
+        }
+    }
+    pub unsafe extern "C" fn mutex_unlock(mtx: *mut c_void) -> c_int {
+        if mtx.is_null() { return LINUX_EINVAL; }
+        let entry = get_or_init_mutex(mtx);
+        let me = std::thread::current().id();
+        let mut st = entry.0.lock().unwrap();
+        if st.owner == Some(me) {
+            if st.depth > 1 {
+                st.depth -= 1;
+            } else {
+                st.owner = None;
+                st.depth = 0;
+                entry.1.notify_one();
+            }
+        }
+        0
+    }
+
+    pub unsafe extern "C" fn cond_init(cond: *mut c_void, _attr: *const c_void) -> c_int {
+        if cond.is_null() { return LINUX_EINVAL; }
+        let _ = get_or_init_cond(cond);
+        0
+    }
+    pub unsafe extern "C" fn cond_destroy(cond: *mut c_void) -> c_int {
+        if !cond.is_null() {
+            conds().lock().unwrap().remove(&(cond as usize));
+        }
+        0
+    }
+    pub unsafe extern "C" fn cond_signal(cond: *mut c_void) -> c_int {
+        if cond.is_null() { return LINUX_EINVAL; }
+        let c = get_or_init_cond(cond);
+        let mut g = c.0.lock().unwrap();
+        *g = g.wrapping_add(1);
+        c.1.notify_one();
+        0
+    }
+    pub unsafe extern "C" fn cond_broadcast(cond: *mut c_void) -> c_int {
+        if cond.is_null() { return LINUX_EINVAL; }
+        let c = get_or_init_cond(cond);
+        let mut g = c.0.lock().unwrap();
+        *g = g.wrapping_add(1);
+        c.1.notify_all();
+        0
+    }
+    unsafe fn cond_wait_common(cond: *mut c_void, mtx: *mut c_void, abs_ts: Option<&DarwinTimespec>) -> c_int {
+        if cond.is_null() || mtx.is_null() { return LINUX_EINVAL; }
+        let c = get_or_init_cond(cond);
+        let m = get_or_init_mutex(mtx);
+        let me = std::thread::current().id();
+
+        let mut cg = c.0.lock().unwrap();
+        let start_seq = *cg;
+        let saved_depth = {
+            let mut st = m.0.lock().unwrap();
+            let d = if st.owner == Some(me) { st.depth.max(1) } else { 1 };
+            st.owner = None;
+            st.depth = 0;
+            m.1.notify_one();
+            d
+        };
+
+        let mut timed_out = false;
+        if let Some(ts) = abs_ts {
+            let target = UNIX_EPOCH + Duration::new(ts.tv_sec.max(0) as u64, ts.tv_nsec.clamp(0, 999_999_999) as u32);
+            loop {
+                if *cg != start_seq { break; }
+                let now = SystemTime::now();
+                let Ok(rem) = target.duration_since(now) else {
+                    timed_out = true;
+                    break;
+                };
+                let (next_g, res) = c.1.wait_timeout(cg, rem).unwrap();
+                cg = next_g;
+                if *cg != start_seq { break; }
+                if res.timed_out() {
+                    timed_out = true;
+                    break;
+                }
+            }
+        } else {
+            while *cg == start_seq {
+                cg = c.1.wait(cg).unwrap();
+            }
+        }
+        drop(cg);
+
+        let mut st = m.0.lock().unwrap();
+        while st.owner.is_some() {
+            st = m.1.wait(st).unwrap();
+        }
+        st.owner = Some(me);
+        st.depth = saved_depth;
+        if timed_out { LINUX_ETIMEDOUT } else { 0 }
+    }
+    pub unsafe extern "C" fn cond_wait(cond: *mut c_void, mtx: *mut c_void) -> c_int {
+        cond_wait_common(cond, mtx, None)
+    }
+    pub unsafe extern "C" fn cond_timedwait(
+        cond: *mut c_void,
+        mtx: *mut c_void,
+        abstime: *const DarwinTimespec,
+    ) -> c_int {
+        let ts = if abstime.is_null() { None } else { Some(&*abstime) };
+        cond_wait_common(cond, mtx, ts)
+    }
+
+    pub unsafe extern "C" fn attr_init(attr: *mut c_void) -> c_int {
+        if attr.is_null() { return LINUX_EINVAL; }
+        thread_attrs().lock().unwrap().insert(attr as usize, false);
+        0
+    }
+    pub unsafe extern "C" fn attr_destroy(attr: *mut c_void) -> c_int {
+        if !attr.is_null() {
+            thread_attrs().lock().unwrap().remove(&(attr as usize));
+        }
+        0
+    }
+    pub unsafe extern "C" fn attr_setdetachstate(attr: *mut c_void, state: c_int) -> c_int {
+        if attr.is_null() { return LINUX_EINVAL; }
+        thread_attrs()
+            .lock()
+            .unwrap()
+            .insert(attr as usize, state == DARWIN_PTHREAD_CREATE_DETACHED);
+        0
+    }
+
+    extern "C" {
+        #[link_name = "pthread_create"]
+        fn real_pthread_create(
+            thread: *mut usize,
+            attr: *const c_void,
+            start: extern "C" fn(*mut c_void) -> *mut c_void,
+            arg: *mut c_void,
+        ) -> c_int;
+        #[link_name = "pthread_attr_init"]
+        fn real_attr_init(attr: *mut c_void) -> c_int;
+        #[link_name = "pthread_attr_setdetachstate"]
+        fn real_attr_setdetachstate(attr: *mut c_void, state: c_int) -> c_int;
+        #[link_name = "pthread_attr_destroy"]
+        fn real_attr_destroy(attr: *mut c_void) -> c_int;
+    }
+
+    pub unsafe extern "C" fn thread_create(
+        thread: *mut usize,
+        attr: *const c_void,
+        start: extern "C" fn(*mut c_void) -> *mut c_void,
+        arg: *mut c_void,
+    ) -> c_int {
+        let detached = if attr.is_null() {
+            false
+        } else {
+            thread_attrs().lock().unwrap().get(&(attr as usize)).copied().unwrap_or(false)
+        };
+        if detached {
+            let mut linux_attr = [0usize; 16];
+            real_attr_init(linux_attr.as_mut_ptr() as *mut c_void);
+            real_attr_setdetachstate(linux_attr.as_mut_ptr() as *mut c_void, 1);
+            let rc = real_pthread_create(thread, linux_attr.as_ptr() as *const c_void, start, arg);
+            real_attr_destroy(linux_attr.as_mut_ptr() as *mut c_void);
+            rc
+        } else {
+            real_pthread_create(thread, std::ptr::null(), start, arg)
+        }
+    }
+}
+
 static DISPATCH_MAIN_Q: [usize; 16] = [0; 16];
-static DEFAULT_RUNE_LOCALE: [u8; 4096] = [0; 4096];
+const fn darwin_ascii_runetype(c: u8) -> u32 {
+    match c {
+        9 => 0x24200,
+        10..=13 => 0x4200,
+        0..=31 | 127 => 0x200,
+        32 => 0x64000,
+        b'0'..=b'9' => 0x50c00 | ((c - b'0') as u32),
+        b'A'..=b'Z' => {
+            0x48900 | if c <= b'F' { 0x10000 | ((c - b'A' + 10) as u32) } else { 0 }
+        }
+        b'a'..=b'z' => {
+            0x41900 | if c <= b'f' { 0x10000 | ((c - b'a' + 10) as u32) } else { 0 }
+        }
+        33..=126 => 0x42800,
+        _ => 0,
+    }
+}
+
+const fn build_default_rune_locale() -> [u8; 4096] {
+    let mut buf = [0u8; 4096];
+    let mut i = 0usize;
+    while i < 256 {
+        let rt = if i < 128 { darwin_ascii_runetype(i as u8) } else { 0 };
+        let rt_bytes = rt.to_le_bytes();
+        let rt_off = 60 + i * 4;
+        buf[rt_off] = rt_bytes[0];
+        buf[rt_off + 1] = rt_bytes[1];
+        buf[rt_off + 2] = rt_bytes[2];
+        buf[rt_off + 3] = rt_bytes[3];
+
+        let lo = if i >= b'A' as usize && i <= b'Z' as usize { (i + 32) as u32 } else { i as u32 };
+        let lo_bytes = lo.to_le_bytes();
+        let lo_off = 1084 + i * 4;
+        buf[lo_off] = lo_bytes[0];
+        buf[lo_off + 1] = lo_bytes[1];
+        buf[lo_off + 2] = lo_bytes[2];
+        buf[lo_off + 3] = lo_bytes[3];
+
+        let up = if i >= b'a' as usize && i <= b'z' as usize { (i - 32) as u32 } else { i as u32 };
+        let up_bytes = up.to_le_bytes();
+        let up_off = 2108 + i * 4;
+        buf[up_off] = up_bytes[0];
+        buf[up_off + 1] = up_bytes[1];
+        buf[up_off + 2] = up_bytes[2];
+        buf[up_off + 3] = up_bytes[3];
+
+        i += 1;
+    }
+    buf
+}
+
+static DEFAULT_RUNE_LOCALE: [u8; 4096] = build_default_rune_locale();
 static mut STDIN_STUB: usize = 0;
 static mut STDOUT_STUB: usize = 0;
 static mut STDERR_STUB: usize = 0;
@@ -711,16 +2294,474 @@ extern "C" fn dispatch_get_global_queue_impl(_id: isize, _flags: usize) -> *cons
     &raw const DISPATCH_MAIN_Q as *const c_void
 }
 
+static DISPATCH_QUEUE_ATTR_STUB: [usize; 4] = [0; 4];
+static OS_LOG_STUB: [usize; 4] = [0; 4];
+
+extern "C" fn dispatch_queue_create_impl(_label: *const c_char, _attr: *const c_void) -> *const c_void {
+    &raw const DISPATCH_MAIN_Q as *const c_void
+}
+extern "C" fn dispatch_queue_attr_qos_impl(attr: *const c_void, _qos: u32, _prio: i32) -> *const c_void {
+    if attr.is_null() { &raw const DISPATCH_QUEUE_ATTR_STUB as *const c_void } else { attr }
+}
+extern "C" fn dispatch_queue_get_label_impl(_q: *const c_void) -> *const c_char {
+    c"com.pear.main".as_ptr()
+}
+extern "C" fn dispatch_group_create_impl() -> *const c_void {
+    &raw const DISPATCH_MAIN_Q as *const c_void
+}
+extern "C" fn dispatch_group_async_impl(_g: *mut c_void, q: *mut c_void, block: *mut c_void) {
+    dispatch_sync_impl(q, block);
+}
+extern "C" fn dispatch_group_wait_impl(_g: *mut c_void, _timeout: u64) -> isize { 0 }
+extern "C" fn dispatch_after_impl(_when: u64, q: *mut c_void, block: *mut c_void) {
+    let _ = (q, block);
+}
+extern "C" fn dispatch_time_impl(when: u64, delta: i64) -> u64 {
+    if delta >= 0 { when.saturating_add(delta as u64) } else { when.saturating_sub((-delta) as u64) }
+}
+extern "C" fn dispatch_semaphore_create_impl(_val: isize) -> *const c_void {
+    &raw const DISPATCH_MAIN_Q as *const c_void
+}
+extern "C" fn dispatch_semaphore_signal_impl(_sem: *mut c_void) -> isize { 1 }
+extern "C" fn dispatch_semaphore_wait_impl(_sem: *mut c_void, _timeout: u64) -> isize { 0 }
+extern "C" fn dispatch_block_create_impl(_flags: usize, block: *mut c_void) -> *mut c_void { block }
+extern "C" fn dispatch_source_create_impl(_t: *const c_void, _h: usize, _m: usize, _q: *const c_void) -> *const c_void {
+    &raw const DISPATCH_MAIN_Q as *const c_void
+}
+extern "C" fn dispatch_noop_1(_a: *mut c_void) {}
+extern "C" fn dispatch_noop_2(_a: *mut c_void, _b: *mut c_void) {}
+extern "C" fn dispatch_source_testcancel_impl(_s: *const c_void) -> isize { 0 }
+extern "C" fn os_log_create_impl(_sub: *const c_char, _cat: *const c_char) -> *const c_void {
+    &raw const OS_LOG_STUB as *const c_void
+}
+extern "C" fn os_log_type_enabled_impl(_log: *const c_void, _t: u8) -> bool { false }
+extern "C" fn os_unfair_lock_noop(_lock: *mut c_void) {}
+extern "C" fn sec_item_not_found() -> i32 { -25300 }
+extern "C" fn asl_open_stub(_ident: *const c_char, _facility: *const c_char, _opts: u32) -> *const c_void {
+    &raw const OS_LOG_STUB as *const c_void
+}
+extern "C" fn asl_ok_stub() -> i32 { 0 }
+
+extern "C" fn cxx_new(sz: usize) -> *mut c_void {
+    unsafe { malloc(sz.max(1)) }
+}
+extern "C" fn cxx_delete(ptr: *mut c_void) {
+    if !ptr.is_null() {
+        unsafe { free(ptr) };
+    }
+}
+extern "C" fn cxa_guard_acquire(guard: *mut u64) -> i32 {
+    if guard.is_null() { return 0; }
+    unsafe {
+        if (*guard & 0xFF) == 0 { 1 } else { 0 }
+    }
+}
+extern "C" fn cxa_guard_release(guard: *mut u64) {
+    if !guard.is_null() {
+        unsafe { *guard = 1 };
+    }
+}
+extern "C" fn cxa_guard_abort(_guard: *mut u64) {}
+extern "C" fn cxa_pure_virtual_trap() -> ! {
+    eprintln!("[pear-runtime] __cxa_pure_virtual reached");
+    std::process::abort()
+}
+
+/// Apple ARM64 libc++ (`_LIBCPP_ABI_ALTERNATE_STRING_LAYOUT`) runtime support.
+/// Matches Darwin's 24-byte `std::__1::basic_string<char>` ABI (byte 23 bit 7 = long flag)
+/// rather than Linux libc++'s default short-string layout (byte 0 bit 0 = long flag).
+mod apple_libcxx {
+    use std::collections::HashMap;
+    use std::ffi::{c_char, c_int, c_void, CStr};
+    use std::sync::{Condvar, Mutex, OnceLock};
+
+    extern "C" {
+        fn malloc(size: usize) -> *mut c_void;
+        fn free(ptr: *mut c_void);
+    }
+
+    const LONG_FLAG: u8 = 0x80;
+    const LONG_CAP_MASK: usize = 1usize << 63;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct AppleString {
+        pub words: [usize; 3],
+    }
+
+    #[inline]
+    unsafe fn is_long(s: *const u8) -> bool {
+        (*s.add(23) & LONG_FLAG) != 0
+    }
+
+    #[inline]
+    unsafe fn read_slice<'a>(s: *const AppleString) -> &'a [u8] {
+        let p = s as *const u8;
+        if is_long(p) {
+            let ptr = *(s as *const *const u8);
+            let len = *((s as *const usize).add(1));
+            if ptr.is_null() || len == 0 {
+                &[]
+            } else {
+                std::slice::from_raw_parts(ptr, len)
+            }
+        } else {
+            let len = (*p.add(23) & 0x7F) as usize;
+            std::slice::from_raw_parts(p, len.min(22))
+        }
+    }
+
+    #[inline]
+    unsafe fn cap_of(s: *const AppleString) -> usize {
+        let p = s as *const u8;
+        if is_long(p) {
+            let raw_cap = *((s as *const usize).add(2));
+            (raw_cap & !LONG_CAP_MASK).saturating_sub(1)
+        } else {
+            22
+        }
+    }
+
+    unsafe fn set_bytes(s: *mut AppleString, bytes: &[u8]) {
+        let old_p = s as *mut u8;
+        let old_long = is_long(old_p);
+        let old_ptr = if old_long { *(s as *const *mut u8) } else { std::ptr::null_mut() };
+        let old_cap = if old_long {
+            (*((s as *const usize).add(2)) & !LONG_CAP_MASK).saturating_sub(1)
+        } else {
+            22
+        };
+
+        if bytes.len() <= 22 && !old_long {
+            std::ptr::write_bytes(old_p, 0, 24);
+            if !bytes.is_empty() {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), old_p, bytes.len());
+            }
+            *old_p.add(23) = bytes.len() as u8;
+            return;
+        }
+
+        if old_long && bytes.len() <= old_cap && !old_ptr.is_null() {
+            if !bytes.is_empty() {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), old_ptr, bytes.len());
+            }
+            *old_ptr.add(bytes.len()) = 0;
+            *((s as *mut usize).add(1)) = bytes.len();
+            return;
+        }
+
+        let need = bytes.len() + 1;
+        let alloc_cap = need.max(32).next_power_of_two();
+        let buf = malloc(alloc_cap) as *mut u8;
+        if !buf.is_null() {
+            if !bytes.is_empty() {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+            }
+            *buf.add(bytes.len()) = 0;
+        }
+        if old_long && !old_ptr.is_null() {
+            free(old_ptr as *mut c_void);
+        }
+        let words = s as *mut usize;
+        *words.add(0) = buf as usize;
+        *words.add(1) = bytes.len();
+        *words.add(2) = alloc_cap | LONG_CAP_MASK;
+    }
+
+    pub unsafe extern "C" fn str_copy_ctor(this: *mut AppleString, other: *const AppleString) -> *mut AppleString {
+        std::ptr::write_bytes(this as *mut u8, 0, 24);
+        let data = if other.is_null() { Vec::new() } else { read_slice(other).to_vec() };
+        set_bytes(this, &data);
+        this
+    }
+
+    pub unsafe extern "C" fn str_substr_ctor(
+        this: *mut AppleString,
+        other: *const AppleString,
+        pos: usize,
+        n: usize,
+        _alloc: *const c_void,
+    ) -> *mut AppleString {
+        std::ptr::write_bytes(this as *mut u8, 0, 24);
+        let slice = if other.is_null() { &[] } else { read_slice(other) };
+        let start = pos.min(slice.len());
+        let end = start.saturating_add(n).min(slice.len());
+        let copy = slice[start..end].to_vec();
+        set_bytes(this, &copy);
+        this
+    }
+
+    pub unsafe extern "C" fn str_dtor(this: *mut AppleString) -> *mut AppleString {
+        if !this.is_null() && is_long(this as *const u8) {
+            let ptr = *(this as *const *mut c_void);
+            if !ptr.is_null() {
+                free(ptr);
+            }
+            std::ptr::write_bytes(this as *mut u8, 0, 24);
+        }
+        this
+    }
+
+    pub unsafe extern "C" fn str_assign_str(this: *mut AppleString, other: *const AppleString) -> *mut AppleString {
+        if this == other as *mut AppleString || other.is_null() {
+            return this;
+        }
+        let data = read_slice(other).to_vec();
+        set_bytes(this, &data);
+        this
+    }
+
+    pub unsafe extern "C" fn str_assign_char(this: *mut AppleString, ch: c_char) -> *mut AppleString {
+        let b = [ch as u8];
+        set_bytes(this, &b);
+        this
+    }
+
+    pub unsafe extern "C" fn str_assign_cstr(this: *mut AppleString, s: *const c_char) -> *mut AppleString {
+        let data = if s.is_null() { &[][..] } else { CStr::from_ptr(s).to_bytes() }.to_vec();
+        set_bytes(this, &data);
+        this
+    }
+
+    pub unsafe extern "C" fn str_assign_cstr_n(this: *mut AppleString, s: *const c_char, n: usize) -> *mut AppleString {
+        let data = if s.is_null() || n == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(s as *const u8, n).to_vec()
+        };
+        set_bytes(this, &data);
+        this
+    }
+
+    pub unsafe extern "C" fn str_append_cstr(this: *mut AppleString, s: *const c_char) -> *mut AppleString {
+        let tail = if s.is_null() { &[][..] } else { CStr::from_ptr(s).to_bytes() };
+        let mut buf = read_slice(this).to_vec();
+        buf.extend_from_slice(tail);
+        set_bytes(this, &buf);
+        this
+    }
+
+    pub unsafe extern "C" fn str_append_cstr_n(this: *mut AppleString, s: *const c_char, n: usize) -> *mut AppleString {
+        let tail = if s.is_null() || n == 0 {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(s as *const u8, n)
+        };
+        let mut buf = read_slice(this).to_vec();
+        buf.extend_from_slice(tail);
+        set_bytes(this, &buf);
+        this
+    }
+
+    pub unsafe extern "C" fn str_push_back(this: *mut AppleString, ch: c_char) {
+        let mut buf = read_slice(this).to_vec();
+        buf.push(ch as u8);
+        set_bytes(this, &buf);
+    }
+
+    pub unsafe extern "C" fn str_erase(this: *mut AppleString, pos: usize, n: usize) -> *mut AppleString {
+        let cur = read_slice(this);
+        let start = pos.min(cur.len());
+        let end = start.saturating_add(n).min(cur.len());
+        let mut out = Vec::with_capacity(cur.len() - (end - start));
+        out.extend_from_slice(&cur[..start]);
+        out.extend_from_slice(&cur[end..]);
+        set_bytes(this, &out);
+        this
+    }
+
+    pub unsafe extern "C" fn str_resize(this: *mut AppleString, n: usize, ch: c_char) {
+        let mut cur = read_slice(this).to_vec();
+        cur.resize(n, ch as u8);
+        set_bytes(this, &cur);
+    }
+
+    pub unsafe extern "C" fn str_reserve(this: *mut AppleString, new_cap: usize) {
+        if new_cap <= cap_of(this) {
+            return;
+        }
+        let cur = read_slice(this).to_vec();
+        let alloc_cap = (new_cap + 1).next_power_of_two();
+        let buf = malloc(alloc_cap) as *mut u8;
+        if !buf.is_null() {
+            if !cur.is_empty() {
+                std::ptr::copy_nonoverlapping(cur.as_ptr(), buf, cur.len());
+            }
+            *buf.add(cur.len()) = 0;
+        }
+        if is_long(this as *const u8) {
+            let old = *(this as *const *mut c_void);
+            if !old.is_null() {
+                free(old);
+            }
+        }
+        let words = this as *mut usize;
+        *words.add(0) = buf as usize;
+        *words.add(1) = cur.len();
+        *words.add(2) = alloc_cap | LONG_CAP_MASK;
+    }
+
+    pub unsafe extern "C" fn str_find_char(this: *const AppleString, ch: c_char, pos: usize) -> usize {
+        let s = read_slice(this);
+        if pos >= s.len() {
+            return usize::MAX;
+        }
+        s[pos..].iter().position(|&b| b == ch as u8).map_or(usize::MAX, |i| pos + i)
+    }
+
+    pub unsafe extern "C" fn str_rfind_char(this: *const AppleString, ch: c_char, pos: usize) -> usize {
+        let s = read_slice(this);
+        if s.is_empty() {
+            return usize::MAX;
+        }
+        let limit = pos.min(s.len() - 1);
+        s[..=limit].iter().rposition(|&b| b == ch as u8).unwrap_or(usize::MAX)
+    }
+
+    pub unsafe extern "C" fn str_compare_cstr(this: *const AppleString, rhs: *const c_char) -> c_int {
+        let a = read_slice(this);
+        let b = if rhs.is_null() { &[][..] } else { CStr::from_ptr(rhs).to_bytes() };
+        match a.cmp(b) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        }
+    }
+
+    pub unsafe extern "C" fn str_plus_cstr_str(lhs: *const c_char, rhs: *const AppleString) -> AppleString {
+        let a = if lhs.is_null() { &[][..] } else { CStr::from_ptr(lhs).to_bytes() };
+        let b = if rhs.is_null() { &[][..] } else { read_slice(rhs) };
+        let mut out = AppleString { words: [0; 3] };
+        let mut combined = Vec::with_capacity(a.len() + b.len());
+        combined.extend_from_slice(a);
+        combined.extend_from_slice(b);
+        set_bytes(&mut out, &combined);
+        out
+    }
+
+    #[derive(Default)]
+    struct RecLockState {
+        owner: Option<std::thread::ThreadId>,
+        depth: usize,
+    }
+
+    fn rec_mutex_map() -> &'static Mutex<HashMap<usize, (&'static Mutex<RecLockState>, &'static Condvar)>> {
+        static M: OnceLock<Mutex<HashMap<usize, (&'static Mutex<RecLockState>, &'static Condvar)>>> = OnceLock::new();
+        M.get_or_init(Default::default)
+    }
+
+    fn get_rec_lock(ptr: usize) -> (&'static Mutex<RecLockState>, &'static Condvar) {
+        let mut g = rec_mutex_map().lock().unwrap();
+        *g.entry(ptr).or_insert_with(|| {
+            (Box::leak(Box::new(Mutex::new(RecLockState::default()))), Box::leak(Box::new(Condvar::new())))
+        })
+    }
+
+    pub extern "C" fn rmutex_ctor(this: *mut c_void) -> *mut c_void {
+        if !this.is_null() {
+            let _ = get_rec_lock(this as usize);
+        }
+        this
+    }
+    pub extern "C" fn rmutex_dtor(this: *mut c_void) -> *mut c_void {
+        if !this.is_null() {
+            rec_mutex_map().lock().unwrap().remove(&(this as usize));
+        }
+        this
+    }
+    pub extern "C" fn rmutex_lock(this: *mut c_void) {
+        if this.is_null() { return; }
+        let (mtx, cv) = get_rec_lock(this as usize);
+        let me = std::thread::current().id();
+        let mut st = mtx.lock().unwrap();
+        while let Some(owner) = st.owner {
+            if owner == me {
+                st.depth += 1;
+                return;
+            }
+            st = cv.wait(st).unwrap();
+        }
+        st.owner = Some(me);
+        st.depth = 1;
+    }
+    pub extern "C" fn rmutex_unlock(this: *mut c_void) {
+        if this.is_null() { return; }
+        let (mtx, cv) = get_rec_lock(this as usize);
+        let me = std::thread::current().id();
+        let mut st = mtx.lock().unwrap();
+        if st.owner == Some(me) {
+            if st.depth > 1 {
+                st.depth -= 1;
+            } else {
+                st.owner = None;
+                st.depth = 0;
+                cv.notify_one();
+            }
+        }
+    }
+
+    pub extern "C" fn next_prime(mut n: usize) -> usize {
+        if n <= 2 { return 2; }
+        if n % 2 == 0 { n += 1; }
+        loop {
+            let mut d = 3usize;
+            let mut prime = true;
+            while d.saturating_mul(d) <= n {
+                if n % d == 0 { prime = false; break; }
+                d += 2;
+            }
+            if prime { return n; }
+            n += 2;
+        }
+    }
+
+    pub unsafe extern "C" fn sort_ints(first: *mut c_int, last: *mut c_int, _comp: *const c_void) {
+        if first.is_null() || last.is_null() || last <= first { return; }
+        let len = (last as usize - first as usize) / std::mem::size_of::<c_int>();
+        std::slice::from_raw_parts_mut(first, len).sort_unstable();
+    }
+
+    static mut RS_STUB: usize = 0;
+    static RNG_STATE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0x9e37_79b9_7f4a_7c15);
+
+    pub unsafe extern "C" fn rs_get() -> *mut c_void {
+        &raw mut RS_STUB as *mut c_void
+    }
+    pub extern "C" fn rs_default_call(_this: *mut c_void) -> u32 {
+        let mut x = RNG_STATE.load(std::sync::atomic::Ordering::Relaxed);
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        RNG_STATE.store(x, std::sync::atomic::Ordering::Relaxed);
+        (x >> 32) as u32
+    }
+    pub extern "C" fn rs_default_dtor(this: *mut c_void) -> *mut c_void { this }
+
+    pub extern "C" fn throw_abort() -> ! {
+        eprintln!("[pear-runtime][libc++] container/length error");
+        std::process::abort()
+    }
+}
+
+fn dlopen_dlsym(candidates: &[&std::ffi::CStr], macho_sym: &str) -> Option<usize> {
+    let cname = macho_sym.strip_prefix('_')?;
+    let cstr = std::ffi::CString::new(cname).ok()?;
+    for cand in candidates {
+        let h = unsafe { dlopen(cand.as_ptr(), 1) };
+        if !h.is_null() {
+            let p = unsafe { dlsym(h, cstr.as_ptr()) };
+            if !p.is_null() {
+                return Some(p as usize);
+            }
+        }
+    }
+    libc_dlsym(macho_sym)
+}
+
 extern "C" fn maskrune_impl(c: i32, f: usize) -> i32 {
     if (0..128).contains(&c) {
-        let ch = c as u8 as char;
-        let ok = match f {
-            0x0100 => ch.is_ascii_alphabetic(),
-            0x0400 => ch.is_ascii_digit(),
-            0x4000 => ch.is_ascii_whitespace(),
-            _ => ch.is_ascii_alphanumeric(),
-        };
-        if ok { 1 } else { 0 }
+        let rt = darwin_ascii_runetype(c as u8) as usize;
+        if (rt & f) != 0 { 1 } else { 0 }
     } else {
         0
     }
@@ -754,7 +2795,10 @@ fn framework_const(key: &'static str) -> usize {
         std::sync::OnceLock::new();
     let m = MAP.get_or_init(Default::default);
     let mut g = m.lock().unwrap();
-    *g.entry(key).or_insert_with(|| pear_foundation::nsstring_from_rust(key) as usize)
+    *g.entry(key).or_insert_with(|| {
+        let s = pear_foundation::nsstring_from_rust(key) as usize;
+        Box::into_raw(Box::new(s)) as usize
+    })
 }
 
 fn audiotoolbox_symbol(symbol: &str) -> Option<usize> {
@@ -804,6 +2848,12 @@ fn audiotoolbox_symbol(symbol: &str) -> Option<usize> {
         | "_AUGraphStart"
         | "_AUGraphStop"
         | "_AudioServicesPlaySystemSound"
+        | "_AudioServicesPlaySystemSoundWithCompletion"
+        | "_AudioServicesAddSystemSoundCompletion"
+        | "_AudioServicesCreateSystemSoundID"
+        | "_AudioServicesDisposeSystemSoundID"
+        | "_AudioServicesRemoveSystemSoundCompletion"
+        | "_AudioServicesSetProperty"
         | "_AudioUnitSetParameter"
         | "_CAShow" => Some(ok),
         _ => None,
@@ -818,10 +2868,13 @@ fn cfnetwork_symbol(symbol: &str) -> Option<usize> {
         | "_CFHTTPMessageCopySerializedMessage"
         | "_CFNetworkCopySystemProxySettings"
         | "_CFReadStreamCreateForHTTPRequest"
-        | "_CFReadStreamCreateWithFTPURL" => Some(null),
+        | "_CFReadStreamCreateWithFTPURL"
+        | "_CFHostCreateWithName"
+        | "_CFHostGetAddressing" => Some(null),
         "_CFHTTPMessageAddAuthentication"
         | "_CFHTTPMessageAppendBytes"
-        | "_CFHTTPMessageSetHeaderFieldValue" => Some(ok),
+        | "_CFHTTPMessageSetHeaderFieldValue"
+        | "_CFHostStartInfoResolution" => Some(ok),
         "_kCFHTTPAuthenticationSchemeBasic" => Some(framework_const("Basic")),
         "_kCFHTTPVersion1_0" => Some(framework_const("HTTP/1.0")),
         "_kCFHTTPVersion1_1" => Some(framework_const("HTTP/1.1")),
@@ -852,7 +2905,10 @@ fn quartz_const(name: &str) -> usize {
         "_kCAFillModeForwards" => "forwards",
         _ => "",
     };
-    *g.entry(key).or_insert_with(|| pear_foundation::nsstring_from_rust(key) as usize)
+    *g.entry(key).or_insert_with(|| {
+        let s = pear_foundation::nsstring_from_rust(key) as usize;
+        Box::into_raw(Box::new(s)) as usize
+    })
 }
 
 extern "C" fn unwind_resume_trap() -> ! {
@@ -860,8 +2916,10 @@ extern "C" fn unwind_resume_trap() -> ! {
     std::process::abort()
 }
 
+#[cfg(target_os = "linux")]
 struct DefaultGuestEvents;
 
+#[cfg(target_os = "linux")]
 impl pear_host::GuestEvents for DefaultGuestEvents {
     fn pointer(&self, _: pear_host::GuestObject, _: pear_host::TouchPhase, _: f64, _: f64, _: f64) {}
     fn key(&self, _: pear_host::KeyEvent) {}
@@ -887,16 +2945,91 @@ pub fn init() {
     }
 }
 
+fn libcxx_symbol(symbol: &str) -> Option<usize> {
+    match symbol {
+        "__Znwm" | "__Znam" => Some(cxx_new as *const () as usize),
+        "__ZdlPv" | "__ZdaPv" => Some(cxx_delete as *const () as usize),
+        "___cxa_guard_acquire" => Some(cxa_guard_acquire as *const () as usize),
+        "___cxa_guard_release" => Some(cxa_guard_release as *const () as usize),
+        "___cxa_guard_abort" => Some(cxa_guard_abort as *const () as usize),
+        "___cxa_pure_virtual" => Some(cxa_pure_virtual_trap as *const () as usize),
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEC1ERKS5_"
+        | "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEC2ERKS5_" => {
+            Some(apple_libcxx::str_copy_ctor as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEC1ERKS5_mmRKS4_"
+        | "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEC2ERKS5_mmRKS4_" => {
+            Some(apple_libcxx::str_substr_ctor as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEED1Ev" => {
+            Some(apple_libcxx::str_dtor as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEaSERKS5_" => {
+            Some(apple_libcxx::str_assign_str as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEaSEc" => {
+            Some(apple_libcxx::str_assign_char as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6assignEPKc" => {
+            Some(apple_libcxx::str_assign_cstr as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6assignEPKcm" => {
+            Some(apple_libcxx::str_assign_cstr_n as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6appendEPKc" => {
+            Some(apple_libcxx::str_append_cstr as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6appendEPKcm" => {
+            Some(apple_libcxx::str_append_cstr_n as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE9push_backEc" => {
+            Some(apple_libcxx::str_push_back as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE5eraseEmm" => {
+            Some(apple_libcxx::str_erase as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6resizeEmc" => {
+            Some(apple_libcxx::str_resize as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE7reserveEm" => {
+            Some(apple_libcxx::str_reserve as *const () as usize)
+        }
+        "__ZNKSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE4findEcm" => {
+            Some(apple_libcxx::str_find_char as *const () as usize)
+        }
+        "__ZNKSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE5rfindEcm" => {
+            Some(apple_libcxx::str_rfind_char as *const () as usize)
+        }
+        "__ZNKSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE7compareEPKc" => {
+            Some(apple_libcxx::str_compare_cstr as *const () as usize)
+        }
+        "__ZNSt3__1plIcNS_11char_traitsIcEENS_9allocatorIcEEEENS_12basic_stringIT_T0_T1_EEPKS6_RKS9_" => {
+            Some(apple_libcxx::str_plus_cstr_str as *const () as usize)
+        }
+        "__ZNSt3__115recursive_mutexC1Ev" => Some(apple_libcxx::rmutex_ctor as *const () as usize),
+        "__ZNSt3__115recursive_mutexD1Ev" => Some(apple_libcxx::rmutex_dtor as *const () as usize),
+        "__ZNSt3__115recursive_mutex4lockEv" => Some(apple_libcxx::rmutex_lock as *const () as usize),
+        "__ZNSt3__115recursive_mutex6unlockEv" => Some(apple_libcxx::rmutex_unlock as *const () as usize),
+        "__ZNSt3__112__next_primeEm" => Some(apple_libcxx::next_prime as *const () as usize),
+        "__ZNSt3__16__sortIRNS_6__lessIiiEEPiEEvT0_S5_T_" => Some(apple_libcxx::sort_ints as *const () as usize),
+        "__ZNSt3__18__rs_getEv" => Some(apple_libcxx::rs_get as *const () as usize),
+        "__ZNSt3__112__rs_defaultclEv" => Some(apple_libcxx::rs_default_call as *const () as usize),
+        "__ZNSt3__112__rs_defaultD1Ev" => Some(apple_libcxx::rs_default_dtor as *const () as usize),
+        "__ZNKSt3__120__vector_base_commonILb1EE20__throw_length_errorEv"
+        | "__ZNKSt3__120__vector_base_commonILb1EE20__throw_out_of_rangeEv"
+        | "__ZNSt20bad_array_new_lengthC1Ev" => Some(apple_libcxx::throw_abort as *const () as usize),
+        _ => dlopen_dlsym(&[c"libc++.so.1", c"libc++abi.so.1", c"libstdc++.so.6"], symbol),
+    }
+}
+
 /// Unified symbol resolver for `pear-dyld`: resolves `libobjc`, `libSystem`
 /// (libclosure + libc basics), `CoreFoundation`, and `Foundation` imports.
 pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
     init();
     match library {
         Some("/usr/lib/libobjc.A.dylib") => pear_libobjc::symbol(symbol),
-        Some("/usr/lib/libc++.1.dylib") | Some("/usr/lib/libc++abi.dylib") => {
-            libc_dlsym(symbol)
-        }
-        Some("/usr/lib/libSystem.B.dylib") => match symbol {
+        Some(path) if path.contains("libc++") => libcxx_symbol(symbol),
+        Some(path) if path.contains("libSystem") || path.contains("libdispatch") => match symbol {
             "__Unwind_Resume" => Some(unwind_resume_trap as *const () as usize),
             "___stack_chk_guard" => Some(&raw const STACK_CHK_GUARD as usize),
             "___stack_chk_fail" => Some(stack_chk_fail_trap as *const () as usize),
@@ -916,20 +3049,84 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "__availability_version_check" => Some(availability_version_check as *const () as usize),
             "___cxa_atexit" => Some(cxa_atexit_noop as *const () as usize),
             "__dyld_image_count" => Some(dyld_image_count_stub as *const () as usize),
+            "__dyld_get_image_header" => Some(dyld_get_image_header_stub as *const () as usize),
+            "__dyld_get_image_vmaddr_slide" => Some(dyld_get_image_vmaddr_slide_stub as *const () as usize),
             "__dyld_get_image_name" => Some(dyld_get_image_name_stub as *const () as usize),
             "__dispatch_main_q" => Some(&raw const DISPATCH_MAIN_Q as usize),
+            "__dispatch_queue_attr_concurrent"
+            | "__dispatch_source_type_timer" => Some(&raw const DISPATCH_QUEUE_ATTR_STUB as usize),
+            "_OBJC_CLASS_$_OS_dispatch_queue"
+            | "_OBJC_CLASS_$_OS_dispatch_source"
+            | "_OBJC_CLASS_$_OS_os_log" => Some(UIRESPONDER_CLASS.ptr() as usize),
             "_dispatch_once" => Some(dispatch_once_impl as *const () as usize),
             "_dispatch_once_f" => Some(dispatch_once_f_impl as *const () as usize),
+            "_dispatch_sync"
+            | "_dispatch_async"
+            | "_dispatch_barrier_sync"
+            | "_dispatch_barrier_async" => Some(dispatch_sync_impl as *const () as usize),
+            "_dispatch_get_global_queue" => Some(dispatch_get_global_queue_impl as *const () as usize),
+            "_dispatch_queue_create" => Some(dispatch_queue_create_impl as *const () as usize),
+            "_dispatch_queue_attr_make_with_qos_class" => Some(dispatch_queue_attr_qos_impl as *const () as usize),
+            "_dispatch_queue_get_label" => Some(dispatch_queue_get_label_impl as *const () as usize),
+            "_dispatch_group_create" => Some(dispatch_group_create_impl as *const () as usize),
+            "_dispatch_group_enter"
+            | "_dispatch_group_leave"
+            | "_dispatch_resume"
+            | "_dispatch_block_cancel"
+            | "_dispatch_source_cancel"
+            | "_dispatch_assert_queue$V2"
+            | "_os_release" => Some(dispatch_noop_1 as *const () as usize),
+            "_dispatch_set_target_queue"
+            | "_dispatch_source_set_event_handler" => Some(dispatch_noop_2 as *const () as usize),
+            "_dispatch_source_set_timer" => Some(status_ok_stub as *const () as usize),
+            "_dispatch_source_create" => Some(dispatch_source_create_impl as *const () as usize),
+            "_dispatch_source_testcancel" => Some(dispatch_source_testcancel_impl as *const () as usize),
+            "_dispatch_group_async"
+            | "_dispatch_group_notify" => Some(dispatch_group_async_impl as *const () as usize),
+            "_dispatch_group_wait"
+            | "_dispatch_block_wait" => Some(dispatch_group_wait_impl as *const () as usize),
+            "_dispatch_after" => Some(dispatch_after_impl as *const () as usize),
+            "_dispatch_time"
+            | "_dispatch_walltime" => Some(dispatch_time_impl as *const () as usize),
+            "_dispatch_semaphore_create" => Some(dispatch_semaphore_create_impl as *const () as usize),
+            "_dispatch_semaphore_signal" => Some(dispatch_semaphore_signal_impl as *const () as usize),
+            "_dispatch_semaphore_wait" => Some(dispatch_semaphore_wait_impl as *const () as usize),
+            "_dispatch_block_create" => Some(dispatch_block_create_impl as *const () as usize),
+            "_os_log_create" => Some(os_log_create_impl as *const () as usize),
+            "_os_log_type_enabled" => Some(os_log_type_enabled_impl as *const () as usize),
+            "__os_log_impl" => Some(status_ok_stub as *const () as usize),
+            "_os_unfair_lock_lock"
+            | "_os_unfair_lock_unlock" => Some(os_unfair_lock_noop as *const () as usize),
+            "_asl_open" => Some(asl_open_stub as *const () as usize),
+            "_asl_log"
+            | "_asl_add_log_file"
+            | "_asl_set_filter" => Some(asl_ok_stub as *const () as usize),
             "_mach_absolute_time" => Some(mach_absolute_time_impl as *const () as usize),
             "_mach_timebase_info" => Some(mach_timebase_info_impl as *const () as usize),
             "_mach_task_self_" => Some(&raw const MACH_TASK_SELF_STUB as usize),
             "_memset_pattern16" => Some(memset_pattern16_impl as *const () as usize),
             "_pthread_mach_thread_np" => Some(pthread_mach_thread_np_impl as *const () as usize),
+            "_pthread_mutexattr_init" => Some(darwin_pthread::mutexattr_init as *const () as usize),
+            "_pthread_mutexattr_destroy" => Some(darwin_pthread::mutexattr_destroy as *const () as usize),
+            "_pthread_mutexattr_settype" => Some(darwin_pthread::mutexattr_settype as *const () as usize),
+            "_pthread_mutex_init" => Some(darwin_pthread::mutex_init as *const () as usize),
+            "_pthread_mutex_destroy" => Some(darwin_pthread::mutex_destroy as *const () as usize),
+            "_pthread_mutex_lock" => Some(darwin_pthread::mutex_lock as *const () as usize),
+            "_pthread_mutex_trylock" => Some(darwin_pthread::mutex_trylock as *const () as usize),
+            "_pthread_mutex_unlock" => Some(darwin_pthread::mutex_unlock as *const () as usize),
+            "_pthread_cond_init" => Some(darwin_pthread::cond_init as *const () as usize),
+            "_pthread_cond_destroy" => Some(darwin_pthread::cond_destroy as *const () as usize),
+            "_pthread_cond_signal" => Some(darwin_pthread::cond_signal as *const () as usize),
+            "_pthread_cond_broadcast" => Some(darwin_pthread::cond_broadcast as *const () as usize),
+            "_pthread_cond_wait" => Some(darwin_pthread::cond_wait as *const () as usize),
+            "_pthread_cond_timedwait" => Some(darwin_pthread::cond_timedwait as *const () as usize),
+            "_pthread_attr_init" => Some(darwin_pthread::attr_init as *const () as usize),
+            "_pthread_attr_destroy" => Some(darwin_pthread::attr_destroy as *const () as usize),
+            "_pthread_attr_setdetachstate" => Some(darwin_pthread::attr_setdetachstate as *const () as usize),
+            "_pthread_create" => Some(darwin_pthread::thread_create as *const () as usize),
             "_sysctlbyname" => Some(sysctlbyname_impl as *const () as usize),
             "_task_info" => Some(task_info_impl as *const () as usize),
             "_thread_policy_set" => Some(thread_policy_set_impl as *const () as usize),
-            "_dispatch_sync" | "_dispatch_async" => Some(dispatch_sync_impl as *const () as usize),
-            "_dispatch_get_global_queue" => Some(dispatch_get_global_queue_impl as *const () as usize),
             "__DefaultRuneLocale" => Some(&raw const DEFAULT_RUNE_LOCALE as usize),
             "___maskrune" => Some(maskrune_impl as *const () as usize),
             "___stdinp" => Some(&raw const STDIN_STUB as usize),
@@ -946,6 +3143,27 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_strcmp" => Some(strcmp as *const () as usize),
             "_getenv" => Some(getenv as *const () as usize),
             "_abort" => Some(abort as *const () as usize),
+            "_vsnprintf" => Some(darwin_varargs::darwin_vsnprintf as *const () as usize),
+            "_vsprintf" => Some(darwin_varargs::darwin_vsprintf as *const () as usize),
+            "_vprintf" => Some(darwin_varargs::darwin_vprintf as *const () as usize),
+            "_vfprintf" => Some(darwin_varargs::darwin_vfprintf as *const () as usize),
+            "___vsnprintf_chk" => Some(darwin_varargs::darwin_vsnprintf_chk as *const () as usize),
+            #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+            "_snprintf" => Some(darwin_varargs::darwin_snprintf as *const () as usize),
+            #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+            "_sprintf" => Some(darwin_varargs::darwin_sprintf as *const () as usize),
+            #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+            "___sprintf_chk" => Some(darwin_varargs::darwin_sprintf_chk as *const () as usize),
+            #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+            "___snprintf_chk" => Some(darwin_varargs::darwin_snprintf_chk as *const () as usize),
+            #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+            "_printf" => Some(darwin_varargs::darwin_printf as *const () as usize),
+            #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+            "_fprintf" => Some(darwin_varargs::darwin_fprintf as *const () as usize),
+            #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+            "_sscanf" => Some(darwin_varargs::darwin_sscanf as *const () as usize),
+            #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+            "_fscanf" => Some(darwin_varargs::darwin_fscanf as *const () as usize),
             _ => pear_libobjc::symbol(symbol).or_else(|| libc_dlsym(symbol)),
         },
         Some(path) if path.contains("AVFAudio") || path.contains("AVFoundation") => match symbol {
@@ -1046,18 +3264,24 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             _ => None,
         },
         Some(path) if path.contains("AudioToolbox") => audiotoolbox_symbol(symbol),
-        Some(path) if path.contains("CFNetwork") => cfnetwork_symbol(symbol),
+        Some(path) if path.contains("CFNetwork") => cfnetwork_symbol(symbol).or_else(|| pear_foundation::symbol(symbol)),
         Some(path) if path.contains("Security") => match symbol {
             "_SecItemCopyMatching" | "_SecItemAdd" | "_SecItemUpdate" | "_SecItemDelete" => {
-                Some(status_ok_stub as *const () as usize)
+                Some(sec_item_not_found as *const () as usize)
             }
+            "_SecKeyCreateWithData" => Some(ptr_null_stub as *const () as usize),
+            "_SecKeyVerifySignature" | "_SecTrustEvaluate" => Some(status_ok_stub as *const () as usize),
             "_SecRandomCopyBytes" => Some(status_ok_stub as *const () as usize),
             _ => None,
         },
         Some(path) if path.contains("SystemConfiguration") => match symbol {
             "_SCNetworkReachabilityCreateWithName"
             | "_SCNetworkReachabilityCreateWithAddress" => Some(ptr_null_stub as *const () as usize),
-            "_SCNetworkReachabilityGetFlags" => Some(false_stub as *const () as usize),
+            "_SCNetworkReachabilityGetFlags"
+            | "_SCNetworkReachabilitySetCallback"
+            | "_SCNetworkReachabilityScheduleWithRunLoop"
+            | "_SCNetworkReachabilityUnscheduleFromRunLoop"
+            | "_SCNetworkReachabilitySetDispatchQueue" => Some(false_stub as *const () as usize),
             _ => None,
         },
         Some(path) if path.contains("GLKit") => match symbol {
@@ -1070,7 +3294,9 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             _ => None,
         },
         Some(path) if path.contains("libswiftCore") => swift_core_symbol(symbol).or_else(|| libc_dlsym(symbol)),
-        Some(path) if path.contains("libz") => libc_dlsym(symbol),
+        Some(path) if path.contains("libz") => dlopen_dlsym(&[c"libz.so.1", c"libz.1.dylib"], symbol),
+        Some(path) if path.contains("libsqlite3") => dlopen_dlsym(&[c"libsqlite3.so.0", c"libsqlite3.dylib"], symbol),
+        Some(path) if path.contains("libxml2") => dlopen_dlsym(&[c"libxml2.so.2", c"libxml2.2.dylib"], symbol),
         Some(path) if path.contains("Metal") && !path.contains("MetalKit") => match symbol {
             "_MTLCreateSystemDefaultDevice" | "_MTLCopyAllDevices" => Some(ptr_null_stub as *const () as usize),
             _ => None,
@@ -1106,6 +3332,8 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
         None => pear_libobjc::symbol(symbol)
             .or_else(|| pear_foundation::symbol(symbol))
             .or_else(|| pear_graphics::symbol(symbol))
+            .or_else(|| libcxx_symbol(symbol))
+            .or_else(|| resolve_symbol(Some("/usr/lib/libSystem.B.dylib"), symbol))
             .or_else(|| libc_dlsym(symbol)),
         _ => None,
     }
@@ -1120,6 +3348,7 @@ pub mod egl_bridge {
     const EGL_SURFACE_TYPE: c_int = 0x3033;
     const EGL_WINDOW_BIT: c_int = 0x0004;
     const EGL_RENDERABLE_TYPE: c_int = 0x3040;
+    const EGL_OPENGL_ES_BIT: c_int = 0x0001;
     const EGL_OPENGL_ES2_BIT: c_int = 0x0004;
     const EGL_RED_SIZE: c_int = 0x3024;
     const EGL_GREEN_SIZE: c_int = 0x3023;
@@ -1156,17 +3385,27 @@ pub mod egl_bridge {
 
     impl EglSurfaceCtx {
         pub fn create_from_x11(x11_display: *mut c_void, x11_window: u64) -> Option<Self> {
+            Self::create_for_api(x11_display, x11_window, 2)
+        }
+
+        pub fn create_for_api(x11_display: *mut c_void, x11_window: u64, api: usize) -> Option<Self> {
             unsafe {
                 let mut egl_lib = super::dlopen(c"libEGL.so.1".as_ptr(), 1);
                 if egl_lib.is_null() {
                     egl_lib = super::dlopen(c"libEGL.so".as_ptr(), 1);
                 }
-                let mut gles_lib = super::dlopen(c"libGLESv2.so.2".as_ptr(), 1);
+                let mut gles_lib = if api <= 1 {
+                    let p = super::dlopen(c"libGLESv1_CM.so.1".as_ptr(), 1);
+                    if p.is_null() { super::dlopen(c"libGLESv1_CM.so".as_ptr(), 1) } else { p }
+                } else {
+                    let p = super::dlopen(c"libGLESv2.so.2".as_ptr(), 1);
+                    if p.is_null() { super::dlopen(c"libGLESv2.so".as_ptr(), 1) } else { p }
+                };
                 if gles_lib.is_null() {
-                    gles_lib = super::dlopen(c"libGLESv2.so".as_ptr(), 1);
+                    gles_lib = super::dlopen(c"libGLESv2.so.2".as_ptr(), 1);
                 }
                 if egl_lib.is_null() || gles_lib.is_null() {
-                    eprintln!("[pear-egl] failed to dlopen libEGL / libGLESv2");
+                    eprintln!("[pear-egl] failed to dlopen libEGL / libGLES");
                     return None;
                 }
 
@@ -1213,9 +3452,10 @@ pub mod egl_bridge {
                 }
                 let _ = egl_bind_api(EGL_OPENGL_ES_API);
 
+                let renderable = if api <= 1 { EGL_OPENGL_ES_BIT } else { EGL_OPENGL_ES2_BIT };
                 let cfg_attrs = [
                     EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-                    EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+                    EGL_RENDERABLE_TYPE, renderable,
                     EGL_RED_SIZE, 8,
                     EGL_GREEN_SIZE, 8,
                     EGL_BLUE_SIZE, 8,
@@ -1235,7 +3475,8 @@ pub mod egl_bridge {
                     return None;
                 }
 
-                let ctx_attrs = [EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE];
+                let ver = if api <= 1 { 1 } else { 2 };
+                let ctx_attrs = [EGL_CONTEXT_CLIENT_VERSION, ver, EGL_NONE];
                 let ctx = egl_create_context(dpy, cfg, std::ptr::null_mut(), ctx_attrs.as_ptr());
                 if ctx.is_null() {
                     eprintln!("[pear-egl] eglCreateContext failed err=0x{:x}", egl_get_error());
@@ -1247,37 +3488,42 @@ pub mod egl_bridge {
                     return None;
                 }
 
-                let gl_create_shader: unsafe extern "C" fn(c_uint) -> c_uint = std::mem::transmute(load_gl(c"glCreateShader"));
-                let gl_shader_source: unsafe extern "C" fn(c_uint, c_int, *const *const c_char, *const c_int) = std::mem::transmute(load_gl(c"glShaderSource"));
-                let gl_compile_shader: unsafe extern "C" fn(c_uint) = std::mem::transmute(load_gl(c"glCompileShader"));
-                let gl_create_program: unsafe extern "C" fn() -> c_uint = std::mem::transmute(load_gl(c"glCreateProgram"));
-                let gl_attach_shader: unsafe extern "C" fn(c_uint, c_uint) = std::mem::transmute(load_gl(c"glAttachShader"));
-                let gl_bind_attrib_location: unsafe extern "C" fn(c_uint, c_uint, *const c_char) = std::mem::transmute(load_gl(c"glBindAttribLocation"));
-                let gl_link_program: unsafe extern "C" fn(c_uint) = std::mem::transmute(load_gl(c"glLinkProgram"));
-                let gl_get_uniform_location: unsafe extern "C" fn(c_uint, *const c_char) -> c_int = std::mem::transmute(load_gl(c"glGetUniformLocation"));
+                let (program, u_angle) = if api >= 2 {
+                    let gl_create_shader: unsafe extern "C" fn(c_uint) -> c_uint = std::mem::transmute(load_gl(c"glCreateShader"));
+                    let gl_shader_source: unsafe extern "C" fn(c_uint, c_int, *const *const c_char, *const c_int) = std::mem::transmute(load_gl(c"glShaderSource"));
+                    let gl_compile_shader: unsafe extern "C" fn(c_uint) = std::mem::transmute(load_gl(c"glCompileShader"));
+                    let gl_create_program: unsafe extern "C" fn() -> c_uint = std::mem::transmute(load_gl(c"glCreateProgram"));
+                    let gl_attach_shader: unsafe extern "C" fn(c_uint, c_uint) = std::mem::transmute(load_gl(c"glAttachShader"));
+                    let gl_bind_attrib_location: unsafe extern "C" fn(c_uint, c_uint, *const c_char) = std::mem::transmute(load_gl(c"glBindAttribLocation"));
+                    let gl_link_program: unsafe extern "C" fn(c_uint) = std::mem::transmute(load_gl(c"glLinkProgram"));
+                    let gl_get_uniform_location: unsafe extern "C" fn(c_uint, *const c_char) -> c_int = std::mem::transmute(load_gl(c"glGetUniformLocation"));
 
-                let vs_src = c"attribute vec2 aPos; attribute vec3 aCol; varying vec3 vCol; uniform float uAngle; void main() { float c = cos(uAngle); float s = sin(uAngle); gl_Position = vec4(aPos.x * c - aPos.y * s, aPos.x * s + aPos.y * c, 0.0, 1.0); vCol = aCol; }";
-                let fs_src = c"precision mediump float; varying vec3 vCol; void main() { gl_FragColor = vec4(vCol, 1.0); }";
+                    let vs_src = c"attribute vec2 aPos; attribute vec3 aCol; varying vec3 vCol; uniform float uAngle; void main() { float c = cos(uAngle); float s = sin(uAngle); gl_Position = vec4(aPos.x * c - aPos.y * s, aPos.x * s + aPos.y * c, 0.0, 1.0); vCol = aCol; }";
+                    let fs_src = c"precision mediump float; varying vec3 vCol; void main() { gl_FragColor = vec4(vCol, 1.0); }";
 
-                let vs = gl_create_shader(GL_VERTEX_SHADER);
-                let vs_ptr = vs_src.as_ptr();
-                gl_shader_source(vs, 1, &vs_ptr, std::ptr::null());
-                gl_compile_shader(vs);
+                    let vs = gl_create_shader(GL_VERTEX_SHADER);
+                    let vs_ptr = vs_src.as_ptr();
+                    gl_shader_source(vs, 1, &vs_ptr, std::ptr::null());
+                    gl_compile_shader(vs);
 
-                let fs = gl_create_shader(GL_FRAGMENT_SHADER);
-                let fs_ptr = fs_src.as_ptr();
-                gl_shader_source(fs, 1, &fs_ptr, std::ptr::null());
-                gl_compile_shader(fs);
+                    let fs = gl_create_shader(GL_FRAGMENT_SHADER);
+                    let fs_ptr = fs_src.as_ptr();
+                    gl_shader_source(fs, 1, &fs_ptr, std::ptr::null());
+                    gl_compile_shader(fs);
 
-                let program = gl_create_program();
-                gl_attach_shader(program, vs);
-                gl_attach_shader(program, fs);
-                gl_bind_attrib_location(program, 0, c"aPos".as_ptr());
-                gl_bind_attrib_location(program, 1, c"aCol".as_ptr());
-                gl_link_program(program);
-                let u_angle = gl_get_uniform_location(program, c"uAngle".as_ptr());
+                    let program = gl_create_program();
+                    gl_attach_shader(program, vs);
+                    gl_attach_shader(program, fs);
+                    gl_bind_attrib_location(program, 0, c"aPos".as_ptr());
+                    gl_bind_attrib_location(program, 1, c"aCol".as_ptr());
+                    gl_link_program(program);
+                    let u_angle = gl_get_uniform_location(program, c"uAngle".as_ptr());
+                    (program, u_angle)
+                } else {
+                    (0, -1)
+                };
 
-                eprintln!("[pear-egl] EGL {maj}.{min} + GLESv2 initialized (surf={surf:?} ctx={ctx:?})");
+                eprintln!("[pear-egl] EGL {maj}.{min} + GLESv{ver} initialized (surf={surf:?} ctx={ctx:?})");
 
                 Some(Self {
                     dpy,
@@ -1366,13 +3612,50 @@ pub fn plan_execution(data: &[u8]) -> Option<pear_jit::ExecutionPlan> {
 
 /// Maps, fixes up, registers ObjC/Foundation metadata, calls `+load`, and runs
 /// C/C++ initializers for an arm64 Mach-O image.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn stub_third_party_sdks() {
+    if std::env::var("PEAR_DISABLE_AD_SDKS").as_deref() == Ok("0") {
+        return;
+    }
+    let null_imp = ptr_null_stub as Imp;
+    let sig = c"@@:".as_ptr();
+    let targets: &[(&str, &[&str])] = &[
+        ("FIRApp", &["configure", "configureWithOptions:", "configureWithName:options:", "defaultApp", "appNamed:"]),
+        ("FIRConfiguration", &["sharedInstance"]),
+        ("FIRRemoteConfig", &["remoteConfig", "remoteConfigWithApp:"]),
+        ("FIRAnalytics", &["setAnalyticsCollectionEnabled:", "logEventWithName:parameters:", "setUserPropertyString:forName:", "appInstanceID"]),
+        ("ALSdk", &["shared", "sharedWithKey:", "sharedWithKey:settings:"]),
+        ("GADMobileAds", &["sharedInstance"]),
+        ("UnityAds", &["initialize:", "initialize:testMode:", "initialize:testMode:initializationDelegate:", "isInitialized"]),
+    ];
+    unsafe {
+        for &(cls_name, sels) in targets {
+            let Some(cls) = objc_rt::class_named(cls_name) else { continue };
+            let meta = objc_rt::object_class(cls as Id);
+            if meta.is_null() { continue; }
+            for &sel_name in sels {
+                let _ = pear_libobjc::reflection::class_replace_method(
+                    meta,
+                    objc_rt::sel(sel_name),
+                    null_imp,
+                    sig,
+                );
+            }
+        }
+    }
+}
+
 pub fn load_and_boot(
     data: &[u8],
     options: pear_dyld::Options,
 ) -> Result<(pear_dyld::LoadedImage, pear_libobjc::ImageReport), pear_dyld::Error> {
     init();
     let image = pear_dyld::load(data, &resolve_symbol, options)?;
+    MAIN_IMAGE_HEADER.store(image.header() as usize, std::sync::atomic::Ordering::Release);
+    MAIN_IMAGE_SLIDE.store(image.slide() as isize, std::sync::atomic::Ordering::Release);
     let report = unsafe { pear_libobjc::register_image(&image) };
+    #[cfg(target_os = "linux")]
+    stub_third_party_sdks();
     unsafe {
         pear_libobjc::call_load_methods(&image);
         image.run_initializers();
