@@ -214,6 +214,45 @@ unsafe extern "C" fn color_black(self_cls: Class, _cmd: Sel) -> Id {
 unsafe extern "C" fn color_white(self_cls: Class, _cmd: Sel) -> Id {
     color_with_rgba(self_cls, _cmd, 1.0, 1.0, 1.0, 1.0)
 }
+unsafe extern "C" fn color_gray(self_cls: Class, _cmd: Sel) -> Id {
+    color_with_rgba(self_cls, _cmd, 0.5, 0.5, 0.5, 1.0)
+}
+unsafe extern "C" fn color_dark_gray(self_cls: Class, _cmd: Sel) -> Id {
+    color_with_rgba(self_cls, _cmd, 1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 1.0)
+}
+unsafe extern "C" fn color_light_gray(self_cls: Class, _cmd: Sel) -> Id {
+    color_with_rgba(self_cls, _cmd, 2.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, 1.0)
+}
+unsafe extern "C" fn color_red(self_cls: Class, _cmd: Sel) -> Id {
+    color_with_rgba(self_cls, _cmd, 1.0, 0.0, 0.0, 1.0)
+}
+unsafe extern "C" fn color_green(self_cls: Class, _cmd: Sel) -> Id {
+    color_with_rgba(self_cls, _cmd, 0.0, 1.0, 0.0, 1.0)
+}
+unsafe extern "C" fn color_blue(self_cls: Class, _cmd: Sel) -> Id {
+    color_with_rgba(self_cls, _cmd, 0.0, 0.0, 1.0, 1.0)
+}
+unsafe extern "C" fn color_cyan(self_cls: Class, _cmd: Sel) -> Id {
+    color_with_rgba(self_cls, _cmd, 0.0, 1.0, 1.0, 1.0)
+}
+unsafe extern "C" fn color_yellow(self_cls: Class, _cmd: Sel) -> Id {
+    color_with_rgba(self_cls, _cmd, 1.0, 1.0, 0.0, 1.0)
+}
+unsafe extern "C" fn color_magenta(self_cls: Class, _cmd: Sel) -> Id {
+    color_with_rgba(self_cls, _cmd, 1.0, 0.0, 1.0, 1.0)
+}
+unsafe extern "C" fn color_orange(self_cls: Class, _cmd: Sel) -> Id {
+    color_with_rgba(self_cls, _cmd, 1.0, 0.5, 0.0, 1.0)
+}
+unsafe extern "C" fn color_purple(self_cls: Class, _cmd: Sel) -> Id {
+    color_with_rgba(self_cls, _cmd, 0.5, 0.0, 0.5, 1.0)
+}
+unsafe extern "C" fn color_brown(self_cls: Class, _cmd: Sel) -> Id {
+    color_with_rgba(self_cls, _cmd, 0.6, 0.4, 0.2, 1.0)
+}
+unsafe extern "C" fn color_system_gray(self_cls: Class, _cmd: Sel) -> Id {
+    color_with_rgba(self_cls, _cmd, 0.556, 0.556, 0.576, 1.0)
+}
 
 unsafe extern "C" fn color_cgcolor(self_obj: Id, _cmd: Sel) -> *mut c_void {
     let val = objc_getAssociatedObject(self_obj, &COLOR_KEY as *const u8 as *const c_void);
@@ -1690,6 +1729,19 @@ pub unsafe fn register() {
         add_method(meta, "clearColor", color_clear as Imp, "@@:");
         add_method(meta, "blackColor", color_black as Imp, "@@:");
         add_method(meta, "whiteColor", color_white as Imp, "@@:");
+        add_method(meta, "grayColor", color_gray as Imp, "@@:");
+        add_method(meta, "darkGrayColor", color_dark_gray as Imp, "@@:");
+        add_method(meta, "lightGrayColor", color_light_gray as Imp, "@@:");
+        add_method(meta, "redColor", color_red as Imp, "@@:");
+        add_method(meta, "greenColor", color_green as Imp, "@@:");
+        add_method(meta, "blueColor", color_blue as Imp, "@@:");
+        add_method(meta, "cyanColor", color_cyan as Imp, "@@:");
+        add_method(meta, "yellowColor", color_yellow as Imp, "@@:");
+        add_method(meta, "magentaColor", color_magenta as Imp, "@@:");
+        add_method(meta, "orangeColor", color_orange as Imp, "@@:");
+        add_method(meta, "purpleColor", color_purple as Imp, "@@:");
+        add_method(meta, "brownColor", color_brown as Imp, "@@:");
+        add_method(meta, "systemGrayColor", color_system_gray as Imp, "@@:");
         add_method(col, "initWithRed:green:blue:alpha:", color_init_rgba as Imp, "@@:dddd");
         add_method(col, "CGColor", color_cgcolor as Imp, "^{CGColor=}@:");
         add_method(col, "colorWithAlphaComponent:", color_with_alpha as Imp, "@@:d");

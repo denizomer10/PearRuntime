@@ -24,6 +24,7 @@ members = [
     "crates/pear-host-linux",
     "crates/pear-runtime",
     "crates/pear-legacy-host",
+    "crates/pear-jit",
 ]
 # pear-swift-support targets aarch64-apple-ios-macabi for the UIKit Swift
 # overlay; default host builds skip it.
@@ -50,6 +51,7 @@ default-members = [
     "crates/pear-host-linux",
     "crates/pear-runtime",
     "crates/pear-legacy-host",
+    "crates/pear-jit",
 ]
 resolver = "2"
 

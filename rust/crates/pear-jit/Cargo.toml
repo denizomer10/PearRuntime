@@ -1,0 +1,8 @@
+[package]
+name = "pear-jit"
+version = "0.1.0"
+edition = "2021"
+description = "PearLegacyJIT (dynarmic A32/A64 -> x86_64/arm64) dynamic execution planner and SIMD-tuned JIT bridge for PearRuntime"
+
+[dependencies]
+pear-macho = { path = "../pear-macho" }

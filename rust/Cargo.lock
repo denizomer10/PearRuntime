@@ -92,6 +92,13 @@ name = "pear-image"
 version = "0.1.0"
 
 [[package]]
+name = "pear-jit"
+version = "0.1.0"
+dependencies = [
+ "pear-macho",
+]
+
+[[package]]
 name = "pear-keychain"
 version = "0.1.0"
 dependencies = [
@@ -142,6 +149,8 @@ dependencies = [
  "pear-host",
  "pear-host-linux",
  "pear-image",
+ "pear-jit",
+ "pear-legacy-host",
  "pear-libobjc",
  "pear-macho",
 ]

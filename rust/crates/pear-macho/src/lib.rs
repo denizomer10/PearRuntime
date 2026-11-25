@@ -15,8 +15,63 @@ pub use image::{
 use std::ffi::{c_char, c_int, CStr};
 use std::fs;
 
+const MH_MAGIC: u32 = 0xFEED_FACE;
 const MH_MAGIC_64: u32 = 0xFEED_FACF;
+const FAT_MAGIC: u32 = 0xCAFE_BABE;
+const FAT_CIGAM: u32 = 0xBEBA_FECA;
+const CPU_TYPE_ARM: u32 = 12;
 const CPU_TYPE_ARM64: u32 = 0x0100_000C;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum GuestArch {
+    Arm32,
+    Arm64,
+}
+
+/// Detects whether a Mach-O or universal FAT binary targets 32-bit ARM (`Arm32`)
+/// or 64-bit ARM (`Arm64`). Prefers `Arm64` when a FAT binary contains both slices.
+pub fn detect_guest_arch(data: &[u8]) -> Option<GuestArch> {
+    if data.len() < 8 {
+        return None;
+    }
+    let magic = read_u32_le(data, 0)?;
+    match magic {
+        MH_MAGIC_64 => {
+            if read_u32_le(data, 4)? == CPU_TYPE_ARM64 {
+                Some(GuestArch::Arm64)
+            } else {
+                None
+            }
+        }
+        MH_MAGIC => {
+            if read_u32_le(data, 4)? == CPU_TYPE_ARM {
+                Some(GuestArch::Arm32)
+            } else {
+                None
+            }
+        }
+        FAT_MAGIC | FAT_CIGAM => {
+            // FAT headers are big-endian.
+            let nfat = u32::from_be_bytes(data.get(4..8)?.try_into().ok()?) as usize;
+            let mut has_arm32 = false;
+            for i in 0..nfat.min(16) {
+                let off = 8 + i * 20;
+                let cpu = u32::from_be_bytes(data.get(off..off + 4)?.try_into().ok()?);
+                if cpu == CPU_TYPE_ARM64 {
+                    return Some(GuestArch::Arm64);
+                } else if cpu == CPU_TYPE_ARM {
+                    has_arm32 = true;
+                }
+            }
+            if has_arm32 {
+                Some(GuestArch::Arm32)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
 
 const LC_BUILD_VERSION: u32 = 0x32;
 const LC_VERSION_MIN_IPHONEOS: u32 = 0x25;
@@ -213,5 +268,16 @@ mod tests {
     fn rejects_encrypted_binary() {
         let mut data = make_minimal_arm64_macho(PLATFORM_IOS, 1);
         assert!(retarget_macos_in_place(&mut data).is_err());
+    }
+
+    #[test]
+    fn detects_arm32_and_arm64_macho() {
+        let arm64 = make_minimal_arm64_macho(PLATFORM_IOS, 0);
+        assert_eq!(detect_guest_arch(&arm64), Some(GuestArch::Arm64));
+
+        let mut arm32 = vec![0u8; 32];
+        write_u32_le(&mut arm32, 0, MH_MAGIC);
+        write_u32_le(&mut arm32, 4, CPU_TYPE_ARM);
+        assert_eq!(detect_guest_arch(&arm32), Some(GuestArch::Arm32));
     }
 }

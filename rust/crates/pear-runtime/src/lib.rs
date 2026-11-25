@@ -7,6 +7,8 @@ pub use pear_foundation;
 pub use pear_graphics;
 pub use pear_host;
 pub use pear_image;
+pub use pear_jit;
+pub use pear_legacy_host;
 pub use pear_libobjc;
 pub use pear_macho;
 
@@ -956,6 +958,37 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             .or_else(|| libc_dlsym(symbol)),
         _ => None,
     }
+}
+
+/// 32-bit iOS API & `PearLegacyEngine` + `PearLegacyJIT` integration layer.
+pub mod api32 {
+    use pear_jit::{ExecutionMode, ExecutionPlan};
+
+    /// Initializes the OS-independent 32-bit host bridge (`pear-legacy-host`)
+    /// and prepares `PearLegacyJIT` (A32) for 32-bit iOS execution.
+    pub fn init(plan: &ExecutionPlan) {
+        debug_assert_eq!(plan.mode, ExecutionMode::Legacy32BitJit);
+        pear_legacy_host::init_legacy_host();
+    }
+}
+
+/// 64-bit iOS API layer (`pear-dyld` + `pear-libobjc` + `pear-foundation` + `pear-graphics` + `pear-host`),
+/// executing natively on ARM64 hosts or via `PearLegacyJIT` (A64 -> x86_64) on x86_64 hosts.
+pub mod api64 {
+    use pear_jit::{ExecutionMode, ExecutionPlan};
+
+    pub fn init(plan: &ExecutionPlan) {
+        match plan.mode {
+            ExecutionMode::NativeDirect | ExecutionMode::Arm64ToX86_64Jit => super::init(),
+            ExecutionMode::Legacy32BitJit => super::api32::init(plan),
+        }
+    }
+}
+
+/// Inspects a Mach-O or FAT binary and selects the optimal OS/arch/API/JIT plan.
+pub fn plan_execution(data: &[u8]) -> Option<pear_jit::ExecutionPlan> {
+    let arch = pear_macho::detect_guest_arch(data)?;
+    Some(pear_jit::ExecutionPlan::current_host(arch))
 }
 
 /// Maps, fixes up, registers ObjC/Foundation metadata, calls `+load`, and runs

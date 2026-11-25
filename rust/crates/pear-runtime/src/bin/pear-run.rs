@@ -1,30 +1,73 @@
-//! Clean-room: standalone `pear-run` CLI runner for loading and booting
-//! 64-bit arm64 Mach-O iOS binaries on `pear-runtime` (macOS & Linux).
+//! Clean-room: standalone `pearruntime` / `pear-run` CLI runner for loading
+//! and booting 32-bit & 64-bit iOS Mach-O binaries or `.app` bundles on
+//! `pear-runtime` (macOS & Linux, ARM64 native or x86_64 via `PearLegacyJIT`).
 
 use std::env;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process;
+
+fn resolve_executable(input: &str) -> PathBuf {
+    let p = Path::new(input);
+    if p.is_dir() && input.ends_with(".app") {
+        // Try matching bundle stem (e.g., MyGame.app -> MyGame).
+        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+            let candidate = p.join(stem);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+        // Fallback: first executable-sized file in `.app` root.
+        if let Ok(entries) = fs::read_dir(p) {
+            for ent in entries.flatten() {
+                let ep = ent.path();
+                if ep.is_file() && ep.extension().is_none() {
+                    return ep;
+                }
+            }
+        }
+    }
+    p.to_path_buf()
+}
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
-        eprintln!("Usage: pear-run <macho-binary> [--inspect-only]");
+        eprintln!("Usage: pearruntime <macho-binary-or-.app> [--plan] [--inspect-only] [--check-load] [--list-missing]");
         process::exit(if args.is_empty() { 2 } else { 0 });
     }
-    let path = &args[0];
+    let exe_path = resolve_executable(&args[0]);
+    let plan_only = args.iter().any(|a| a == "--plan");
     let inspect_only = args.iter().any(|a| a == "--inspect-only");
     let check_load = args.iter().any(|a| a == "--check-load");
     let list_missing = args.iter().any(|a| a == "--list-missing");
 
-    let bytes = match fs::read(path) {
+    let bytes = match fs::read(&exe_path) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("pear-run: failed to read {path}: {e}");
+            eprintln!("pearruntime: failed to read {}: {e}", exe_path.display());
             process::exit(1);
         }
     };
 
+    let plan = pear_runtime::plan_execution(&bytes);
+    if plan_only {
+        match plan {
+            Some(p) => {
+                println!("ExecutionPlan: {}", p.summary());
+                return;
+            }
+            None => {
+                eprintln!("pearruntime: unsupported binary format in {}", exe_path.display());
+                process::exit(1);
+            }
+        }
+    }
+
     if inspect_only {
+        if let Some(ref p) = plan {
+            println!("ExecutionPlan: {}", p.summary());
+        }
         match pear_macho::MachO::parse(&bytes) {
             Ok(m) => {
                 println!(
@@ -36,9 +79,20 @@ fn main() {
                 return;
             }
             Err(e) => {
-                eprintln!("pear-run: Mach-O parse failed: {e:?}");
+                eprintln!("pearruntime: Mach-O parse failed: {e:?}");
                 process::exit(1);
             }
+        }
+    }
+
+    if let Some(ref p) = plan {
+        if p.api_tier == pear_runtime::pear_jit::ApiTier::Ios32 {
+            pear_runtime::api32::init(p);
+            println!(
+                "pearruntime: 32-bit iOS mode active ({}) -> handoff to PearLegacyEngine + PearLegacyJIT",
+                p.summary()
+            );
+            return;
         }
     }
 
@@ -59,7 +113,8 @@ fn main() {
             Ok(img) => {
                 let report = unsafe { pear_libobjc::register_image(&img) };
                 println!(
-                    "pear-run --check-load: {path} classes={} unrealized={} categories={} selectors={}",
+                    "pearruntime --check-load: {} classes={} unrealized={} categories={} selectors={}",
+                    exe_path.display(),
                     report.classes,
                     report.unrealized.len(),
                     report.categories,
@@ -78,15 +133,20 @@ fn main() {
                 return;
             }
             Err(e) => {
-                eprintln!("pear-run: load failed: {e:?}");
+                eprintln!("pearruntime: load failed: {e:?}");
                 process::exit(1);
             }
         }
     }
+
     match pear_runtime::load_and_boot(&bytes, opts) {
         Ok((img, report)) => {
+            if let Some(ref p) = plan {
+                println!("pearruntime: {}", p.summary());
+            }
             println!(
-                "pear-run: booted {path} (classes={} categories={} selectors={})",
+                "pearruntime: booted {} (classes={} categories={} selectors={})",
+                exe_path.display(),
                 report.classes,
                 report.categories,
                 report.selectors,
@@ -99,7 +159,7 @@ fn main() {
             }
         }
         Err(e) => {
-            eprintln!("pear-run: load_and_boot failed: {e:?}");
+            eprintln!("pearruntime: load_and_boot failed: {e:?}");
             process::exit(1);
         }
     }

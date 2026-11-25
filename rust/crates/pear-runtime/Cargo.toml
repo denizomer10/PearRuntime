@@ -11,6 +11,16 @@ pear-foundation = { path = "../pear-foundation" }
 pear-host = { path = "../pear-host" }
 pear-image = { path = "../pear-image" }
 pear-graphics = { path = "../pear-graphics" }
+pear-jit = { path = "../pear-jit" }
+pear-legacy-host = { path = "../pear-legacy-host" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 pear-host-linux = { path = "../pear-host-linux" }
+
+[[bin]]
+name = "pear-run"
+path = "src/bin/pear-run.rs"
+
+[[bin]]
+name = "pearruntime"
+path = "src/bin/pear-run.rs"
