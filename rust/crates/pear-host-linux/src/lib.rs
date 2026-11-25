@@ -22,6 +22,7 @@ struct LinuxWindow {
     frame: Rect,
     root_layer: usize,
     visible: bool,
+    x11_display: usize,
     x11_window: u64,
 }
 
@@ -177,11 +178,14 @@ impl HostPlatform for LinuxHost {
     fn create_window(&self, owner: GuestObject, frame: Rect) -> WindowHandle {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         #[allow(unused_mut)]
+        let mut x11_display = 0usize;
+        #[allow(unused_mut)]
         let mut x11_window = 0u64;
         #[cfg(target_os = "linux")]
         if !self.use_wayland {
             if let Some(x11) = x11_ffi::try_open() {
                 unsafe {
+                    x11_display = x11.display as usize;
                     let scr = (x11.x_default_screen)(x11.display);
                     let root = (x11.x_root_window)(x11.display, scr);
                     let w = (frame.width as u32).max(64);
@@ -211,6 +215,7 @@ impl HostPlatform for LinuxHost {
             frame,
             root_layer: 0,
             visible: false,
+            x11_display,
             x11_window,
         };
         self.state.lock().unwrap().windows.insert(id, win);
@@ -252,7 +257,7 @@ impl HostPlatform for LinuxHost {
             }
         } else {
             NativeSurface::Xlib {
-                display: std::ptr::null_mut(),
+                display: win.x11_display as *mut c_void,
                 window: if win.x11_window != 0 { win.x11_window } else { win_id },
             }
         };

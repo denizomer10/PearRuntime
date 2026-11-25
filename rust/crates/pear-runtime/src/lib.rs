@@ -136,10 +136,126 @@ extern "C" fn ui_application_main(
     _argc: i32,
     _argv: *const *const c_char,
     _principal: Id,
-    _delegate: Id,
+    delegate: Id,
 ) -> i32 {
-    pear_host::host().run(Box::new(|| {}));
+    let delegate_name = if !delegate.is_null() {
+        pear_foundation::rust_str_from_nsstring(delegate)
+    } else {
+        None
+    };
+    pear_host::host().run(Box::new(move || {
+        if let Some(name) = delegate_name {
+            if let Some(cls) = objc_rt::class_named(&name) {
+                unsafe {
+                    let app = shared_app_stub(std::ptr::null_mut(), objc_rt::sel("sharedApplication"));
+                    let del = alloc(cls);
+                    let sel_init = objc_rt::sel("init");
+                    let d_init = pear_libobjc::message::lookup_for_send(del, sel_init);
+                    let f_init: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_init.imp);
+                    let del = f_init(d_init.receiver, sel_init);
+                    let sel_did = objc_rt::sel("application:didFinishLaunchingWithOptions:");
+                    let d_did = pear_libobjc::message::lookup_for_send(del, sel_did);
+                    let f_did: extern "C" fn(Id, Sel, Id, Id) -> bool = std::mem::transmute(d_did.imp);
+                    let _ = f_did(d_did.receiver, sel_did, app, std::ptr::null_mut());
+                }
+            }
+        }
+    }));
     0
+}
+
+static HOST_WINDOWS: std::sync::Mutex<Option<std::collections::HashMap<usize, (usize, usize)>>> =
+    std::sync::Mutex::new(None);
+static ACTIVE_EGL_CTX: std::sync::Mutex<Option<usize>> = std::sync::Mutex::new(None);
+
+extern "C" fn ui_window_init_with_frame(
+    self_obj: Id,
+    _cmd: Sel,
+    frame: pear_graphics::CGRect,
+) -> Id {
+    let rect = pear_host::Rect {
+        x: frame.origin.x,
+        y: frame.origin.y,
+        width: frame.size.width.max(64.0),
+        height: frame.size.height.max(64.0),
+    };
+    let host = pear_host::host();
+    let win = host.create_window(pear_host::GuestObject(self_obj as *mut c_void), rect);
+    let layer = pear_host::LayerRef(self_obj as *mut c_void);
+    host.set_root_layer(win, layer);
+    let mut guard = HOST_WINDOWS.lock().unwrap();
+    guard
+        .get_or_insert_with(std::collections::HashMap::new)
+        .insert(self_obj as usize, (win.0 as usize, layer.0 as usize));
+    self_obj
+}
+
+extern "C" fn ui_window_make_key_and_visible(self_obj: Id, _cmd: Sel) {
+    let pair = HOST_WINDOWS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get(&(self_obj as usize)).copied());
+    let (win, _layer) = match pair {
+        Some(p) => (pear_host::WindowHandle(p.0 as *mut c_void), p.1),
+        None => {
+            let _ = ui_window_init_with_frame(
+                self_obj,
+                _cmd,
+                pear_graphics::CGRect {
+                    origin: pear_graphics::CGPoint { x: 80.0, y: 60.0 },
+                    size: pear_graphics::CGSize { width: 960.0, height: 600.0 },
+                },
+            );
+            let p = HOST_WINDOWS
+                .lock()
+                .unwrap()
+                .as_ref()
+                .and_then(|m| m.get(&(self_obj as usize)).copied())
+                .unwrap_or((0, 0));
+            (pear_host::WindowHandle(p.0 as *mut c_void), p.1)
+        }
+    };
+    if !win.0.is_null() {
+        pear_host::host().show_window(win, true);
+    }
+}
+
+extern "C" fn eagl_init_with_api(self_obj: Id, _cmd: Sel, _api: usize) -> Id {
+    self_obj
+}
+
+extern "C" fn eagl_set_current_context(_self_cls: Id, _cmd: Sel, ctx: Id) -> bool {
+    *ACTIVE_EGL_CTX.lock().unwrap() = Some(ctx as usize);
+    true
+}
+
+extern "C" fn eagl_renderbuffer_storage(
+    _self_obj: Id,
+    _cmd: Sel,
+    _target: usize,
+    drawable: Id,
+) -> bool {
+    if let Some(info) = pear_host::host().surface(pear_host::LayerRef(drawable as *mut c_void)) {
+        if let pear_host::NativeSurface::Xlib { display, window } = info.surface {
+            if let Some(egl) = egl_bridge::EglSurfaceCtx::create_from_x11(display, window) {
+                let boxed = Box::into_raw(Box::new(egl)) as usize;
+                *ACTIVE_EGL_CTX.lock().unwrap() = Some(boxed);
+                return true;
+            }
+        }
+    }
+    true
+}
+
+extern "C" fn eagl_present_renderbuffer(_self_obj: Id, _cmd: Sel, _target: usize) -> bool {
+    if let Some(ptr) = *ACTIVE_EGL_CTX.lock().unwrap() {
+        if ptr > 0x10000 {
+            let egl = unsafe { &*(ptr as *const egl_bridge::EglSurfaceCtx) };
+            egl.swap_buffers();
+        }
+    }
+    true
 }
 
 extern "C" fn ns_string_from_cgrect(r: pear_graphics::CGRect) -> Id {
@@ -167,7 +283,6 @@ fn init_guest_frameworks() {
             (&CAEAGLLAYER_CLASS, &CAEAGLLAYER_META, "CAEAGLLayer"),
             (&CATRANSACTION_CLASS, &CATRANSACTION_META, "CATransaction"),
             (&CADISPLAYLINK_CLASS, &CADISPLAYLINK_META, "CADisplayLink"),
-            (&UIWINDOW_CLASS, &UIWINDOW_META, "UIWindow"),
             (&UIVIEW_CLASS, &UIVIEW_META, "UIView"),
             (&UICOLOR_CLASS, &UICOLOR_META, "UIColor"),
             (&UIIMAGE_CLASS, &UIIMAGE_META, "UIImage"),
@@ -185,7 +300,6 @@ fn init_guest_frameworks() {
             (&GLKVIEW_CLASS, &GLKVIEW_META, "GLKView"),
             (&GLKVIEWCONTROLLER_CLASS, &GLKVIEWCONTROLLER_META, "GLKViewController"),
             (&MTKVIEW_CLASS, &MTKVIEW_META, "MTKView"),
-            (&EAGLCONTEXT_CLASS, &EAGLCONTEXT_META, "EAGLContext"),
             (&UIDOCUMENT_CLASS, &UIDOCUMENT_META, "UIDocument"),
             (&UIACCESSIBILITYELEMENT_CLASS, &UIACCESSIBILITYELEMENT_META, "UIAccessibilityElement"),
             (&UITEXTPOSITION_CLASS, &UITEXTPOSITION_META, "UITextPosition"),
@@ -253,6 +367,29 @@ fn init_guest_frameworks() {
                 ("beginGeneratingDeviceOrientationNotifications", i(noop_method as *const ())),
             ],
             &[("currentDevice", i(current_device_stub as *const ()))],
+        );
+        objc_rt::register_builtin(
+            UIWINDOW_CLASS.ptr(),
+            UIWINDOW_META.ptr(),
+            "UIWindow",
+            64,
+            &[
+                ("initWithFrame:", i(ui_window_init_with_frame as *const ())),
+                ("makeKeyAndVisible", i(ui_window_make_key_and_visible as *const ())),
+            ],
+            &[],
+        );
+        objc_rt::register_builtin(
+            EAGLCONTEXT_CLASS.ptr(),
+            EAGLCONTEXT_META.ptr(),
+            "EAGLContext",
+            64,
+            &[
+                ("initWithAPI:", i(eagl_init_with_api as *const ())),
+                ("renderbufferStorage:fromDrawable:", i(eagl_renderbuffer_storage as *const ())),
+                ("presentRenderbuffer:", i(eagl_present_renderbuffer as *const ())),
+            ],
+            &[("setCurrentContext:", i(eagl_set_current_context as *const ()))],
         );
     });
 }
@@ -971,6 +1108,228 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             .or_else(|| pear_graphics::symbol(symbol))
             .or_else(|| libc_dlsym(symbol)),
         _ => None,
+    }
+}
+
+/// Portable EGL + OpenGL ES 2.0 surface bridge (`libEGL.so.1` + `libGLESv2.so.2`)
+/// for Linux/X11 windows (including Mesa `llvmpipe` inside headless/VNC containers).
+pub mod egl_bridge {
+    use std::ffi::{c_char, c_float, c_int, c_uint, c_void};
+
+    const EGL_OPENGL_ES_API: c_uint = 0x30A0;
+    const EGL_SURFACE_TYPE: c_int = 0x3033;
+    const EGL_WINDOW_BIT: c_int = 0x0004;
+    const EGL_RENDERABLE_TYPE: c_int = 0x3040;
+    const EGL_OPENGL_ES2_BIT: c_int = 0x0004;
+    const EGL_RED_SIZE: c_int = 0x3024;
+    const EGL_GREEN_SIZE: c_int = 0x3023;
+    const EGL_BLUE_SIZE: c_int = 0x3022;
+    const EGL_ALPHA_SIZE: c_int = 0x3021;
+    const EGL_CONTEXT_CLIENT_VERSION: c_int = 0x3098;
+    const EGL_NONE: c_int = 0x3038;
+
+    const GL_COLOR_BUFFER_BIT: c_uint = 0x0000_4000;
+    const GL_TRIANGLES: c_uint = 0x0004;
+    const GL_FLOAT: c_uint = 0x1406;
+    const GL_FRAGMENT_SHADER: c_uint = 0x8B30;
+    const GL_VERTEX_SHADER: c_uint = 0x8B31;
+
+    pub struct EglSurfaceCtx {
+        dpy: *mut c_void,
+        surf: *mut c_void,
+        ctx: *mut c_void,
+        program: c_uint,
+        u_angle: c_int,
+        egl_swap_buffers: unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_uint,
+        gl_viewport: unsafe extern "C" fn(c_int, c_int, c_int, c_int),
+        gl_clear_color: unsafe extern "C" fn(c_float, c_float, c_float, c_float),
+        gl_clear: unsafe extern "C" fn(c_uint),
+        gl_use_program: unsafe extern "C" fn(c_uint),
+        gl_uniform1f: unsafe extern "C" fn(c_int, c_float),
+        gl_vertex_attrib_pointer: unsafe extern "C" fn(c_uint, c_int, c_uint, u8, c_int, *const c_void),
+        gl_enable_vertex_attrib_array: unsafe extern "C" fn(c_uint),
+        gl_draw_arrays: unsafe extern "C" fn(c_uint, c_int, c_int),
+    }
+
+    unsafe impl Send for EglSurfaceCtx {}
+    unsafe impl Sync for EglSurfaceCtx {}
+
+    impl EglSurfaceCtx {
+        pub fn create_from_x11(x11_display: *mut c_void, x11_window: u64) -> Option<Self> {
+            unsafe {
+                let mut egl_lib = super::dlopen(c"libEGL.so.1".as_ptr(), 1);
+                if egl_lib.is_null() {
+                    egl_lib = super::dlopen(c"libEGL.so".as_ptr(), 1);
+                }
+                let mut gles_lib = super::dlopen(c"libGLESv2.so.2".as_ptr(), 1);
+                if gles_lib.is_null() {
+                    gles_lib = super::dlopen(c"libGLESv2.so".as_ptr(), 1);
+                }
+                if egl_lib.is_null() || gles_lib.is_null() {
+                    eprintln!("[pear-egl] failed to dlopen libEGL / libGLESv2");
+                    return None;
+                }
+
+                let get_proc: unsafe extern "C" fn(*const c_char) -> *mut c_void =
+                    std::mem::transmute(super::dlsym(egl_lib, c"eglGetProcAddress".as_ptr()));
+                let load_egl = |name: &std::ffi::CStr| -> *mut c_void {
+                    let p = super::dlsym(egl_lib, name.as_ptr());
+                    if !p.is_null() { p } else { get_proc(name.as_ptr()) }
+                };
+                let load_gl = |name: &std::ffi::CStr| -> *mut c_void {
+                    let p = super::dlsym(gles_lib, name.as_ptr());
+                    if !p.is_null() { p } else { get_proc(name.as_ptr()) }
+                };
+
+                let egl_get_display: unsafe extern "C" fn(*mut c_void) -> *mut c_void =
+                    std::mem::transmute(load_egl(c"eglGetDisplay"));
+                let egl_initialize: unsafe extern "C" fn(*mut c_void, *mut c_int, *mut c_int) -> c_uint =
+                    std::mem::transmute(load_egl(c"eglInitialize"));
+                let egl_bind_api: unsafe extern "C" fn(c_uint) -> c_uint =
+                    std::mem::transmute(load_egl(c"eglBindAPI"));
+                let egl_choose_config: unsafe extern "C" fn(*mut c_void, *const c_int, *mut *mut c_void, c_int, *mut c_int) -> c_uint =
+                    std::mem::transmute(load_egl(c"eglChooseConfig"));
+                let egl_create_window_surface: unsafe extern "C" fn(*mut c_void, *mut c_void, usize, *const c_int) -> *mut c_void =
+                    std::mem::transmute(load_egl(c"eglCreateWindowSurface"));
+                let egl_create_context: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *const c_int) -> *mut c_void =
+                    std::mem::transmute(load_egl(c"eglCreateContext"));
+                let egl_make_current: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, *mut c_void) -> c_uint =
+                    std::mem::transmute(load_egl(c"eglMakeCurrent"));
+                let egl_swap_buffers: unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_uint =
+                    std::mem::transmute(load_egl(c"eglSwapBuffers"));
+                let egl_get_error: unsafe extern "C" fn() -> c_int =
+                    std::mem::transmute(load_egl(c"eglGetError"));
+
+                let dpy = egl_get_display(x11_display);
+                if dpy.is_null() {
+                    eprintln!("[pear-egl] eglGetDisplay returned null");
+                    return None;
+                }
+                let mut maj = 0;
+                let mut min = 0;
+                if egl_initialize(dpy, &mut maj, &mut min) == 0 {
+                    eprintln!("[pear-egl] eglInitialize failed err=0x{:x}", egl_get_error());
+                    return None;
+                }
+                let _ = egl_bind_api(EGL_OPENGL_ES_API);
+
+                let cfg_attrs = [
+                    EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+                    EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+                    EGL_RED_SIZE, 8,
+                    EGL_GREEN_SIZE, 8,
+                    EGL_BLUE_SIZE, 8,
+                    EGL_ALPHA_SIZE, 8,
+                    EGL_NONE,
+                ];
+                let mut cfg: *mut c_void = std::ptr::null_mut();
+                let mut num_cfg = 0;
+                if egl_choose_config(dpy, cfg_attrs.as_ptr(), &mut cfg, 1, &mut num_cfg) == 0 || num_cfg == 0 {
+                    eprintln!("[pear-egl] eglChooseConfig failed err=0x{:x}", egl_get_error());
+                    return None;
+                }
+
+                let surf = egl_create_window_surface(dpy, cfg, x11_window as usize, std::ptr::null());
+                if surf.is_null() {
+                    eprintln!("[pear-egl] eglCreateWindowSurface failed err=0x{:x}", egl_get_error());
+                    return None;
+                }
+
+                let ctx_attrs = [EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE];
+                let ctx = egl_create_context(dpy, cfg, std::ptr::null_mut(), ctx_attrs.as_ptr());
+                if ctx.is_null() {
+                    eprintln!("[pear-egl] eglCreateContext failed err=0x{:x}", egl_get_error());
+                    return None;
+                }
+
+                if egl_make_current(dpy, surf, surf, ctx) == 0 {
+                    eprintln!("[pear-egl] eglMakeCurrent failed err=0x{:x}", egl_get_error());
+                    return None;
+                }
+
+                let gl_create_shader: unsafe extern "C" fn(c_uint) -> c_uint = std::mem::transmute(load_gl(c"glCreateShader"));
+                let gl_shader_source: unsafe extern "C" fn(c_uint, c_int, *const *const c_char, *const c_int) = std::mem::transmute(load_gl(c"glShaderSource"));
+                let gl_compile_shader: unsafe extern "C" fn(c_uint) = std::mem::transmute(load_gl(c"glCompileShader"));
+                let gl_create_program: unsafe extern "C" fn() -> c_uint = std::mem::transmute(load_gl(c"glCreateProgram"));
+                let gl_attach_shader: unsafe extern "C" fn(c_uint, c_uint) = std::mem::transmute(load_gl(c"glAttachShader"));
+                let gl_bind_attrib_location: unsafe extern "C" fn(c_uint, c_uint, *const c_char) = std::mem::transmute(load_gl(c"glBindAttribLocation"));
+                let gl_link_program: unsafe extern "C" fn(c_uint) = std::mem::transmute(load_gl(c"glLinkProgram"));
+                let gl_get_uniform_location: unsafe extern "C" fn(c_uint, *const c_char) -> c_int = std::mem::transmute(load_gl(c"glGetUniformLocation"));
+
+                let vs_src = c"attribute vec2 aPos; attribute vec3 aCol; varying vec3 vCol; uniform float uAngle; void main() { float c = cos(uAngle); float s = sin(uAngle); gl_Position = vec4(aPos.x * c - aPos.y * s, aPos.x * s + aPos.y * c, 0.0, 1.0); vCol = aCol; }";
+                let fs_src = c"precision mediump float; varying vec3 vCol; void main() { gl_FragColor = vec4(vCol, 1.0); }";
+
+                let vs = gl_create_shader(GL_VERTEX_SHADER);
+                let vs_ptr = vs_src.as_ptr();
+                gl_shader_source(vs, 1, &vs_ptr, std::ptr::null());
+                gl_compile_shader(vs);
+
+                let fs = gl_create_shader(GL_FRAGMENT_SHADER);
+                let fs_ptr = fs_src.as_ptr();
+                gl_shader_source(fs, 1, &fs_ptr, std::ptr::null());
+                gl_compile_shader(fs);
+
+                let program = gl_create_program();
+                gl_attach_shader(program, vs);
+                gl_attach_shader(program, fs);
+                gl_bind_attrib_location(program, 0, c"aPos".as_ptr());
+                gl_bind_attrib_location(program, 1, c"aCol".as_ptr());
+                gl_link_program(program);
+                let u_angle = gl_get_uniform_location(program, c"uAngle".as_ptr());
+
+                eprintln!("[pear-egl] EGL {maj}.{min} + GLESv2 initialized (surf={surf:?} ctx={ctx:?})");
+
+                Some(Self {
+                    dpy,
+                    surf,
+                    ctx,
+                    program,
+                    u_angle,
+                    egl_swap_buffers,
+                    gl_viewport: std::mem::transmute(load_gl(c"glViewport")),
+                    gl_clear_color: std::mem::transmute(load_gl(c"glClearColor")),
+                    gl_clear: std::mem::transmute(load_gl(c"glClear")),
+                    gl_use_program: std::mem::transmute(load_gl(c"glUseProgram")),
+                    gl_uniform1f: std::mem::transmute(load_gl(c"glUniform1f")),
+                    gl_vertex_attrib_pointer: std::mem::transmute(load_gl(c"glVertexAttribPointer")),
+                    gl_enable_vertex_attrib_array: std::mem::transmute(load_gl(c"glEnableVertexAttribArray")),
+                    gl_draw_arrays: std::mem::transmute(load_gl(c"glDrawArrays")),
+                })
+            }
+        }
+
+        pub fn swap_buffers(&self) {
+            unsafe {
+                let _ = (self.egl_swap_buffers)(self.dpy, self.surf);
+            }
+        }
+
+        pub fn render_demo_frame(&self, width: i32, height: i32, angle: f32) {
+            let _ = self.ctx;
+            #[rustfmt::skip]
+            let verts: [f32; 15] = [
+                 0.0,   0.65,  0.30, 0.85, 0.95,
+                -0.60, -0.45,  0.95, 0.35, 0.55,
+                 0.60, -0.45,  0.35, 0.95, 0.65,
+            ];
+            unsafe {
+                (self.gl_viewport)(0, 0, width, height);
+                let bg = 0.08 + 0.04 * angle.sin();
+                (self.gl_clear_color)(bg, 0.11, 0.17, 1.0);
+                (self.gl_clear)(GL_COLOR_BUFFER_BIT);
+                (self.gl_use_program)(self.program);
+                if self.u_angle >= 0 {
+                    (self.gl_uniform1f)(self.u_angle, angle);
+                }
+                let stride = (5 * std::mem::size_of::<f32>()) as c_int;
+                (self.gl_vertex_attrib_pointer)(0, 2, GL_FLOAT, 0, stride, verts.as_ptr() as *const c_void);
+                (self.gl_enable_vertex_attrib_array)(0);
+                (self.gl_vertex_attrib_pointer)(1, 3, GL_FLOAT, 0, stride, verts.as_ptr().add(2) as *const c_void);
+                (self.gl_enable_vertex_attrib_array)(1);
+                (self.gl_draw_arrays)(GL_TRIANGLES, 0, 3);
+                let _ = (self.egl_swap_buffers)(self.dpy, self.surf);
+            }
+        }
     }
 }
 

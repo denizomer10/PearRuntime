@@ -56,9 +56,30 @@ fn main() {
             pear_runtime::pear_host::GuestObject(std::ptr::null_mut()),
             pear_runtime::pear_host::Rect { x: 80.0, y: 60.0, width: 960.0, height: 600.0 },
         );
+        let layer = pear_runtime::pear_host::LayerRef(0x1234 as *mut std::ffi::c_void);
+        host.set_root_layer(win, layer);
         host.show_window(win, true);
+        let surf_info = host.surface(layer);
         println!("pearruntime: opened host window (DISPLAY={:?})", env::var("DISPLAY").ok());
-        host.run(Box::new(|| {}));
+        host.run(Box::new(move || {
+            if let Some(info) = surf_info {
+                if let pear_runtime::pear_host::NativeSurface::Xlib { display, window } = info.surface {
+                    let w = info.pixels.width as i32;
+                    let h = info.pixels.height as i32;
+                    let dpy = display as usize;
+                    std::thread::spawn(move || {
+                        if let Some(egl) = pear_runtime::egl_bridge::EglSurfaceCtx::create_from_x11(dpy as *mut std::ffi::c_void, window) {
+                            let start = std::time::Instant::now();
+                            loop {
+                                let t = start.elapsed().as_secs_f32();
+                                egl.render_demo_frame(w, h, t);
+                                std::thread::sleep(std::time::Duration::from_millis(16));
+                            }
+                        }
+                    });
+                }
+            }
+        }));
         return;
     }
     let exe_path = resolve_executable(&args[0]);
