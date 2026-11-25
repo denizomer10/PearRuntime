@@ -17,12 +17,24 @@ fn resolve_executable(input: &str) -> PathBuf {
                 return candidate;
             }
         }
-        // Fallback: first executable-sized file in `.app` root.
+        // Fallback: first non-hidden Mach-O file in `.app` root.
         if let Ok(entries) = fs::read_dir(p) {
             for ent in entries.flatten() {
                 let ep = ent.path();
+                let name = ent.file_name();
+                if name.to_string_lossy().starts_with('.') {
+                    continue;
+                }
                 if ep.is_file() && ep.extension().is_none() {
-                    return ep;
+                    if let Ok(head) = fs::read(&ep).map(|b| b.into_iter().take(4).collect::<Vec<u8>>()) {
+                        if head.len() == 4 && pear_macho::detect_guest_arch(&[head[0], head[1], head[2], head[3], 0, 0, 0, 0]).is_some()
+                            || head == [0xCF, 0xFA, 0xED, 0xFE]
+                            || head == [0xCE, 0xFA, 0xED, 0xFE]
+                            || head == [0xCA, 0xFE, 0xBA, 0xBE]
+                        {
+                            return ep;
+                        }
+                    }
                 }
             }
         }
