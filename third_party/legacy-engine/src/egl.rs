@@ -77,6 +77,7 @@ type FnQueryString = unsafe extern "C" fn(EGLDisplay, EGLint) -> *const c_char;
 pub struct EglLib {
     _egl_handle: *mut c_void,
     glesv2_handle: *mut c_void,
+    glesv1_handle: *mut c_void,
     eglGetDisplay: FnGetDisplay,
     eglGetPlatformDisplayEXT: Option<FnGetPlatformDisplayEXT>,
     eglInitialize: FnInitialize,
@@ -150,6 +151,11 @@ fn dylopen(path: &Path) -> *mut c_void {
     handle
 }
 
+fn dylopen_opt(path: &Path) -> *mut c_void {
+    let c_path = CString::new(path.to_str().unwrap()).unwrap();
+    unsafe { libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) }
+}
+
 fn dlsym<T>(handle: *mut c_void, name: &str) -> T {
     let c_name = CString::new(name).unwrap();
     let sym = unsafe { libc::dlsym(handle, c_name.as_ptr()) };
@@ -169,12 +175,25 @@ fn dlsym_opt<T>(handle: *mut c_void, name: &str) -> Option<T> {
 
 impl EglLib {
     fn load() -> Self {
-        let dir = angle_lib_dir();
-        log!("Loading ANGLE (Metal) from {:?}.", dir);
-        // libGLESv2 first: libEGL depends on it and dyld resolves it as a
-        // sibling via @loader_path.
-        let glesv2_handle = dylopen(&dir.join("libGLESv2.dylib"));
-        let egl_handle = dylopen(&dir.join("libEGL.dylib"));
+        #[cfg(target_os = "macos")]
+        let (egl_handle, glesv2_handle, glesv1_handle) = {
+            let dir = angle_lib_dir();
+            log!("Loading ANGLE (Metal) from {:?}.", dir);
+            // libGLESv2 first: libEGL depends on it and dyld resolves it as a
+            // sibling via @loader_path.
+            let glesv2 = dylopen(&dir.join("libGLESv2.dylib"));
+            let egl = dylopen(&dir.join("libEGL.dylib"));
+            (egl, glesv2, std::ptr::null_mut())
+        };
+        #[cfg(not(target_os = "macos"))]
+        let (egl_handle, glesv2_handle, glesv1_handle) = {
+            let _ = angle_lib_dir;
+            log!("Loading system Mesa/EGL + GLES libraries.");
+            let glesv1 = dylopen_opt(Path::new("libGLESv1_CM.so.1"));
+            let glesv2 = dylopen(Path::new("libGLESv2.so.2"));
+            let egl = dylopen(Path::new("libEGL.so.1"));
+            (egl, glesv2, glesv1)
+        };
         EglLib {
             eglGetDisplay: dlsym(egl_handle, "eglGetDisplay"),
             eglGetPlatformDisplayEXT: dlsym_opt(egl_handle, "eglGetPlatformDisplayEXT"),
@@ -194,6 +213,7 @@ impl EglLib {
             eglQueryString: dlsym(egl_handle, "eglQueryString"),
             _egl_handle: egl_handle,
             glesv2_handle,
+            glesv1_handle,
         }
     }
 
@@ -205,28 +225,39 @@ impl EglLib {
         Err(format!("{} failed with EGL error {:#x}", what, err))
     }
 
-    /// Initialize an EGL display on ANGLE's Metal backend and pick a config
-    /// usable for both OpenGL ES 1.x and 2.0 contexts.
-    pub fn initialize(&self) -> Result<(EGLDisplay, EGLConfig), String> {
+    /// Initialize an EGL display on ANGLE (macOS Metal) or system EGL (Linux)
+    /// and pick a config usable for OpenGL ES 1.x and 2.0 contexts.
+    pub fn initialize(&self, native_display: *mut c_void) -> Result<(EGLDisplay, EGLConfig), String> {
         let display = unsafe {
-            match self.eglGetPlatformDisplayEXT {
-                Some(get_platform_display) => {
-                    let attribs = [
-                        EGL_PLATFORM_ANGLE_TYPE_ANGLE,
-                        EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE,
-                        EGL_NONE,
-                    ];
-                    get_platform_display(
-                        EGL_PLATFORM_ANGLE_ANGLE,
-                        EGL_DEFAULT_DISPLAY,
-                        attribs.as_ptr(),
-                    )
+            #[cfg(target_os = "macos")]
+            {
+                match self.eglGetPlatformDisplayEXT {
+                    Some(get_platform_display) => {
+                        let attribs = [
+                            EGL_PLATFORM_ANGLE_TYPE_ANGLE,
+                            EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE,
+                            EGL_NONE,
+                        ];
+                        get_platform_display(
+                            EGL_PLATFORM_ANGLE_ANGLE,
+                            if native_display.is_null() { EGL_DEFAULT_DISPLAY } else { native_display },
+                            attribs.as_ptr(),
+                        )
+                    }
+                    None => (self.eglGetDisplay)(native_display),
                 }
-                None => (self.eglGetDisplay)(EGL_DEFAULT_DISPLAY),
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                (self.eglGetDisplay)(if native_display.is_null() {
+                    EGL_DEFAULT_DISPLAY
+                } else {
+                    native_display
+                })
             }
         };
         if display.is_null() {
-            return self.check("eglGetPlatformDisplayEXT(Metal)");
+            return self.check("eglGetDisplay");
         }
 
         let (mut major, mut minor) = (0, 0);
@@ -274,7 +305,19 @@ impl EglLib {
             (self.eglChooseConfig)(display, config_attribs.as_ptr(), &mut config, 1, &mut num_configs)
         };
         if ok == EGL_FALSE || num_configs == 0 || config.is_null() {
-            return self.check("eglChooseConfig");
+            let es2_attribs = [
+                EGL_SURFACE_TYPE,
+                EGL_WINDOW_BIT,
+                EGL_RENDERABLE_TYPE,
+                EGL_OPENGL_ES2_BIT,
+                EGL_NONE,
+            ];
+            let ok2 = unsafe {
+                (self.eglChooseConfig)(display, es2_attribs.as_ptr(), &mut config, 1, &mut num_configs)
+            };
+            if ok2 == EGL_FALSE || num_configs == 0 || config.is_null() {
+                return self.check("eglChooseConfig");
+            }
         }
         Ok((display, config))
     }
@@ -377,6 +420,13 @@ impl EglLib {
         if !sym.is_null() {
             return sym;
         }
-        unsafe { libc::dlsym(self.glesv2_handle, c_name.as_ptr()) }
+        let s2 = unsafe { libc::dlsym(self.glesv2_handle, c_name.as_ptr()) };
+        if !s2.is_null() {
+            return s2;
+        }
+        if !self.glesv1_handle.is_null() {
+            return unsafe { libc::dlsym(self.glesv1_handle, c_name.as_ptr()) };
+        }
+        std::ptr::null_mut()
     }
 }

@@ -348,6 +348,7 @@ impl Drop for Window {
                 crate::egl::EGL_NO_CONTEXT,
             );
             egl.destroy_surface(self.egl_display, self.egl_surface);
+            #[cfg(target_os = "macos")]
             sdl2_sys::SDL_Metal_DestroyView(self.metal_view);
         }
     }
@@ -398,9 +399,10 @@ pub struct Window {
     /// ANGLE/EGL framebuffer configuration shared by all contexts.
     egl_config: crate::egl::EGLConfig,
     /// ANGLE/EGL window surface, rendering into the CAMetalLayer of
-    /// `metal_view`.
+    /// `metal_view` on macOS or the native X11 window on Linux.
     egl_surface: crate::egl::EGLSurface,
     /// SDL Metal view hosting the CAMetalLayer that `egl_surface` renders into.
+    #[cfg(target_os = "macos")]
     metal_view: sdl2_sys::SDL_MetalView,
     /// Root of the single EGL share group. The first GL context created
     /// becomes the share root for all later contexts (see
@@ -491,8 +493,14 @@ fn report_swap_diag(window: &Window) {
         return;
     }
     let (w, h) = window.window.size();
-    let (mut dw, mut dh) = (0, 0);
-    unsafe { sdl2_sys::SDL_Metal_GetDrawableSize(window.window.raw(), &mut dw, &mut dh) };
+    #[cfg(target_os = "macos")]
+    let (dw, dh) = {
+        let (mut dw, mut dh) = (0, 0);
+        unsafe { sdl2_sys::SDL_Metal_GetDrawableSize(window.window.raw(), &mut dw, &mut dh) };
+        (dw, dh)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (dw, dh) = window.window.drawable_size();
     let egl = crate::egl::global();
     let surface_w = unsafe { egl.query_surface(window.egl_display, window.egl_surface, crate::egl::EGL_WIDTH) };
     let surface_h = unsafe { egl.query_surface(window.egl_display, window.egl_surface, crate::egl::EGL_HEIGHT) };
@@ -629,18 +637,63 @@ impl Window {
             );
         }
 
-        // Set up ANGLE (Metal): host the game's rendering in a CAMetalLayer and
-        // create the EGL window surface for it. All GL contexts (guest and
-        // internal) render through this surface via one share group.
-        let metal_view = unsafe { sdl2_sys::SDL_Metal_CreateView(window.raw()) };
-        assert!(!metal_view.is_null(), "SDL_Metal_CreateView() failed");
-        let egl = crate::egl::global();
-        let (egl_display, egl_config) = egl
-            .initialize()
-            .unwrap_or_else(|e| panic!("Couldn't initialize ANGLE (EGL): {}", e));
-        let egl_surface = unsafe {
-            egl.create_window_surface(egl_display, egl_config, sdl2_sys::SDL_Metal_GetLayer(metal_view))
+        #[cfg(target_os = "macos")]
+        let (metal_view, egl_display, egl_config, egl_surface) = {
+            let metal_view = unsafe { sdl2_sys::SDL_Metal_CreateView(window.raw()) };
+            assert!(!metal_view.is_null(), "SDL_Metal_CreateView() failed");
+            let egl = crate::egl::global();
+            let (egl_display, egl_config) = egl
+                .initialize(std::ptr::null_mut())
+                .unwrap_or_else(|e| panic!("Couldn't initialize ANGLE (EGL): {}", e));
+            let egl_surface = unsafe {
+                egl.create_window_surface(
+                    egl_display,
+                    egl_config,
+                    sdl2_sys::SDL_Metal_GetLayer(metal_view),
+                )
                 .unwrap_or_else(|e| panic!("Couldn't create EGL window surface: {}", e))
+            };
+            (metal_view, egl_display, egl_config, egl_surface)
+        };
+        #[cfg(not(target_os = "macos"))]
+        let (egl_display, egl_config, egl_surface) = {
+            #[repr(C)]
+            struct SdlVersion {
+                major: u8,
+                minor: u8,
+                patch: u8,
+            }
+            #[repr(C)]
+            struct SdlSysWMinfo {
+                version: SdlVersion,
+                subsystem: u32,
+                payload: [usize; 16],
+            }
+            extern "C" {
+                fn SDL_GetVersion(ver: *mut SdlVersion);
+                fn SDL_GetWindowWMInfo(window: *mut sdl2_sys::SDL_Window, info: *mut SdlSysWMinfo) -> i32;
+            }
+            let mut info = SdlSysWMinfo {
+                version: SdlVersion { major: 0, minor: 0, patch: 0 },
+                subsystem: 0,
+                payload: [0; 16],
+            };
+            let ok = unsafe {
+                SDL_GetVersion(&mut info.version);
+                SDL_GetWindowWMInfo(window.raw(), &mut info)
+            };
+            assert!(ok != 0, "SDL_GetWindowWMInfo() failed");
+            let x11_dpy = info.payload[0] as *mut std::ffi::c_void;
+            let x11_win = info.payload[1] as *mut std::ffi::c_void;
+            let egl = crate::egl::global();
+            let (egl_display, egl_config) = egl
+                .initialize(x11_dpy)
+                .unwrap_or_else(|e| panic!("Couldn't initialize Linux EGL: {}", e));
+            let egl_surface = unsafe {
+                egl.create_window_surface(egl_display, egl_config, x11_win)
+                    .unwrap_or_else(|e| panic!("Couldn't create EGL X11 window surface: {}", e))
+            };
+            (egl_display, egl_config, egl_surface)
         };
 
         if let Some(icon) = icon {
@@ -686,6 +739,7 @@ impl Window {
             egl_display,
             egl_config,
             egl_surface,
+            #[cfg(target_os = "macos")]
             metal_view,
             root_share_ctx: std::cell::Cell::new(crate::egl::EGL_NO_CONTEXT),
             splash_image: launch_image,

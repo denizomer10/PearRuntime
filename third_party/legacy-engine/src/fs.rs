@@ -87,7 +87,10 @@ impl FsNode {
             let entry = entry.unwrap();
             let kind = entry.file_type().unwrap();
             let host_path = entry.path();
-            let name = entry.file_name().into_string().unwrap();
+            let name = match entry.file_name().into_string() {
+                Ok(s) => s,
+                Err(os) => os.to_string_lossy().into_owned(),
+            };
 
             // There is no support for symlinks within the virtual filesystem,
             // but symlinks aren't uncommon in app bundles, so we treat a

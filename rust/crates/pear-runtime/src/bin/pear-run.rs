@@ -142,7 +142,69 @@ fn main() {
                 "pearruntime: 32-bit iOS mode active ({}) -> handoff to PearLegacyEngine + PearLegacyJIT",
                 p.summary()
             );
-            return;
+            if args.iter().any(|a| a == "--check-load" || a == "--list-missing") {
+                return;
+            }
+            let legacy_bin = env::var("PEAR_LEGACY_ENGINE_BIN")
+                .ok()
+                .map(PathBuf::from)
+                .filter(|b| b.is_file())
+                .or_else(|| {
+                    let exe_dir = env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf()));
+                    let mut candidates: Vec<PathBuf> = Vec::new();
+                    if let Some(dir) = exe_dir {
+                        candidates.push(dir.join("touchHLE"));
+                        candidates.push(dir.join("pear-legacy-engine"));
+                    }
+                    candidates.extend([
+                        PathBuf::from("/tmp/pear-legacy-target/release/touchHLE"),
+                        PathBuf::from("/tmp/pear-legacy-target/debug/touchHLE"),
+                        PathBuf::from("/work/third_party/legacy-engine/target/release/touchHLE"),
+                        PathBuf::from("/work/third_party/legacy-engine/target/debug/touchHLE"),
+                        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../third_party/legacy-engine/target/release/touchHLE")),
+                        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../third_party/legacy-engine/target/debug/touchHLE")),
+                    ]);
+                    candidates.into_iter().find(|c| c.is_file())
+                });
+            let Some(bin) = legacy_bin else {
+                eprintln!(
+                    "pearruntime: PearLegacyEngine binary not found. Set PEAR_LEGACY_ENGINE_BIN or build third_party/legacy-engine."
+                );
+                process::exit(1);
+            };
+            let mut cmd = process::Command::new(&bin);
+            #[cfg(target_os = "linux")]
+            if env::var_os("ALSOFT_DRIVERS").is_none() && !Path::new("/dev/snd").exists() {
+                cmd.env("ALSOFT_DRIVERS", "null");
+            }
+            if env::var_os("PEAR_LEGACY_RESOURCES_DIR").is_none() {
+                for res_dir in [
+                    PathBuf::from("/work/third_party/legacy-engine"),
+                    PathBuf::from(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../../../third_party/legacy-engine"
+                    )),
+                ] {
+                    if res_dir.join("touchHLE_fonts").is_dir() {
+                        cmd.env("PEAR_LEGACY_RESOURCES_DIR", &res_dir);
+                        break;
+                    }
+                }
+            }
+            let target_arg = fs::canonicalize(&args[0]).unwrap_or_else(|_| PathBuf::from(&args[0]));
+            cmd.arg(target_arg);
+            for extra in args.iter().skip(1) {
+                if !matches!(extra.as_str(), "--plan" | "--inspect-only" | "--check-load" | "--list-missing" | "--window-test") {
+                    cmd.arg(extra);
+                }
+            }
+            match cmd.status() {
+                Ok(st) => process::exit(st.code().unwrap_or(1)),
+                Err(e) => {
+                    eprintln!("pearruntime: failed to launch PearLegacyEngine ({}): {e}", bin.display());
+                    process::exit(1);
+                }
+            }
         }
     }
 
