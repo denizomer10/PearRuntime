@@ -122,6 +122,13 @@ guest_class!(OS_DISPATCH_SEMAPHORE_CLASS, OS_DISPATCH_SEMAPHORE_META);
 guest_class!(OS_DISPATCH_GROUP_CLASS, OS_DISPATCH_GROUP_META);
 guest_class!(UISCENESESSION_CLASS, UISCENESESSION_META);
 guest_class!(UISCENECONNECTIONOPTIONS_CLASS, UISCENECONNECTIONOPTIONS_META);
+guest_class!(NSMETHODSIGNATURE_CLASS, NSMETHODSIGNATURE_META);
+guest_class!(NSINVOCATION_CLASS, NSINVOCATION_META);
+guest_class!(NSLAYOUTCONSTRAINT_CLASS, NSLAYOUTCONSTRAINT_META);
+guest_class!(UIBARBUTTONITEM_CLASS, UIBARBUTTONITEM_META);
+guest_class!(UITOOLBAR_CLASS, UITOOLBAR_META);
+guest_class!(MTLFXSPATIALSCALERDESCRIPTOR_CLASS, MTLFXSPATIALSCALERDESCRIPTOR_META);
+guest_class!(MTLFXTEMPORALSCALERDESCRIPTOR_CLASS, MTLFXTEMPORALSCALERDESCRIPTOR_META);
 
 extern "C" fn shared_app_stub(_self: Id, _cmd: Sel) -> Id {
     static APP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -1297,9 +1304,7 @@ fn init_guest_frameworks() {
             (&CATRANSACTION_CLASS, &CATRANSACTION_META, "CATransaction"),
             (&UIIMAGE_CLASS, &UIIMAGE_META, "UIImage"),
             (&UILABEL_CLASS, &UILABEL_META, "UILabel"),
-            (&UIFONT_CLASS, &UIFONT_META, "UIFont"),
             (&UIRESPONDER_CLASS, &UIRESPONDER_META, "UIResponder"),
-            (&UISTORYBOARD_CLASS, &UISTORYBOARD_META, "UIStoryboard"),
             (&UICONTROL_CLASS, &UICONTROL_META, "UIControl"),
             (&UIBUTTON_CLASS, &UIBUTTON_META, "UIButton"),
             (&GLKVIEW_CLASS, &GLKVIEW_META, "GLKView"),
@@ -1309,8 +1314,6 @@ fn init_guest_frameworks() {
             (&UIACCESSIBILITYELEMENT_CLASS, &UIACCESSIBILITYELEMENT_META, "UIAccessibilityElement"),
             (&UITEXTPOSITION_CLASS, &UITEXTPOSITION_META, "UITextPosition"),
             (&UITEXTRANGE_CLASS, &UITEXTRANGE_META, "UITextRange"),
-            (&UITEXTFIELD_CLASS, &UITEXTFIELD_META, "UITextField"),
-            (&UITEXTVIEW_CLASS, &UITEXTVIEW_META, "UITextView"),
             (&UISCROLLVIEW_CLASS, &UISCROLLVIEW_META, "UIScrollView"),
             (&UINAVIGATIONCONTROLLER_CLASS, &UINAVIGATIONCONTROLLER_META, "UINavigationController"),
             (&UIALERTCONTROLLER_CLASS, &UIALERTCONTROLLER_META, "UIAlertController"),
@@ -1494,7 +1497,10 @@ fn init_guest_frameworks() {
                 ("touchesEnded:withEvent:", i(touches_noop as *const ())),
                 ("touchesCancelled:withEvent:", i(touches_noop as *const ())),
             ],
-            &[("layerClass", i(uiview_layer_class as *const ()))],
+            &[
+                ("layerClass", i(uiview_layer_class as *const ())),
+                ("setAnimationsEnabled:", i(app_noop1 as *const ())),
+            ],
         );
         extern "C" fn gr_init_target_action(self_obj: Id, _cmd: Sel, _t: Id, _a: Sel) -> Id {
             self_obj
@@ -1742,6 +1748,7 @@ fn init_guest_frameworks() {
                 ("layoutIfNeeded", i(noop_method as *const ())),
                 ("convertPoint:fromView:", i(uiview_convert_point as *const ())),
                 ("convertPoint:toView:", i(uiview_convert_point as *const ())),
+                ("gestureRecognizers", i(ret_empty_array as *const ())),
                 ("touchesBegan:withEvent:", i(touches_noop as *const ())),
                 ("touchesMoved:withEvent:", i(touches_noop as *const ())),
                 ("touchesEnded:withEvent:", i(touches_noop as *const ())),
@@ -1784,6 +1791,7 @@ fn init_guest_frameworks() {
             &[
                 ("URLContexts", i(ret_empty_set as *const ())),
                 ("userActivities", i(ret_empty_set as *const ())),
+                ("notificationResponse", i(uivc_nil as *const ())),
             ],
             &[],
         );
@@ -1796,6 +1804,211 @@ fn init_guest_frameworks() {
                 ("isGyroAvailable", i(app_false as *const ())),
                 ("isDeviceMotionAvailable", i(app_false as *const ())),
                 ("isAccelerometerAvailable", i(app_false as *const ())),
+            ],
+            &[],
+        );
+        extern "C" fn msig_args(_self: Id, _cmd: Sel) -> usize { 2 }
+        extern "C" fn msig_retlen(_self: Id, _cmd: Sel) -> usize { 0 }
+        extern "C" fn msig_framelen(_self: Id, _cmd: Sel) -> usize { 16 }
+        objc_rt::register_builtin(
+            NSMETHODSIGNATURE_CLASS.ptr(),
+            NSMETHODSIGNATURE_META.ptr(),
+            "NSMethodSignature",
+            16,
+            &[
+                ("numberOfArguments", i(msig_args as *const ())),
+                ("methodReturnLength", i(msig_retlen as *const ())),
+                ("frameLength", i(msig_framelen as *const ())),
+            ],
+            &[],
+        );
+        static INVOC_STATE: std::sync::LazyLock<
+            std::sync::Mutex<std::collections::HashMap<usize, (usize, usize)>>,
+        > = std::sync::LazyLock::new(Default::default);
+        extern "C" fn inv_with_sig(cls: Id, _cmd: Sel, sig: Id) -> Id {
+            if sig.is_null() {
+                std::ptr::null_mut()
+            } else {
+                unsafe { alloc(cls as *const ClassT) }
+            }
+        }
+        extern "C" fn inv_set_target(this: Id, _cmd: Sel, t: Id) {
+            let mut g = INVOC_STATE.lock().unwrap();
+            let entry = g.entry(this as usize).or_insert((0, 0));
+            entry.0 = t as usize;
+        }
+        extern "C" fn inv_target(this: Id, _cmd: Sel) -> Id {
+            INVOC_STATE.lock().unwrap().get(&(this as usize)).map_or(0, |e| e.0) as Id
+        }
+        extern "C" fn inv_set_sel(this: Id, _cmd: Sel, s: Sel) {
+            let mut g = INVOC_STATE.lock().unwrap();
+            let entry = g.entry(this as usize).or_insert((0, 0));
+            entry.1 = s as usize;
+        }
+        extern "C" fn inv_sel(this: Id, _cmd: Sel) -> Sel {
+            INVOC_STATE.lock().unwrap().get(&(this as usize)).map_or(0, |e| e.1) as Sel
+        }
+        extern "C" fn inv_noop2(_this: Id, _cmd: Sel, _a: usize, _b: isize) {}
+        objc_rt::register_builtin(
+            NSINVOCATION_CLASS.ptr(),
+            NSINVOCATION_META.ptr(),
+            "NSInvocation",
+            32,
+            &[
+                ("target", i(inv_target as *const ())),
+                ("setTarget:", i(inv_set_target as *const ())),
+                ("selector", i(inv_sel as *const ())),
+                ("setSelector:", i(inv_set_sel as *const ())),
+                ("setArgument:atIndex:", i(inv_noop2 as *const ())),
+                ("getArgument:atIndex:", i(inv_noop2 as *const ())),
+                ("getReturnValue:", i(app_noop1 as *const ())),
+                ("invoke", i(noop_method as *const ())),
+                ("invokeWithTarget:", i(app_noop1 as *const ())),
+                ("retainArguments", i(noop_method as *const ())),
+            ],
+            &[("invocationWithMethodSignature:", i(inv_with_sig as *const ()))],
+        );
+        for (cls, meta, name) in [
+            (&MTLFXSPATIALSCALERDESCRIPTOR_CLASS, &MTLFXSPATIALSCALERDESCRIPTOR_META, "MTLFXSpatialScalerDescriptor"),
+            (&MTLFXTEMPORALSCALERDESCRIPTOR_CLASS, &MTLFXTEMPORALSCALERDESCRIPTOR_META, "MTLFXTemporalScalerDescriptor"),
+        ] {
+            objc_rt::register_builtin(
+                cls.ptr(),
+                meta.ptr(),
+                name,
+                32,
+                &[],
+                &[("supportsDevice:", i(app_false1 as *const ()))],
+            );
+        }
+        extern "C" fn uifont_alloc_f64(cls: Id, _cmd: Sel, _size: f64) -> Id {
+            unsafe { alloc(cls as *const ClassT) }
+        }
+        extern "C" fn uifont_alloc_name_size(cls: Id, _cmd: Sel, _name: Id, _size: f64) -> Id {
+            unsafe { alloc(cls as *const ClassT) }
+        }
+        extern "C" fn uifont_point_size(_self: Id, _cmd: Sel) -> f64 { 14.0 }
+        objc_rt::register_builtin(
+            UIFONT_CLASS.ptr(),
+            UIFONT_META.ptr(),
+            "UIFont",
+            32,
+            &[("pointSize", i(uifont_point_size as *const ()))],
+            &[
+                ("systemFontOfSize:", i(uifont_alloc_f64 as *const ())),
+                ("boldSystemFontOfSize:", i(uifont_alloc_f64 as *const ())),
+                ("fontWithName:size:", i(uifont_alloc_name_size as *const ())),
+            ],
+        );
+        extern "C" fn ret_nil2(_cls: Id, _cmd: Sel, _a: Id, _b: Id) -> Id {
+            std::ptr::null_mut()
+        }
+        objc_rt::register_builtin(
+            UISTORYBOARD_CLASS.ptr(),
+            UISTORYBOARD_META.ptr(),
+            "UIStoryboard",
+            16,
+            &[],
+            &[("storyboardWithName:bundle:", i(ret_nil2 as *const ()))],
+        );
+        extern "C" fn ret_empty_nsstring(_self: Id, _cmd: Sel) -> Id {
+            pear_foundation::nsstring_from_rust("")
+        }
+        for (cls, meta, name) in [
+            (&UITEXTFIELD_CLASS, &UITEXTFIELD_META, "UITextField"),
+            (&UITEXTVIEW_CLASS, &UITEXTVIEW_META, "UITextView"),
+        ] {
+            objc_rt::register_builtin(
+                cls.ptr(),
+                meta.ptr(),
+                name,
+                64,
+                &[
+                    ("initWithFrame:", i(uiview_init_frame as *const ())),
+                    ("frame", i(uiview_bounds as *const ())),
+                    ("bounds", i(uiview_bounds as *const ())),
+                    ("setFrame:", i(uiview_init_frame as *const ())),
+                    ("delegate", i(uivc_nil as *const ())),
+                    ("setDelegate:", i(app_noop1 as *const ())),
+                    ("borderStyle", i(app_state as *const ())),
+                    ("setBorderStyle:", i(app_noop1 as *const ())),
+                    ("font", i(uivc_nil as *const ())),
+                    ("setFont:", i(app_noop1 as *const ())),
+                    ("clearButtonMode", i(app_state as *const ())),
+                    ("setClearButtonMode:", i(app_noop1 as *const ())),
+                    ("text", i(ret_empty_nsstring as *const ())),
+                    ("setText:", i(app_noop1 as *const ())),
+                    ("isHidden", i(uiview_is_hidden as *const ())),
+                    ("setHidden:", i(uiview_set_hidden as *const ())),
+                    ("addConstraint:", i(app_noop1 as *const ())),
+                    ("addConstraints:", i(app_noop1 as *const ())),
+                    ("inputAccessoryView", i(uivc_nil as *const ())),
+                    ("setInputAccessoryView:", i(app_noop1 as *const ())),
+                    ("becomeFirstResponder", i(app_true as *const ())),
+                    ("resignFirstResponder", i(app_true as *const ())),
+                    ("removeFromSuperview", i(uiview_remove_from_superview as *const ())),
+                ],
+                &[],
+            );
+        }
+        extern "C" fn nslayoutconstraint_create(
+            cls: Id,
+            _cmd: Sel,
+            _item1: Id,
+            _attr1: isize,
+            _rel: isize,
+            _item2: Id,
+            _attr2: isize,
+            _mult: f64,
+            _c: f64,
+        ) -> Id {
+            unsafe { alloc(cls as *const ClassT) }
+        }
+        objc_rt::register_builtin(
+            NSLAYOUTCONSTRAINT_CLASS.ptr(),
+            NSLAYOUTCONSTRAINT_META.ptr(),
+            "NSLayoutConstraint",
+            32,
+            &[],
+            &[
+                (
+                    "constraintWithItem:attribute:relatedBy:toItem:attribute:multiplier:constant:",
+                    i(nslayoutconstraint_create as *const ()),
+                ),
+                ("activateConstraints:", i(app_noop1 as *const ())),
+                ("deactivateConstraints:", i(app_noop1 as *const ())),
+            ],
+        );
+        extern "C" fn ret_self3(self_obj: Id, _cmd: Sel, _a: isize, _b: Id, _c: Sel) -> Id {
+            self_obj
+        }
+        extern "C" fn ret_self4(self_obj: Id, _cmd: Sel, _a: Id, _b: isize, _c: Id, _d: Sel) -> Id {
+            self_obj
+        }
+        objc_rt::register_builtin(
+            UIBARBUTTONITEM_CLASS.ptr(),
+            UIBARBUTTONITEM_META.ptr(),
+            "UIBarButtonItem",
+            32,
+            &[
+                ("initWithBarButtonSystemItem:target:action:", i(ret_self3 as *const ())),
+                ("initWithCustomView:", i(ret_self1 as *const ())),
+                ("initWithTitle:style:target:action:", i(ret_self4 as *const ())),
+            ],
+            &[],
+        );
+        objc_rt::register_builtin(
+            UITOOLBAR_CLASS.ptr(),
+            UITOOLBAR_META.ptr(),
+            "UIToolbar",
+            64,
+            &[
+                ("initWithFrame:", i(uiview_init_frame as *const ())),
+                ("setItems:", i(app_noop1 as *const ())),
+                ("items", i(ret_empty_array as *const ())),
+                ("sizeToFit", i(noop_method as *const ())),
+                ("setHidden:", i(uiview_set_hidden as *const ())),
+                ("isHidden", i(uiview_is_hidden as *const ())),
             ],
             &[],
         );
@@ -2034,12 +2247,12 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
             "NSProxy", "NSOperation", "NSHTTPURLResponse", "NSURLResponse",
             "NSURLCache", "NSCachedURLResponse", "NSURLProtocol", "NSURLConnection",
             "NSURLCredential", "NSURLSessionTask", "NSHTTPCookie", "NSHTTPCookieStorage",
-            "NSNetService", "NSInputStream", "NSOutputStream", "NSInvocation",
-            "NSMethodSignature", "NSCache", "NSDateFormatter", "NSISO8601DateFormatter",
+            "NSNetService", "NSInputStream", "NSOutputStream",
+            "NSCache", "NSDateFormatter", "NSISO8601DateFormatter",
             "NSByteCountFormatter", "NSDecimalNumberHandler", "NSFileHandle",
             "NSHashTable", "NSMapTable", "NSPointerArray", "NSIndexSet",
             "NSCountedSet", "NSAttributedString", "NSCharacterSet",
-            "NSKeyedArchiver", "NSLayoutConstraint", "NSLock", "NSRecursiveLock",
+            "NSKeyedArchiver", "NSLock", "NSRecursiveLock",
             "NSMachPort", "NSNotification", "NSNotificationQueue", "NSProgress",
             "NSPropertyListSerialization", "NSRegularExpression", "NSScanner",
             "NSSortDescriptor", "NSTextCheckingResult", "NSURLComponents",
@@ -2061,7 +2274,7 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
         for name in [
             "UIImageView", "UICollectionViewCell", "UITableViewCell",
             "UIActivityIndicatorView", "UIProgressView", "UIStackView",
-            "UIVisualEffectView", "UIToolbar", "WKWebView",
+            "UIVisualEffectView", "WKWebView",
         ] {
             register_stub_class(name, ui_view, 64);
         }
@@ -2081,7 +2294,7 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
         for name in [
             "CABasicAnimation", "CAKeyframeAnimation", "CAMediaTimingFunction",
             "UICollectionViewFlowLayout", "UIActivity", "UIAlertAction",
-            "UIBarButtonItem", "UIBezierPath", "UIGraphicsImageRenderer",
+            "UIBezierPath", "UIGraphicsImageRenderer",
             "UIGraphicsImageRendererFormat", "UILocalNotification", "UIPopoverController",
             "UIScene", "UISceneConfiguration", "UIUserNotificationSettings", "UIViewLayoutRegion",
             "NSLayoutManager", "NSMutableParagraphStyle", "NSTextAttachment",
@@ -2110,7 +2323,6 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
             "ASAuthorizationAppleIDCredential", "ASAuthorizationAppleIDProvider", "ASAuthorizationController",
             "ATTrackingManager", "AAAttribution",
             "GCDualShockGamepad", "GCXboxGamepad", "UNLocationNotificationTrigger",
-            "MTLFXSpatialScalerDescriptor", "MTLFXTemporalScalerDescriptor",
             "MXDiagnosticPayload", "MXMetricManager", "MXMetricPayload",
         ] {
             register_stub_class(name, ns_obj, 32);
@@ -7243,6 +7455,112 @@ mod tests {
                 let f: extern "C" fn(Id, Sel) -> bool = std::mem::transmute(d.imp);
                 assert!(!f(d.receiver, s));
             }
+        }
+    }
+
+    #[test]
+    fn phase5_7_uikit_keyboard_mtlf_and_invocation_selectors() {
+        init();
+        unsafe {
+            // 1. MTLFX* supportsDevice: -> false
+            for cls_name in ["MTLFXSpatialScalerDescriptor", "MTLFXTemporalScalerDescriptor"] {
+                let cls = objc_rt::class_named(cls_name).unwrap() as Id;
+                let s = objc_rt::sel("supportsDevice:");
+                let d = pear_libobjc::message::lookup_for_send(cls, s);
+                let f: extern "C" fn(Id, Sel, Id) -> bool = std::mem::transmute(d.imp);
+                assert!(!f(d.receiver, s, std::ptr::null_mut()));
+            }
+
+            // 2. instanceMethodSignatureForSelector: + NSInvocation invocationWithMethodSignature:
+            let app_cls = UIAPPLICATION_CLASS.ptr() as Id;
+            let s_ims = objc_rt::sel("instanceMethodSignatureForSelector:");
+            let d_ims = pear_libobjc::message::lookup_for_send(app_cls, s_ims);
+            let f_ims: extern "C" fn(Id, Sel, Sel) -> Id = std::mem::transmute(d_ims.imp);
+            let sig = f_ims(d_ims.receiver, s_ims, objc_rt::sel("delegate"));
+            assert!(!sig.is_null());
+
+            let inv_cls = objc_rt::class_named("NSInvocation").unwrap() as Id;
+            let s_iws = objc_rt::sel("invocationWithMethodSignature:");
+            let d_iws = pear_libobjc::message::lookup_for_send(inv_cls, s_iws);
+            let f_iws: extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(d_iws.imp);
+            let inv = f_iws(d_iws.receiver, s_iws, sig);
+            assert!(!inv.is_null());
+            let target_sel = objc_rt::sel("windows");
+            let s_ss = objc_rt::sel("setSelector:");
+            let d_ss = pear_libobjc::message::lookup_for_send(inv, s_ss);
+            let f_ss: extern "C" fn(Id, Sel, Sel) = std::mem::transmute(d_ss.imp);
+            f_ss(d_ss.receiver, s_ss, target_sel);
+            let s_gs = objc_rt::sel("selector");
+            let d_gs = pear_libobjc::message::lookup_for_send(inv, s_gs);
+            let f_gs: extern "C" fn(Id, Sel) -> Sel = std::mem::transmute(d_gs.imp);
+            assert_eq!(f_gs(d_gs.receiver, s_gs), target_sel);
+
+            // 3. UIFont, UIStoryboard, UITextField, UITextView, NSLayoutConstraint, UIBarButtonItem, UIToolbar
+            let font_cls = UIFONT_CLASS.ptr() as Id;
+            let s_sf = objc_rt::sel("systemFontOfSize:");
+            let d_sf = pear_libobjc::message::lookup_for_send(font_cls, s_sf);
+            let f_sf: extern "C" fn(Id, Sel, f64) -> Id = std::mem::transmute(d_sf.imp);
+            assert!(!f_sf(d_sf.receiver, s_sf, 14.0).is_null());
+
+            let sb_cls = UISTORYBOARD_CLASS.ptr() as Id;
+            let s_sb = objc_rt::sel("storyboardWithName:bundle:");
+            let d_sb = pear_libobjc::message::lookup_for_send(sb_cls, s_sb);
+            let f_sb: extern "C" fn(Id, Sel, Id, Id) -> Id = std::mem::transmute(d_sb.imp);
+            assert!(f_sb(d_sb.receiver, s_sb, std::ptr::null_mut(), std::ptr::null_mut()).is_null());
+
+            let tf = alloc(UITEXTFIELD_CLASS.ptr());
+            let s_sbs = objc_rt::sel("setBorderStyle:");
+            let d_sbs = pear_libobjc::message::lookup_for_send(tf, s_sbs);
+            let f_sbs: extern "C" fn(Id, Sel, isize) = std::mem::transmute(d_sbs.imp);
+            f_sbs(d_sbs.receiver, s_sbs, 3);
+
+            let tv = alloc(UITEXTVIEW_CLASS.ptr());
+            let s_sh = objc_rt::sel("setHidden:");
+            let d_sh = pear_libobjc::message::lookup_for_send(tv, s_sh);
+            let f_sh: extern "C" fn(Id, Sel, bool) = std::mem::transmute(d_sh.imp);
+            f_sh(d_sh.receiver, s_sh, true);
+            let s_ih = objc_rt::sel("isHidden");
+            let d_ih = pear_libobjc::message::lookup_for_send(tv, s_ih);
+            let f_ih: extern "C" fn(Id, Sel) -> bool = std::mem::transmute(d_ih.imp);
+            assert!(f_ih(d_ih.receiver, s_ih));
+
+            let lc_cls = NSLAYOUTCONSTRAINT_CLASS.ptr() as Id;
+            let s_lc = objc_rt::sel("constraintWithItem:attribute:relatedBy:toItem:attribute:multiplier:constant:");
+            let d_lc = pear_libobjc::message::lookup_for_send(lc_cls, s_lc);
+            let f_lc: extern "C" fn(Id, Sel, Id, isize, isize, Id, isize, f64, f64) -> Id =
+                std::mem::transmute(d_lc.imp);
+            assert!(!f_lc(d_lc.receiver, s_lc, tf, 1, 0, tv, 1, 1.0, 8.0).is_null());
+
+            let bbi = alloc(UIBARBUTTONITEM_CLASS.ptr());
+            let s_bbi = objc_rt::sel("initWithBarButtonSystemItem:target:action:");
+            let d_bbi = pear_libobjc::message::lookup_for_send(bbi, s_bbi);
+            let f_bbi: extern "C" fn(Id, Sel, isize, Id, Sel) -> Id = std::mem::transmute(d_bbi.imp);
+            assert_eq!(f_bbi(d_bbi.receiver, s_bbi, 0, tf, std::ptr::null()), bbi);
+
+            let tb = alloc(UITOOLBAR_CLASS.ptr());
+            let s_si = objc_rt::sel("setItems:");
+            let d_si = pear_libobjc::message::lookup_for_send(tb, s_si);
+            let f_si: extern "C" fn(Id, Sel, Id) = std::mem::transmute(d_si.imp);
+            f_si(d_si.receiver, s_si, std::ptr::null_mut());
+
+            // 4. UIView setAnimationsEnabled:, UIWindow gestureRecognizers, UISceneConnectionOptions notificationResponse
+            let view_cls = UIVIEW_CLASS.ptr() as Id;
+            let s_anim = objc_rt::sel("setAnimationsEnabled:");
+            let d_anim = pear_libobjc::message::lookup_for_send(view_cls, s_anim);
+            let f_anim: extern "C" fn(Id, Sel, bool) = std::mem::transmute(d_anim.imp);
+            f_anim(d_anim.receiver, s_anim, false);
+
+            let win = alloc(UIWINDOW_CLASS.ptr());
+            let s_gr = objc_rt::sel("gestureRecognizers");
+            let d_gr = pear_libobjc::message::lookup_for_send(win, s_gr);
+            let f_gr: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_gr.imp);
+            assert!(!f_gr(d_gr.receiver, s_gr).is_null());
+
+            let opts = alloc(UISCENECONNECTIONOPTIONS_CLASS.ptr());
+            let s_nr = objc_rt::sel("notificationResponse");
+            let d_nr = pear_libobjc::message::lookup_for_send(opts, s_nr);
+            let f_nr: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_nr.imp);
+            assert!(f_nr(d_nr.receiver, s_nr).is_null());
         }
     }
 }

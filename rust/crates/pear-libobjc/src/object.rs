@@ -86,6 +86,7 @@ pub fn init_runtime() {
                 ("copy", i(m_copy as *const ())),
                 ("mutableCopy", i(m_mutable_copy as *const ())),
                 ("methodForSelector:", i(m_method_for as *const ())),
+                ("methodSignatureForSelector:", i(m_method_signature as *const ())),
                 ("doesNotRecognizeSelector:", i(m_does_not_recognize as *const ())),
                 ("forwardingTargetForSelector:", i(m_forwarding_target as *const ())),
             ],
@@ -98,6 +99,7 @@ pub fn init_runtime() {
                 ("initialize", i(m_void as *const ())),
                 ("load", i(m_void as *const ())),
                 ("instancesRespondToSelector:", i(c_instances_respond as *const ())),
+                ("instanceMethodSignatureForSelector:", i(c_instance_method_signature as *const ())),
                 ("conformsToProtocol:", i(c_conforms as *const ())),
                 ("isSubclassOfClass:", i(c_is_subclass as *const ())),
                 ("resolveInstanceMethod:", i(c_resolve as *const ())),
@@ -382,6 +384,24 @@ extern "C" fn m_mutable_copy(this: Id, _: Sel) -> Id {
 extern "C" fn m_method_for(this: Id, _: Sel, s: Sel) -> Imp {
     let cls = unsafe { runtime::object_class(this) };
     runtime::lookup(cls, s).unwrap_or(std::ptr::null())
+}
+extern "C" fn method_signature_for_class(cls: *const ClassT, s: Sel) -> Id {
+    if cls.is_null() || s.is_null() || runtime::lookup(cls, s).is_none() {
+        return std::ptr::null_mut();
+    }
+    let Some(sig_cls) = runtime::class_named("NSMethodSignature") else {
+        return std::ptr::null_mut();
+    };
+    unsafe { alloc(sig_cls) }
+}
+extern "C" fn m_method_signature(this: Id, _: Sel, s: Sel) -> Id {
+    if this.is_null() {
+        return std::ptr::null_mut();
+    }
+    method_signature_for_class(unsafe { runtime::object_class(this) }, s)
+}
+extern "C" fn c_instance_method_signature(cls: Id, _: Sel, s: Sel) -> Id {
+    method_signature_for_class(cls as *const ClassT, s)
 }
 extern "C" fn m_does_not_recognize(this: Id, _: Sel, s: Sel) -> ! {
     let cls = unsafe { runtime::object_class(this) };
@@ -713,6 +733,37 @@ mod tests {
         assert_eq!(drain_delayed_performs(), 0);
         assert_eq!(INC_COUNT.load(Ordering::SeqCst), 2);
         assert_eq!(OTHER_COUNT.load(Ordering::SeqCst), 1);
+
+        // methodSignatureForSelector: and instanceMethodSignatureForSelector:
+        static NSMS_META: StaticClass = StaticClass(UnsafeCell::new(ClassT {
+            isa: &raw const NSOBJECT_META as *const ClassT,
+            superclass: &raw const NSOBJECT_META as *const ClassT,
+            cache: &raw const EMPTY_CACHE as *const c_void,
+            vtable: std::ptr::null(),
+            bits: 0,
+        }));
+        static NSMS_CLASS: StaticClass = StaticClass(UnsafeCell::new(ClassT {
+            isa: &raw const NSMS_META as *const ClassT,
+            superclass: &raw const NSOBJECT_CLASS as *const ClassT,
+            cache: &raw const EMPTY_CACHE as *const c_void,
+            vtable: std::ptr::null(),
+            bits: 0,
+        }));
+        runtime::register_builtin(NSMS_CLASS.ptr(), NSMS_META.ptr(), "NSMethodSignature", 16, &[], &[]);
+        unsafe {
+            let d_cls = crate::message::lookup_for_send(
+                DP_TEST_CLASS.ptr() as Id,
+                sel("instanceMethodSignatureForSelector:"),
+            );
+            let f_cls: extern "C" fn(Id, Sel, Sel) -> Id = std::mem::transmute(d_cls.imp);
+            assert!(!f_cls(d_cls.receiver, sel("instanceMethodSignatureForSelector:"), sel("testInc:")).is_null());
+            assert!(f_cls(d_cls.receiver, sel("instanceMethodSignatureForSelector:"), sel("nonexistentSel:")).is_null());
+
+            let d_inst = crate::message::lookup_for_send(target, sel("methodSignatureForSelector:"));
+            let f_inst: extern "C" fn(Id, Sel, Sel) -> Id = std::mem::transmute(d_inst.imp);
+            assert!(!f_inst(d_inst.receiver, sel("methodSignatureForSelector:"), sel("testInc:")).is_null());
+            assert!(f_inst(d_inst.receiver, sel("methodSignatureForSelector:"), sel("unknownXYZ")).is_null());
+        }
 
         release(target);
     }

@@ -8,8 +8,8 @@ pub mod vk;
 
 pub use objc_metal::{
     command_buffer_counts, copy_all_devices, create_system_default_device, function_spirv, init,
-    next_drawable_for_layer, render_stats, MTLClearColor, MTLOrigin, MTLRegion, MTLSize,
-    MTLViewport,
+    last_presented_frame, next_drawable_for_layer, render_stats, MTLClearColor, MTLOrigin,
+    MTLRegion, MTLSize, MTLViewport,
 };
 
 /// Resolves Mach-O imports from `Metal.framework` (and Metal helper symbols).
@@ -293,6 +293,36 @@ mod tests {
             let sa_back: Id = send0(pass, "stencilAttachment");
             assert_eq!(sa_back, sa);
             assert_eq!(send0::<Id>(sa_back, "texture"), tex);
+
+            // Phase 5.7: MTLLoadActionClear + presentDrawable: readback + PEAR_DUMP_FRAME PPM
+            let layer_dummy = 0x1234usize as Id;
+            let drawable = next_drawable_for_layer(layer_dummy, 4, 4, 80); // BGRA8Unorm
+            let dtex: Id = send0(drawable, "texture");
+            let ca0: Id = send1(color_atts, "objectAtIndexedSubscript:", 0);
+            send1::<Id, ()>(ca0, "setTexture:", dtex);
+            send1::<usize, ()>(ca0, "setLoadAction:", 2); // MTLLoadActionClear
+            let set_cc_sel = objc_rt::sel("setClearColor:");
+            let d_cc = lookup_for_send(ca0, set_cc_sel);
+            let f_cc: unsafe extern "C" fn(Id, Sel, MTLClearColor) = std::mem::transmute(d_cc.imp);
+            f_cc(d_cc.receiver, set_cc_sel, MTLClearColor { red: 1.0, green: 0.5, blue: 0.0, alpha: 1.0 });
+
+            let cb2: Id = send0(cq, "commandBuffer");
+            let renc2: Id = send1(cb2, "renderCommandEncoderWithDescriptor:", pass);
+            send0::<()>(renc2, "endEncoding");
+            let ppm_path = std::env::temp_dir().join(format!("pear_test_frame_{}.ppm", std::process::id()));
+            std::env::set_var("PEAR_DUMP_FRAME", &ppm_path);
+            send1::<Id, ()>(cb2, "presentDrawable:", drawable);
+            send0::<()>(cb2, "commit");
+            std::env::remove_var("PEAR_DUMP_FRAME");
+
+            let (fw, fh, rgba) = last_presented_frame().expect("presented frame snapshot missing");
+            assert_eq!((fw, fh), (4, 4));
+            assert_eq!(&rgba[0..4], &[255, 128, 0, 255]);
+
+            let ppm_bytes = std::fs::read(&ppm_path).expect("PPM file not written");
+            let _ = std::fs::remove_file(&ppm_path);
+            assert!(ppm_bytes.starts_with(b"P6\n4 4\n255\n"));
+            assert_eq!(ppm_bytes.len(), "P6\n4 4\n255\n".len() + 4 * 4 * 3);
         }
     }
 }

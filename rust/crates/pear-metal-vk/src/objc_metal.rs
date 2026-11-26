@@ -164,6 +164,9 @@ static FUNCTIONS: OnceLock<Mutex<HashMap<usize, FunctionState>>> = OnceLock::new
 static CMD_BUFFERS: OnceLock<Mutex<HashMap<usize, CommandBufferState>>> = OnceLock::new();
 static ENCODER_TO_CB: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
 static DRAWABLE_TO_TEX: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
+static DRAWABLE_TO_LAYER: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
+static TEX_CLEAR_COLOR: OnceLock<Mutex<HashMap<usize, [f32; 4]>>> = OnceLock::new();
+static LAST_PRESENTED_FRAME: OnceLock<Mutex<Option<(usize, usize, Vec<u8>)>>> = OnceLock::new();
 static LAYER_DRAWABLES: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
 static SUBSCRIPT_SLOTS: OnceLock<Mutex<HashMap<(usize, usize), usize>>> = OnceLock::new();
 static PROPS_ID: OnceLock<Mutex<HashMap<(usize, usize), usize>>> = OnceLock::new();
@@ -214,6 +217,19 @@ fn encoder_to_cb() -> &'static Mutex<HashMap<usize, usize>> {
 fn drawable_to_tex() -> &'static Mutex<HashMap<usize, usize>> {
     DRAWABLE_TO_TEX.get_or_init(Default::default)
 }
+fn drawable_to_layer() -> &'static Mutex<HashMap<usize, usize>> {
+    DRAWABLE_TO_LAYER.get_or_init(Default::default)
+}
+fn tex_clear_color() -> &'static Mutex<HashMap<usize, [f32; 4]>> {
+    TEX_CLEAR_COLOR.get_or_init(Default::default)
+}
+fn last_presented_frame_slot() -> &'static Mutex<Option<(usize, usize, Vec<u8>)>> {
+    LAST_PRESENTED_FRAME.get_or_init(|| Mutex::new(None))
+}
+/// Returns a copy of the most recently presented `(width, height, rgba8)` framebuffer.
+pub fn last_presented_frame() -> Option<(usize, usize, Vec<u8>)> {
+    last_presented_frame_slot().lock().unwrap().clone()
+}
 fn layer_drawables() -> &'static Mutex<HashMap<usize, usize>> {
     LAYER_DRAWABLES.get_or_init(Default::default)
 }
@@ -241,6 +257,13 @@ unsafe fn send0<R>(obj: Id, name: &str) -> R {
     let d = lookup_for_send(obj, s);
     let f: unsafe extern "C" fn(Id, Sel) -> R = std::mem::transmute(d.imp);
     f(d.receiver, s)
+}
+
+unsafe fn send1<A1, R>(obj: Id, name: &str, a1: A1) -> R {
+    let s = objc_rt::sel(name);
+    let d = lookup_for_send(obj, s);
+    let f: unsafe extern "C" fn(Id, Sel, A1) -> R = std::mem::transmute(d.imp);
+    f(d.receiver, s, a1)
 }
 
 unsafe fn invoke_cb_handler(block_ptr: usize, cb: Id) {
@@ -827,7 +850,42 @@ extern "C" fn cq_command_buffer(_this: Id, _cmd: Sel) -> Id {
     cb
 }
 
-extern "C" fn cb_render_encoder(this: Id, _cmd: Sel, _pass: Id) -> Id {
+extern "C" fn cb_render_encoder(this: Id, _cmd: Sel, pass: Id) -> Id {
+    if !pass.is_null() {
+        unsafe {
+            let atts: Id = send0(pass, "colorAttachments");
+            if !atts.is_null() {
+                let att0: Id = send1(atts, "objectAtIndexedSubscript:", 0usize);
+                if !att0.is_null() {
+                    let load_action: usize = send0(att0, "loadAction");
+                    let tex: Id = send0(att0, "texture");
+                    if !tex.is_null() && load_action == 2 {
+                        let cc: MTLClearColor = send0(att0, "clearColor");
+                        let rgba_f = [
+                            cc.red.clamp(0.0, 1.0) as f32,
+                            cc.green.clamp(0.0, 1.0) as f32,
+                            cc.blue.clamp(0.0, 1.0) as f32,
+                            cc.alpha.clamp(0.0, 1.0) as f32,
+                        ];
+                        let r8 = (rgba_f[0] * 255.0).round() as u8;
+                        let g8 = (rgba_f[1] * 255.0).round() as u8;
+                        let b8 = (rgba_f[2] * 255.0).round() as u8;
+                        let a8 = (rgba_f[3] * 255.0).round() as u8;
+                        tex_clear_color().lock().unwrap().insert(tex as usize, rgba_f);
+                        if let Some(t) = textures().lock().unwrap().get_mut(&(tex as usize)) {
+                            let is_bgra = t.pixel_format == 80 || t.pixel_format == 81;
+                            let px = if is_bgra { [b8, g8, r8, a8] } else { [r8, g8, b8, a8] };
+                            if t.pixels.len() >= 4 {
+                                for chunk in t.pixels.chunks_exact_mut(4) {
+                                    chunk.copy_from_slice(&px);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     let enc = unsafe { alloc(MTLRENDERCOMMANDENCODER_CLASS.ptr()) };
     encoder_to_cb().lock().unwrap().insert(enc as usize, this as usize);
     enc
@@ -896,14 +954,108 @@ extern "C" fn cb_status(this: Id, _cmd: Sel) -> usize {
     cmd_buffers().lock().unwrap().get(&(this as usize)).map(|s| s.status).unwrap_or(4)
 }
 
-extern "C" fn cb_present_drawable(_this: Id, _cmd: Sel, _drawable: Id) {
+fn present_drawable_common(drawable: Id) {
     TOTAL_PRESENTS.fetch_add(1, Ordering::Relaxed);
+    if drawable.is_null() {
+        return;
+    }
+    let tex = drawable_to_tex()
+        .lock()
+        .unwrap()
+        .get(&(drawable as usize))
+        .copied()
+        .unwrap_or(0);
+    if tex == 0 {
+        return;
+    }
+    let layer = drawable_to_layer()
+        .lock()
+        .unwrap()
+        .get(&(drawable as usize))
+        .copied()
+        .unwrap_or(0);
+
+    let snapshot = {
+        let g = textures().lock().unwrap();
+        g.get(&tex).map(|t| {
+            let is_bgra = t.pixel_format == 80 || t.pixel_format == 81;
+            let expected = t.width * t.height * 4;
+            let mut rgba = Vec::with_capacity(expected);
+            for chunk in t.pixels.chunks_exact(4).take(t.width * t.height) {
+                if is_bgra {
+                    rgba.extend_from_slice(&[chunk[2], chunk[1], chunk[0], chunk[3]]);
+                } else {
+                    rgba.extend_from_slice(chunk);
+                }
+            }
+            if rgba.len() < expected {
+                rgba.resize(expected, 0);
+            }
+            (t.width, t.height, rgba)
+        })
+    };
+    let Some((w, h, rgba)) = snapshot else {
+        return;
+    };
+
+    let clear_rgba = tex_clear_color()
+        .lock()
+        .unwrap()
+        .get(&tex)
+        .copied()
+        .unwrap_or_else(|| {
+            if rgba.len() >= 4 {
+                [
+                    rgba[0] as f32 / 255.0,
+                    rgba[1] as f32 / 255.0,
+                    rgba[2] as f32 / 255.0,
+                    rgba[3] as f32 / 255.0,
+                ]
+            } else {
+                [0.0, 0.0, 0.0, 1.0]
+            }
+        });
+
+    if let Ok(path) = std::env::var("PEAR_DUMP_FRAME") {
+        if !path.is_empty() && w > 0 && h > 0 {
+            let mut ppm = format!("P6\n{w} {h}\n255\n").into_bytes();
+            ppm.reserve(w * h * 3);
+            for px in rgba.chunks_exact(4) {
+                ppm.extend_from_slice(&px[..3]);
+            }
+            let _ = std::fs::write(path, ppm);
+        }
+    }
+
+    *last_presented_frame_slot().lock().unwrap() = Some((w, h, rgba));
+
+    if layer != 0 {
+        if let Some(ctx) = vk_context() {
+            if let Some(info) = pear_host::host().surface(pear_host::LayerRef(layer as *mut c_void)) {
+                if let pear_host::NativeSurface::Xlib { display, window } = info.surface {
+                    if !display.is_null() && window != 0 {
+                        let _ = ctx.present_xlib_clear(
+                            display,
+                            window,
+                            w as u32,
+                            h as u32,
+                            clear_rgba,
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
-extern "C" fn drawable_present0(_this: Id, _cmd: Sel) {
-    TOTAL_PRESENTS.fetch_add(1, Ordering::Relaxed);
+
+extern "C" fn cb_present_drawable(_this: Id, _cmd: Sel, drawable: Id) {
+    present_drawable_common(drawable);
 }
-extern "C" fn drawable_present1(_this: Id, _cmd: Sel, _time: f64) {
-    TOTAL_PRESENTS.fetch_add(1, Ordering::Relaxed);
+extern "C" fn drawable_present0(this: Id, _cmd: Sel) {
+    present_drawable_common(this);
+}
+extern "C" fn drawable_present1(this: Id, _cmd: Sel, _time: f64) {
+    present_drawable_common(this);
 }
 
 extern "C" fn enc_draw_primitives(this: Id, _cmd: Sel, _ptype: usize, _start: usize, _count: usize) {
@@ -1101,6 +1253,10 @@ pub fn next_drawable_for_layer(layer: Id, width: usize, height: usize, pixel_for
         d
     };
     drop(ld);
+    drawable_to_layer()
+        .lock()
+        .unwrap()
+        .insert(drawable as usize, layer as usize);
 
     let tex = drawable_to_tex().lock().unwrap().get(&(drawable as usize)).copied().unwrap_or(0) as Id;
     let needs_new = if tex.is_null() {
