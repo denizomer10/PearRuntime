@@ -1444,6 +1444,7 @@ fn init_guest_frameworks() {
                 ("contentsScale", i(uiview_scale as *const ())),
                 ("setContentsScale:", i(app_noop1 as *const ())),
                 ("setOpaque:", i(app_noop1 as *const ())),
+                ("setBackgroundColor:", i(app_noop1 as *const ())),
             ],
             &[],
         );
@@ -1458,6 +1459,7 @@ fn init_guest_frameworks() {
                 ("contentsScale", i(uiview_scale as *const ())),
                 ("setContentsScale:", i(app_noop1 as *const ())),
                 ("setOpaque:", i(app_noop1 as *const ())),
+                ("setBackgroundColor:", i(app_noop1 as *const ())),
                 ("setContentsGravity:", i(app_noop1 as *const ())),
                 ("setDrawableProperties:", i(app_noop1 as *const ())),
                 ("device", i(cametal_device as *const ())),
@@ -1483,7 +1485,12 @@ fn init_guest_frameworks() {
                 ("contentsScale", i(uiview_scale as *const ())),
                 ("setContentsScale:", i(app_noop1 as *const ())),
                 ("setOpaque:", i(app_noop1 as *const ())),
+                ("setBackgroundColor:", i(app_noop1 as *const ())),
                 ("setContentsGravity:", i(app_noop1 as *const ())),
+                ("setPresentsWithTransaction:", i(app_noop1 as *const ())),
+                ("presentsWithTransaction", i(app_false as *const ())),
+                ("setDrawsAsynchronously:", i(app_noop1 as *const ())),
+                ("drawsAsynchronously", i(app_true as *const ())),
                 ("device", i(cametal_device as *const ())),
                 ("setDevice:", i(cametal_set_device as *const ())),
                 ("pixelFormat", i(cametal_pixel_format as *const ())),
@@ -6322,6 +6329,93 @@ mod tests {
             let sym = guest_dlsym(h, c"MTLCreateSystemDefaultDevice".as_ptr());
             assert_eq!(sym, pear_metal_vk::create_system_default_device as *mut c_void);
             assert_eq!(guest_dlclose(h), 0);
+        }
+    }
+
+    #[test]
+    fn phase5_4_map_table_ownership_and_metal_surface_methods() {
+        init();
+        guest_class!(TEST_MT_ITEM_CLASS, TEST_MT_ITEM_META);
+        static DEALLOC_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        extern "C" fn tracked_dealloc(this: Id, _cmd: Sel) {
+            DEALLOC_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            unsafe { pear_libobjc::object::dispose(this) };
+        }
+        objc_rt::register_builtin(
+            TEST_MT_ITEM_CLASS.ptr(),
+            TEST_MT_ITEM_META.ptr(),
+            "PearTrackedMapItem",
+            16,
+            &[("dealloc", tracked_dealloc as *const () as Imp)],
+            &[],
+        );
+
+        unsafe {
+            // 1. NSMapTable retains strong keys/values on 0x200 (StrongMemory | ObjectPointerPersonality)
+            DEALLOC_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+            let mt_cls = objc_rt::class_named("NSMapTable").unwrap() as Id;
+            let s_mk = objc_rt::sel("mapTableWithKeyOptions:valueOptions:");
+            let d_mk = pear_libobjc::message::lookup_for_send(mt_cls, s_mk);
+            let f_mk: extern "C" fn(Id, Sel, usize, usize) -> Id = std::mem::transmute(d_mk.imp);
+            let mt = f_mk(d_mk.receiver, s_mk, 0x200, 0x200);
+            assert!(!mt.is_null());
+
+            let key_obj = alloc(TEST_MT_ITEM_CLASS.ptr());
+            let val_obj = alloc(TEST_MT_ITEM_CLASS.ptr());
+            let s_set = objc_rt::sel("setObject:forKey:");
+            let d_set = pear_libobjc::message::lookup_for_send(mt, s_set);
+            let f_set: extern "C" fn(Id, Sel, Id, Id) = std::mem::transmute(d_set.imp);
+            f_set(d_set.receiver, s_set, val_obj, key_obj);
+
+            // Caller drops its own references; map table must keep both alive
+            pear_libobjc::object::release(key_obj);
+            pear_libobjc::object::release(val_obj);
+            assert_eq!(DEALLOC_COUNT.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+            // Removing key from map table must release both value and key
+            let s_rem = objc_rt::sel("removeObjectForKey:");
+            let d_rem = pear_libobjc::message::lookup_for_send(mt, s_rem);
+            let f_rem: extern "C" fn(Id, Sel, Id) = std::mem::transmute(d_rem.imp);
+            f_rem(d_rem.receiver, s_rem, key_obj);
+            assert_eq!(DEALLOC_COUNT.load(std::sync::atomic::Ordering::SeqCst), 2);
+            pear_libobjc::object::release(mt);
+
+            // 2. CAMetalLayer responds to setPresentsWithTransaction:, setDrawsAsynchronously:, setBackgroundColor:
+            let layer = alloc(CAMETALLAYER_CLASS.ptr());
+            for (sel_name, expected) in [
+                ("setPresentsWithTransaction:", true),
+                ("setDrawsAsynchronously:", true),
+                ("setBackgroundColor:", true),
+            ] {
+                let s_resp = objc_rt::sel("respondsToSelector:");
+                let d_resp = pear_libobjc::message::lookup_for_send(layer, s_resp);
+                let f_resp: extern "C" fn(Id, Sel, Sel) -> bool = std::mem::transmute(d_resp.imp);
+                assert_eq!(f_resp(d_resp.receiver, s_resp, objc_rt::sel(sel_name)), expected);
+            }
+            let s_pwt = objc_rt::sel("setPresentsWithTransaction:");
+            let d_pwt = pear_libobjc::message::lookup_for_send(layer, s_pwt);
+            let f_pwt: extern "C" fn(Id, Sel, bool) = std::mem::transmute(d_pwt.imp);
+            f_pwt(d_pwt.receiver, s_pwt, true);
+
+            // 3. MTLTexture created from MTLDevice supports setPurgeableState:
+            let dev = pear_metal_vk::create_system_default_device();
+            assert!(!dev.is_null());
+            let td_cls = objc_rt::class_named("MTLTextureDescriptor").unwrap() as Id;
+            let s_2d = objc_rt::sel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
+            let d_2d = pear_libobjc::message::lookup_for_send(td_cls, s_2d);
+            let f_2d: extern "C" fn(Id, Sel, usize, usize, usize, bool) -> Id = std::mem::transmute(d_2d.imp);
+            let desc = f_2d(d_2d.receiver, s_2d, 80, 16, 16, false);
+            assert!(!desc.is_null());
+            let s_nt = objc_rt::sel("newTextureWithDescriptor:");
+            let d_nt = pear_libobjc::message::lookup_for_send(dev, s_nt);
+            let f_nt: extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(d_nt.imp);
+            let tex = f_nt(d_nt.receiver, s_nt, desc);
+            assert!(!tex.is_null());
+            let s_ps = objc_rt::sel("setPurgeableState:");
+            let d_ps = pear_libobjc::message::lookup_for_send(tex, s_ps);
+            let f_ps: extern "C" fn(Id, Sel, usize) -> usize = std::mem::transmute(d_ps.imp);
+            assert_eq!(f_ps(d_ps.receiver, s_ps, 1), 2);
+            assert_eq!(f_ps(d_ps.receiver, s_ps, 2), 2);
         }
     }
 }

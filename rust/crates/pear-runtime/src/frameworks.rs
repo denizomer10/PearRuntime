@@ -1094,19 +1094,47 @@ fw_guest_class!(NSOPERATION_CLASS, NSOPERATION_META);
 fw_guest_class!(NSBLOCKOPERATION_CLASS, NSBLOCKOPERATION_META);
 fw_guest_class!(NSDATEFORMATTER_CLASS, NSDATEFORMATTER_META);
 
-#[derive(Default)]
 struct MapTableBacking {
+    strong_keys: bool,
+    strong_values: bool,
     by_ptr: HashMap<usize, usize>,
     by_str: HashMap<String, usize>,
 }
 
+impl Default for MapTableBacking {
+    fn default() -> Self {
+        Self {
+            strong_keys: true,
+            strong_values: true,
+            by_ptr: HashMap::new(),
+            by_str: HashMap::new(),
+        }
+    }
+}
+
+struct HashTableBacking {
+    strong: bool,
+    items: Vec<usize>,
+}
+
+impl Default for HashTableBacking {
+    fn default() -> Self {
+        Self { strong: true, items: Vec::new() }
+    }
+}
+
 static MAP_TABLES: LazyLock<Mutex<HashMap<usize, MapTableBacking>>> = LazyLock::new(Default::default);
-static HASH_TABLES: LazyLock<Mutex<HashMap<usize, Vec<usize>>>> = LazyLock::new(Default::default);
+static HASH_TABLES: LazyLock<Mutex<HashMap<usize, HashTableBacking>>> = LazyLock::new(Default::default);
 static CACHES: LazyLock<Mutex<HashMap<usize, (HashMap<String, usize>, String)>>> = LazyLock::new(Default::default);
 static LOCKS: LazyLock<Mutex<HashMap<usize, std::sync::Arc<(Mutex<(Option<std::thread::ThreadId>, usize, String)>, std::sync::Condvar)>>>> =
     LazyLock::new(Default::default);
 static OPS: LazyLock<Mutex<HashMap<usize, (Vec<usize>, usize, bool, bool)>>> = LazyLock::new(Default::default);
 static DATE_FORMATTERS: LazyLock<Mutex<HashMap<usize, String>>> = LazyLock::new(Default::default);
+
+#[inline]
+fn is_strong_pointer_opts(opts: usize) -> bool {
+    (opts & 0xff) == 0
+}
 
 extern "C" fn col_self(this: Id, _cmd: pear_libobjc::abi::Sel) -> Id { this }
 extern "C" fn col_noop0(_this: Id, _cmd: pear_libobjc::abi::Sel) {}
@@ -1114,29 +1142,63 @@ extern "C" fn col_noop1(_this: Id, _cmd: pear_libobjc::abi::Sel, _a: usize) {}
 extern "C" fn col_true(_this: Id, _cmd: pear_libobjc::abi::Sel) -> bool { true }
 extern "C" fn col_false(_this: Id, _cmd: pear_libobjc::abi::Sel) -> bool { false }
 
-extern "C" fn map_table_alloc(cls: Id, _cmd: pear_libobjc::abi::Sel, _ko: usize, _vo: usize) -> Id {
+fn map_table_new(cls: Id, strong_keys: bool, strong_values: bool) -> Id {
     let inst = unsafe { pear_libobjc::object::alloc(cls as *const pear_libobjc::abi::ClassT) };
-    MAP_TABLES.lock().unwrap().insert(inst as usize, MapTableBacking::default());
+    MAP_TABLES.lock().unwrap().insert(
+        inst as usize,
+        MapTableBacking {
+            strong_keys,
+            strong_values,
+            by_ptr: HashMap::new(),
+            by_str: HashMap::new(),
+        },
+    );
     inst
 }
-extern "C" fn map_table_alloc0(cls: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
-    map_table_alloc(cls, _cmd, 0, 0)
+extern "C" fn map_table_alloc(cls: Id, _cmd: pear_libobjc::abi::Sel, ko: usize, vo: usize) -> Id {
+    map_table_new(cls, is_strong_pointer_opts(ko), is_strong_pointer_opts(vo))
 }
-extern "C" fn map_table_init_cap(this: Id, _cmd: pear_libobjc::abi::Sel, _ko: usize, _vo: usize, _cap: usize) -> Id {
-    MAP_TABLES.lock().unwrap().entry(this as usize).or_default();
+extern "C" fn map_table_alloc_s2w(cls: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
+    map_table_new(cls, true, false)
+}
+extern "C" fn map_table_alloc_w2s(cls: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
+    map_table_new(cls, false, true)
+}
+extern "C" fn map_table_alloc_s2s(cls: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
+    map_table_new(cls, true, true)
+}
+extern "C" fn map_table_alloc_w2w(cls: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
+    map_table_new(cls, false, false)
+}
+extern "C" fn map_table_init_cap(this: Id, _cmd: pear_libobjc::abi::Sel, ko: usize, vo: usize, _cap: usize) -> Id {
+    let mut map = MAP_TABLES.lock().unwrap();
+    let entry = map.entry(this as usize).or_default();
+    entry.strong_keys = is_strong_pointer_opts(ko);
+    entry.strong_values = is_strong_pointer_opts(vo);
     this
 }
 extern "C" fn map_table_set(this: Id, _cmd: pear_libobjc::abi::Sel, obj: Id, key: Id) {
     if key.is_null() { return; }
-    let s = rust_str_from_nsstring(key);
-    let mut map = MAP_TABLES.lock().unwrap();
-    let entry = map.entry(this as usize).or_default();
     if obj.is_null() {
-        entry.by_ptr.remove(&(key as usize));
-        if let Some(ks) = s { entry.by_str.remove(&ks); }
-    } else {
-        entry.by_ptr.insert(key as usize, obj as usize);
-        if let Some(ks) = s { entry.by_str.insert(ks, obj as usize); }
+        map_table_remove(this, pear_libobjc::runtime::sel("removeObjectForKey:"), key);
+        return;
+    }
+    let s = rust_str_from_nsstring(key);
+    let (retain_k, retain_v, old_val) = {
+        let mut map = MAP_TABLES.lock().unwrap();
+        let entry = map.entry(this as usize).or_default();
+        let had_key = entry.by_ptr.contains_key(&(key as usize));
+        let prev = entry.by_ptr.insert(key as usize, obj as usize);
+        if let Some(ref ks) = s { entry.by_str.insert(ks.clone(), obj as usize); }
+        let rk = entry.strong_keys && !had_key;
+        let rv = entry.strong_values && prev != Some(obj as usize);
+        let drop_v = if entry.strong_values && prev != Some(obj as usize) { prev } else { None };
+        (rk, rv, drop_v)
+    };
+    if retain_k { pear_libobjc::object::retain(key); }
+    if retain_v { pear_libobjc::object::retain(obj); }
+    if let Some(ov) = old_val {
+        pear_libobjc::object::release(ov as Id);
     }
 }
 extern "C" fn map_table_get(this: Id, _cmd: pear_libobjc::abi::Sel, key: Id) -> Id {
@@ -1156,17 +1218,49 @@ extern "C" fn map_table_get(this: Id, _cmd: pear_libobjc::abi::Sel, key: Id) -> 
     std::ptr::null_mut()
 }
 extern "C" fn map_table_remove(this: Id, _cmd: pear_libobjc::abi::Sel, key: Id) {
+    if key.is_null() { return; }
     let s = rust_str_from_nsstring(key);
-    if let Some(entry) = MAP_TABLES.lock().unwrap().get_mut(&(this as usize)) {
-        entry.by_ptr.remove(&(key as usize));
+    let to_release = {
+        let mut map = MAP_TABLES.lock().unwrap();
+        let Some(entry) = map.get_mut(&(this as usize)) else { return; };
+        let removed_val = entry.by_ptr.remove(&(key as usize));
         if let Some(ks) = s { entry.by_str.remove(&ks); }
+        let mut drop_list = Vec::new();
+        if let Some(v) = removed_val {
+            if entry.strong_values { drop_list.push(v as Id); }
+            if entry.strong_keys { drop_list.push(key); }
+        }
+        drop_list
+    };
+    for p in to_release {
+        pear_libobjc::object::release(p);
     }
 }
 extern "C" fn map_table_remove_all(this: Id, _cmd: pear_libobjc::abi::Sel) {
-    if let Some(entry) = MAP_TABLES.lock().unwrap().get_mut(&(this as usize)) {
-        entry.by_ptr.clear();
+    let to_release = {
+        let mut map = MAP_TABLES.lock().unwrap();
+        let Some(entry) = map.get_mut(&(this as usize)) else { return; };
         entry.by_str.clear();
+        let mut drop_list = Vec::new();
+        for (k, v) in entry.by_ptr.drain() {
+            if entry.strong_values { drop_list.push(v as Id); }
+            if entry.strong_keys { drop_list.push(k as Id); }
+        }
+        drop_list
+    };
+    for p in to_release {
+        pear_libobjc::object::release(p);
     }
+}
+extern "C" fn map_table_dealloc(this: Id, _cmd: pear_libobjc::abi::Sel) {
+    let removed = MAP_TABLES.lock().unwrap().remove(&(this as usize));
+    if let Some(entry) = removed {
+        for (k, v) in entry.by_ptr {
+            if entry.strong_values { pear_libobjc::object::release(v as Id); }
+            if entry.strong_keys { pear_libobjc::object::release(k as Id); }
+        }
+    }
+    unsafe { pear_libobjc::object::dispose(this) };
 }
 extern "C" fn map_table_count(this: Id, _cmd: pear_libobjc::abi::Sel) -> usize {
     MAP_TABLES.lock().unwrap().get(&(this as usize)).map_or(0, |e| e.by_ptr.len())
@@ -1180,49 +1274,114 @@ extern "C" fn map_table_dict_rep(this: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
         .unwrap_or_default();
     nsdict_from_pairs(pairs)
 }
+fn array_object_enumerator(items: Vec<Id>) -> Id {
+    let arr = nsarray_from_ids(items);
+    unsafe {
+        let s = pear_libobjc::runtime::sel("objectEnumerator");
+        let d = pear_libobjc::message::lookup_for_send(arr, s);
+        let f: extern "C" fn(Id, pear_libobjc::abi::Sel) -> Id = std::mem::transmute(d.imp);
+        f(d.receiver, s)
+    }
+}
+extern "C" fn map_table_obj_enum(this: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
+    let items: Vec<Id> = MAP_TABLES
+        .lock()
+        .unwrap()
+        .get(&(this as usize))
+        .map(|e| e.by_ptr.values().map(|&v| v as Id).collect())
+        .unwrap_or_default();
+    array_object_enumerator(items)
+}
+extern "C" fn map_table_key_enum(this: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
+    let items: Vec<Id> = MAP_TABLES
+        .lock()
+        .unwrap()
+        .get(&(this as usize))
+        .map(|e| e.by_ptr.keys().map(|&k| k as Id).collect())
+        .unwrap_or_default();
+    array_object_enumerator(items)
+}
 
-extern "C" fn hash_table_alloc0(cls: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
+fn hash_table_new(cls: Id, strong: bool) -> Id {
     let inst = unsafe { pear_libobjc::object::alloc(cls as *const pear_libobjc::abi::ClassT) };
-    HASH_TABLES.lock().unwrap().insert(inst as usize, Vec::new());
+    HASH_TABLES.lock().unwrap().insert(inst as usize, HashTableBacking { strong, items: Vec::new() });
     inst
 }
-extern "C" fn hash_table_alloc1(cls: Id, cmd: pear_libobjc::abi::Sel, _opts: usize) -> Id {
-    hash_table_alloc0(cls, cmd)
+extern "C" fn hash_table_alloc0(cls: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
+    hash_table_new(cls, true)
 }
-extern "C" fn hash_table_init(this: Id, _cmd: pear_libobjc::abi::Sel, _opts: usize, _cap: usize) -> Id {
-    HASH_TABLES.lock().unwrap().entry(this as usize).or_default();
+extern "C" fn hash_table_alloc_weak(cls: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
+    hash_table_new(cls, false)
+}
+extern "C" fn hash_table_alloc1(cls: Id, _cmd: pear_libobjc::abi::Sel, opts: usize) -> Id {
+    hash_table_new(cls, is_strong_pointer_opts(opts))
+}
+extern "C" fn hash_table_init(this: Id, _cmd: pear_libobjc::abi::Sel, opts: usize, _cap: usize) -> Id {
+    let mut map = HASH_TABLES.lock().unwrap();
+    let entry = map.entry(this as usize).or_default();
+    entry.strong = is_strong_pointer_opts(opts);
     this
 }
 extern "C" fn hash_table_add(this: Id, _cmd: pear_libobjc::abi::Sel, obj: Id) {
     if obj.is_null() { return; }
-    let mut map = HASH_TABLES.lock().unwrap();
-    let v = map.entry(this as usize).or_default();
-    if !v.contains(&(obj as usize)) {
-        v.push(obj as usize);
+    let need_retain = {
+        let mut map = HASH_TABLES.lock().unwrap();
+        let entry = map.entry(this as usize).or_default();
+        if !entry.items.contains(&(obj as usize)) {
+            entry.items.push(obj as usize);
+            entry.strong
+        } else {
+            false
+        }
+    };
+    if need_retain {
+        pear_libobjc::object::retain(obj);
     }
 }
 extern "C" fn hash_table_remove(this: Id, _cmd: pear_libobjc::abi::Sel, obj: Id) {
-    if let Some(v) = HASH_TABLES.lock().unwrap().get_mut(&(this as usize)) {
-        v.retain(|&x| x != obj as usize);
+    if obj.is_null() { return; }
+    let need_release = {
+        let mut map = HASH_TABLES.lock().unwrap();
+        let Some(entry) = map.get_mut(&(this as usize)) else { return; };
+        let before = entry.items.len();
+        entry.items.retain(|&x| x != obj as usize);
+        entry.strong && entry.items.len() < before
+    };
+    if need_release {
+        pear_libobjc::object::release(obj);
     }
 }
 extern "C" fn hash_table_contains(this: Id, _cmd: pear_libobjc::abi::Sel, obj: Id) -> bool {
-    HASH_TABLES.lock().unwrap().get(&(this as usize)).map_or(false, |v| v.contains(&(obj as usize)))
+    HASH_TABLES.lock().unwrap().get(&(this as usize)).map_or(false, |e| e.items.contains(&(obj as usize)))
 }
 extern "C" fn hash_table_remove_all(this: Id, _cmd: pear_libobjc::abi::Sel) {
-    if let Some(v) = HASH_TABLES.lock().unwrap().get_mut(&(this as usize)) {
-        v.clear();
+    let (strong, drained) = {
+        let mut map = HASH_TABLES.lock().unwrap();
+        let Some(entry) = map.get_mut(&(this as usize)) else { return; };
+        (entry.strong, std::mem::take(&mut entry.items))
+    };
+    if strong {
+        for p in drained { pear_libobjc::object::release(p as Id); }
     }
 }
+extern "C" fn hash_table_dealloc(this: Id, _cmd: pear_libobjc::abi::Sel) {
+    let removed = HASH_TABLES.lock().unwrap().remove(&(this as usize));
+    if let Some(entry) = removed {
+        if entry.strong {
+            for p in entry.items { pear_libobjc::object::release(p as Id); }
+        }
+    }
+    unsafe { pear_libobjc::object::dispose(this) };
+}
 extern "C" fn hash_table_count(this: Id, _cmd: pear_libobjc::abi::Sel) -> usize {
-    HASH_TABLES.lock().unwrap().get(&(this as usize)).map_or(0, Vec::len)
+    HASH_TABLES.lock().unwrap().get(&(this as usize)).map_or(0, |e| e.items.len())
 }
 extern "C" fn hash_table_all(this: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
     let items: Vec<Id> = HASH_TABLES
         .lock()
         .unwrap()
         .get(&(this as usize))
-        .map(|v| v.iter().map(|&p| p as Id).collect())
+        .map(|e| e.items.iter().map(|&p| p as Id).collect())
         .unwrap_or_default();
     nsarray_from_ids(items)
 }
@@ -1282,19 +1441,42 @@ extern "C" fn nscache_get(this: Id, _cmd: pear_libobjc::abi::Sel, key: Id) -> Id
 }
 extern "C" fn nscache_set(this: Id, _cmd: pear_libobjc::abi::Sel, obj: Id, key: Id) {
     let k = rust_str_from_nsstring(key).unwrap_or_else(|| format!("{:#x}", key as usize));
-    let mut map = CACHES.lock().unwrap();
-    let (m, _) = map.entry(this as usize).or_default();
-    if obj.is_null() { m.remove(&k); } else { m.insert(k, obj as usize); }
+    let (need_retain, old_val) = {
+        let mut map = CACHES.lock().unwrap();
+        let (m, _) = map.entry(this as usize).or_default();
+        if obj.is_null() {
+            (false, m.remove(&k))
+        } else {
+            let prev = m.insert(k, obj as usize);
+            (prev != Some(obj as usize), if prev != Some(obj as usize) { prev } else { None })
+        }
+    };
+    if need_retain { pear_libobjc::object::retain(obj); }
+    if let Some(ov) = old_val { pear_libobjc::object::release(ov as Id); }
 }
 extern "C" fn nscache_set_cost(this: Id, cmd: pear_libobjc::abi::Sel, obj: Id, key: Id, _cost: usize) {
     nscache_set(this, cmd, obj, key);
 }
 extern "C" fn nscache_rem(this: Id, _cmd: pear_libobjc::abi::Sel, key: Id) {
     let k = rust_str_from_nsstring(key).unwrap_or_else(|| format!("{:#x}", key as usize));
-    if let Some((m, _)) = CACHES.lock().unwrap().get_mut(&(this as usize)) { m.remove(&k); }
+    let prev = CACHES.lock().unwrap().get_mut(&(this as usize)).and_then(|(m, _)| m.remove(&k));
+    if let Some(ov) = prev { pear_libobjc::object::release(ov as Id); }
 }
 extern "C" fn nscache_rem_all(this: Id, _cmd: pear_libobjc::abi::Sel) {
-    if let Some((m, _)) = CACHES.lock().unwrap().get_mut(&(this as usize)) { m.clear(); }
+    let drained: Vec<usize> = CACHES
+        .lock()
+        .unwrap()
+        .get_mut(&(this as usize))
+        .map(|(m, _)| m.drain().map(|(_, v)| v).collect())
+        .unwrap_or_default();
+    for v in drained { pear_libobjc::object::release(v as Id); }
+}
+extern "C" fn nscache_dealloc(this: Id, _cmd: pear_libobjc::abi::Sel) {
+    let removed = CACHES.lock().unwrap().remove(&(this as usize));
+    if let Some((m, _)) = removed {
+        for (_, v) in m { pear_libobjc::object::release(v as Id); }
+    }
+    unsafe { pear_libobjc::object::dispose(this) };
 }
 extern "C" fn nscache_set_name(this: Id, _cmd: pear_libobjc::abi::Sel, name: Id) {
     let mut map = CACHES.lock().unwrap();
@@ -1393,17 +1575,20 @@ pub fn register_foundation_collection_classes() {
                 ("removeAllObjects", i(map_table_remove_all as *const ())),
                 ("count", i(map_table_count as *const ())),
                 ("dictionaryRepresentation", i(map_table_dict_rep as *const ())),
+                ("objectEnumerator", i(map_table_obj_enum as *const ())),
+                ("keyEnumerator", i(map_table_key_enum as *const ())),
+                ("dealloc", i(map_table_dealloc as *const ())),
             ],
             &[
                 ("mapTableWithKeyOptions:valueOptions:", i(map_table_alloc as *const ())),
-                ("strongToWeakObjectsMapTable", i(map_table_alloc0 as *const ())),
-                ("weakToStrongObjectsMapTable", i(map_table_alloc0 as *const ())),
-                ("strongToStrongObjectsMapTable", i(map_table_alloc0 as *const ())),
-                ("weakToWeakObjectsMapTable", i(map_table_alloc0 as *const ())),
-                ("mapTableWithStrongToStrongObjects", i(map_table_alloc0 as *const ())),
-                ("mapTableWithWeakToStrongObjects", i(map_table_alloc0 as *const ())),
-                ("mapTableWithStrongToWeakObjects", i(map_table_alloc0 as *const ())),
-                ("mapTableWithWeakToWeakObjects", i(map_table_alloc0 as *const ())),
+                ("strongToWeakObjectsMapTable", i(map_table_alloc_s2w as *const ())),
+                ("weakToStrongObjectsMapTable", i(map_table_alloc_w2s as *const ())),
+                ("strongToStrongObjectsMapTable", i(map_table_alloc_s2s as *const ())),
+                ("weakToWeakObjectsMapTable", i(map_table_alloc_w2w as *const ())),
+                ("mapTableWithStrongToStrongObjects", i(map_table_alloc_s2s as *const ())),
+                ("mapTableWithWeakToStrongObjects", i(map_table_alloc_w2s as *const ())),
+                ("mapTableWithStrongToWeakObjects", i(map_table_alloc_s2w as *const ())),
+                ("mapTableWithWeakToWeakObjects", i(map_table_alloc_w2w as *const ())),
             ],
         );
         pear_libobjc::runtime::register_builtin(
@@ -1419,9 +1604,10 @@ pub fn register_foundation_collection_classes() {
                 ("removeAllObjects", i(hash_table_remove_all as *const ())),
                 ("count", i(hash_table_count as *const ())),
                 ("allObjects", i(hash_table_all as *const ())),
+                ("dealloc", i(hash_table_dealloc as *const ())),
             ],
             &[
-                ("weakObjectsHashTable", i(hash_table_alloc0 as *const ())),
+                ("weakObjectsHashTable", i(hash_table_alloc_weak as *const ())),
                 ("hashTableWithOptions:", i(hash_table_alloc1 as *const ())),
             ],
         );
@@ -1461,6 +1647,7 @@ pub fn register_foundation_collection_classes() {
                 ("setDelegate:", i(col_noop1 as *const ())),
                 ("setName:", i(nscache_set_name as *const ())),
                 ("name", i(nscache_name as *const ())),
+                ("dealloc", i(nscache_dealloc as *const ())),
             ],
             &[],
         );

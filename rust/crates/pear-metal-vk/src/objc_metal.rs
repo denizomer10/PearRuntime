@@ -1028,6 +1028,10 @@ pub fn command_buffer_counts(cb_obj: Id) -> Option<(usize, usize, usize)> {
         .map(|s| (s.draw_calls, s.compute_dispatches, s.blit_ops))
 }
 
+extern "C" fn mtl_set_purgeable(_this: Id, _cmd: Sel, state: usize) -> usize {
+    if state == 1 { 2 } else { state }
+}
+
 pub fn register_classes() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
@@ -1200,6 +1204,7 @@ pub fn register_classes() {
                 ("didModifyRange:", i(mtl_noop2 as *const ())),
                 ("label", i(prop_get_id as *const ())),
                 ("setLabel:", i(prop_set_id as *const ())),
+                ("setPurgeableState:", i(mtl_set_purgeable as *const ())),
             ],
             &[],
         );
@@ -1224,6 +1229,7 @@ pub fn register_classes() {
                 ("getBytes:bytesPerRow:fromRegion:mipmapLevel:", i(tex_get_bytes as *const ())),
                 ("label", i(prop_get_id as *const ())),
                 ("setLabel:", i(prop_set_id as *const ())),
+                ("setPurgeableState:", i(mtl_set_purgeable as *const ())),
             ],
             &[],
         );
