@@ -45,7 +45,7 @@ fn resolve_executable(input: &str) -> PathBuf {
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
-        eprintln!("Usage: pearruntime <macho-binary-or-.app> [--plan] [--inspect-only] [--check-load] [--list-missing] [--window-test]");
+        eprintln!("Usage: pearruntime <macho-binary-or-.app> [--plan] [--inspect-only] [--check-load] [--list-missing] [--list-missing-summary] [--window-test]");
         process::exit(if args.is_empty() { 2 } else { 0 });
     }
     if args.iter().any(|a| a == "--window-test") {
@@ -91,6 +91,7 @@ fn main() {
     let inspect_only = args.iter().any(|a| a == "--inspect-only");
     let check_load = args.iter().any(|a| a == "--check-load");
     let list_missing = args.iter().any(|a| a == "--list-missing");
+    let list_missing_summary = args.iter().any(|a| a == "--list-missing-summary");
 
     let bytes = match fs::read(&exe_path) {
         Ok(b) => b,
@@ -195,7 +196,7 @@ fn main() {
             let target_arg = fs::canonicalize(&args[0]).unwrap_or_else(|_| PathBuf::from(&args[0]));
             cmd.arg(target_arg);
             for extra in args.iter().skip(1) {
-                if !matches!(extra.as_str(), "--plan" | "--inspect-only" | "--check-load" | "--list-missing" | "--window-test") {
+                if !matches!(extra.as_str(), "--plan" | "--inspect-only" | "--check-load" | "--list-missing" | "--list-missing-summary" | "--window-test") {
                     cmd.arg(extra);
                 }
             }
@@ -212,12 +213,12 @@ fn main() {
     let opts = pear_dyld::Options {
         allow_missing: true,
     };
-    if check_load || list_missing {
+    if check_load || list_missing || list_missing_summary {
         pear_runtime::init();
         let missing = std::sync::Mutex::new(std::collections::BTreeSet::<String>::new());
         let resolver = |lib: Option<&str>, sym: &str| {
             let r = pear_runtime::resolve_symbol(lib, sym);
-            if r.is_none() && list_missing {
+            if r.is_none() && (list_missing || list_missing_summary) {
                 missing.lock().unwrap().insert(format!("{} :: {}", lib.unwrap_or("<self>"), sym));
             }
             r
@@ -259,11 +260,26 @@ fn main() {
                 if !total_unrealized.is_empty() {
                     println!("unrealized: {:?}", total_unrealized);
                 }
-                if list_missing {
+                if list_missing || list_missing_summary {
                     let m = missing.lock().unwrap();
                     println!("missing symbols ({}):", m.len());
-                    for entry in m.iter().take(60) {
-                        println!("  {entry}");
+                    if list_missing_summary {
+                        let mut by_lib: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+                        for entry in m.iter() {
+                            let lib = entry.split(" :: ").next().unwrap_or(entry);
+                            let base = lib.rsplit('/').next().unwrap_or(lib);
+                            *by_lib.entry(base).or_default() += 1;
+                        }
+                        let mut ranked: Vec<(&str, usize)> = by_lib.into_iter().collect();
+                        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+                        for (base, cnt) in ranked.iter().take(25) {
+                            println!("  {cnt:4}  {base}");
+                        }
+                    }
+                    if list_missing {
+                        for entry in m.iter().take(60) {
+                            println!("  {entry}");
+                        }
                     }
                 }
                 return;

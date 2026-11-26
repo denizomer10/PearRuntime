@@ -1426,6 +1426,21 @@ extern "C" {
     fn abort() -> !;
     fn dlopen(filename: *const c_char, flags: i32) -> *mut c_void;
     fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    fn dladdr(addr: *const c_void, info: *mut DlInfo) -> i32;
+    fn posix_memalign(memptr: *mut *mut c_void, alignment: usize, size: usize) -> i32;
+    fn srand(seed: u32);
+    #[cfg(target_os = "macos")]
+    fn malloc_size(ptr: *const c_void) -> usize;
+    #[cfg(target_os = "linux")]
+    fn malloc_usable_size(ptr: *mut c_void) -> usize;
+}
+
+#[repr(C)]
+pub struct DlInfo {
+    pub dli_fname: *const c_char,
+    pub dli_fbase: *mut c_void,
+    pub dli_sname: *const c_char,
+    pub dli_saddr: *mut c_void,
 }
 
 fn resolve_raw_gles_proc(cname: &str) -> usize {
@@ -2173,6 +2188,8 @@ static MAIN_IMAGE_SLIDE: std::sync::atomic::AtomicIsize = std::sync::atomic::Ato
 struct RegisteredImage {
     header: usize,
     slide: isize,
+    addr_start: usize,
+    addr_end: usize,
     name: Box<std::ffi::CStr>,
 }
 
@@ -2195,6 +2212,13 @@ fn register_loaded_image(img: &pear_dyld::LoadedImage, fallback_name: &str) {
         .into_boxed_c_str();
     let header = img.header() as usize;
     let slide = img.slide() as isize;
+    let addr_start = header;
+    let addr_end = img
+        .sections
+        .iter()
+        .map(|s| img.address(s.addr.saturating_add(s.size)) as usize)
+        .max()
+        .unwrap_or(addr_start);
     let mut guard = LOADED_IMAGES.lock().unwrap();
     if guard.is_empty() {
         MAIN_IMAGE_HEADER.store(header, std::sync::atomic::Ordering::Release);
@@ -2203,8 +2227,30 @@ fn register_loaded_image(img: &pear_dyld::LoadedImage, fallback_name: &str) {
     guard.push(RegisteredImage {
         header,
         slide,
+        addr_start,
+        addr_end,
         name: cstr,
     });
+}
+
+unsafe extern "C" fn guest_dladdr(addr: *const c_void, info: *mut DlInfo) -> i32 {
+    if addr.is_null() || info.is_null() {
+        return 0;
+    }
+    let a = addr as usize;
+    {
+        let guard = LOADED_IMAGES.lock().unwrap();
+        for entry in guard.iter() {
+            if a >= entry.addr_start && a < entry.addr_end {
+                (*info).dli_fname = entry.name.as_ptr();
+                (*info).dli_fbase = entry.header as *mut c_void;
+                (*info).dli_sname = std::ptr::null();
+                (*info).dli_saddr = std::ptr::null_mut();
+                return 1;
+            }
+        }
+    }
+    dladdr(addr, info)
 }
 
 extern "C" fn dyld_image_count_stub() -> u32 {
@@ -2566,6 +2612,49 @@ mod darwin_pthread {
             real_pthread_create(thread, std::ptr::null(), start, arg)
         }
     }
+
+    pub unsafe extern "C" fn cond_timedwait_relative_np(
+        cond: *mut c_void,
+        mtx: *mut c_void,
+        reltime: *const DarwinTimespec,
+    ) -> c_int {
+        if reltime.is_null() {
+            return cond_wait(cond, mtx);
+        }
+        let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+            return cond_wait(cond, mtx);
+        };
+        let rel = &*reltime;
+        let total_nsec = now.subsec_nanos() as i64 + rel.tv_nsec.max(0);
+        let abstime = DarwinTimespec {
+            tv_sec: now.as_secs() as i64 + rel.tv_sec.max(0) + (total_nsec / 1_000_000_000),
+            tv_nsec: total_nsec % 1_000_000_000,
+        };
+        cond_timedwait(cond, mtx, &abstime)
+    }
+
+    pub unsafe extern "C" fn threadid_np(_thread: usize, thread_id: *mut u64) -> c_int {
+        if thread_id.is_null() {
+            return LINUX_EINVAL;
+        }
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        thread_local! {
+            static TID: u64 = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        *thread_id = TID.with(|&id| id);
+        0
+    }
+
+    pub unsafe extern "C" fn getname_np(_thread: usize, buf: *mut std::ffi::c_char, len: usize) -> c_int {
+        if buf.is_null() || len == 0 {
+            return LINUX_EINVAL;
+        }
+        let name = b"pear-thread\0";
+        let copy_n = name.len().min(len);
+        std::ptr::copy_nonoverlapping(name.as_ptr(), buf as *mut u8, copy_n);
+        *(buf.add(copy_n - 1)) = 0;
+        0
+    }
 }
 
 static DISPATCH_MAIN_Q: [usize; 16] = [0; 16];
@@ -2694,7 +2783,145 @@ extern "C" fn os_log_create_impl(_sub: *const c_char, _cat: *const c_char) -> *c
     &raw const OS_LOG_STUB as *const c_void
 }
 extern "C" fn os_log_type_enabled_impl(_log: *const c_void, _t: u8) -> bool { false }
-extern "C" fn os_unfair_lock_noop(_lock: *mut c_void) {}
+extern "C" fn os_unfair_lock_lock(lock: *mut std::sync::atomic::AtomicU32) {
+    if lock.is_null() {
+        return;
+    }
+    let atom = unsafe { &*lock };
+    while atom
+        .compare_exchange_weak(
+            0,
+            1,
+            std::sync::atomic::Ordering::Acquire,
+            std::sync::atomic::Ordering::Relaxed,
+        )
+        .is_err()
+    {
+        std::thread::yield_now();
+    }
+}
+extern "C" fn os_unfair_lock_lock_with_options(lock: *mut std::sync::atomic::AtomicU32, _opts: u32) {
+    os_unfair_lock_lock(lock);
+}
+extern "C" fn os_unfair_lock_trylock(lock: *mut std::sync::atomic::AtomicU32) -> bool {
+    if lock.is_null() {
+        return false;
+    }
+    unsafe { &*lock }
+        .compare_exchange(
+            0,
+            1,
+            std::sync::atomic::Ordering::Acquire,
+            std::sync::atomic::Ordering::Relaxed,
+        )
+        .is_ok()
+}
+extern "C" fn os_unfair_lock_unlock(lock: *mut std::sync::atomic::AtomicU32) {
+    if lock.is_null() {
+        return;
+    }
+    unsafe { &*lock }.store(0, std::sync::atomic::Ordering::Release);
+}
+
+static VM_PAGE_SIZE_VAL: usize = 4096;
+static MALLOC_DEFAULT_ZONE_STUB: usize = 0x4D5A_4F4E;
+
+unsafe extern "C" fn memset_chk(dst: *mut c_void, c: i32, n: usize, _dstlen: usize) -> *mut c_void {
+    memset(dst, c, n)
+}
+unsafe extern "C" fn strlcpy_impl(dst: *mut c_char, src: *const c_char, size: usize) -> usize {
+    let src_len = if src.is_null() { 0 } else { strlen(src) };
+    if !dst.is_null() && size > 0 && !src.is_null() {
+        let copy = src_len.min(size - 1);
+        std::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, copy);
+        *(dst.add(copy)) = 0;
+    }
+    src_len
+}
+unsafe extern "C" fn strlcpy_chk(dst: *mut c_char, src: *const c_char, size: usize, _dstlen: usize) -> usize {
+    strlcpy_impl(dst, src, size)
+}
+unsafe extern "C" fn strlcat_impl(dst: *mut c_char, src: *const c_char, size: usize) -> usize {
+    let dst_len = if dst.is_null() {
+        0
+    } else {
+        let mut i = 0usize;
+        while i < size && *(dst.add(i)) != 0 {
+            i += 1;
+        }
+        i
+    };
+    let src_len = if src.is_null() { 0 } else { strlen(src) };
+    if dst_len == size {
+        return size + src_len;
+    }
+    if !dst.is_null() && !src.is_null() && size > dst_len + 1 {
+        let copy = src_len.min(size - dst_len - 1);
+        std::ptr::copy_nonoverlapping(src as *const u8, dst.add(dst_len) as *mut u8, copy);
+        *(dst.add(dst_len + copy)) = 0;
+    }
+    dst_len + src_len
+}
+unsafe extern "C" fn strlcat_chk(dst: *mut c_char, src: *const c_char, size: usize, _dstlen: usize) -> usize {
+    strlcat_impl(dst, src, size)
+}
+unsafe extern "C" fn malloc_default_zone_impl() -> *mut c_void {
+    &raw const MALLOC_DEFAULT_ZONE_STUB as *mut c_void
+}
+unsafe extern "C" fn malloc_create_zone_impl(_start: usize, _flags: u32) -> *mut c_void {
+    malloc_default_zone_impl()
+}
+unsafe extern "C" fn malloc_zone_malloc_impl(_zone: *mut c_void, sz: usize) -> *mut c_void {
+    malloc(sz)
+}
+unsafe extern "C" fn malloc_zone_calloc_impl(_zone: *mut c_void, n: usize, sz: usize) -> *mut c_void {
+    calloc(n, sz)
+}
+unsafe extern "C" fn malloc_zone_realloc_impl(_zone: *mut c_void, p: *mut c_void, sz: usize) -> *mut c_void {
+    realloc(p, sz)
+}
+unsafe extern "C" fn malloc_zone_free_impl(_zone: *mut c_void, p: *mut c_void) {
+    free(p);
+}
+unsafe extern "C" fn malloc_size_impl(ptr: *const c_void) -> usize {
+    if ptr.is_null() {
+        return 0;
+    }
+    #[cfg(target_os = "macos")]
+    return malloc_size(ptr);
+    #[cfg(target_os = "linux")]
+    return malloc_usable_size(ptr as *mut c_void);
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    0
+}
+extern "C" fn mach_host_self_impl() -> u32 { 1 }
+unsafe extern "C" fn host_info_stub(
+    _host: u32,
+    _flavor: i32,
+    out: *mut u32,
+    count: *mut u32,
+) -> i32 {
+    if !out.is_null() && !count.is_null() {
+        std::ptr::write_bytes(out, 0, (*count as usize).min(64));
+    }
+    0
+}
+extern "C" fn mach_error_string_stub(_err: i32) -> *const c_char {
+    c"ok".as_ptr()
+}
+extern "C" fn maskrune_l_impl(c: i32, f: usize, _loc: *const c_void) -> i32 {
+    maskrune_impl(c, f)
+}
+extern "C" fn mb_cur_max_l_impl(_loc: *const c_void) -> usize { 1 }
+unsafe extern "C" fn srandomdev_impl() {
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() ^ (d.as_secs() as u32))
+        .unwrap_or(1);
+    srand(t);
+}
+extern "C" fn resolv_zero_stub() -> i32 { 0 }
+
 extern "C" fn sec_item_not_found() -> i32 { -25300 }
 extern "C" fn asl_open_stub(_ident: *const c_char, _facility: *const c_char, _opts: u32) -> *const c_void {
     &raw const OS_LOG_STUB as *const c_void
@@ -2704,10 +2931,24 @@ extern "C" fn asl_ok_stub() -> i32 { 0 }
 extern "C" fn cxx_new(sz: usize) -> *mut c_void {
     unsafe { malloc(sz.max(1)) }
 }
+extern "C" fn cxx_new_aligned(sz: usize, align: usize) -> *mut c_void {
+    let a = align.max(std::mem::size_of::<*mut c_void>()).next_power_of_two();
+    let mut ptr: *mut c_void = std::ptr::null_mut();
+    unsafe {
+        if posix_memalign(&mut ptr, a, sz.max(1)) == 0 && !ptr.is_null() {
+            ptr
+        } else {
+            malloc(sz.max(1))
+        }
+    }
+}
 extern "C" fn cxx_delete(ptr: *mut c_void) {
     if !ptr.is_null() {
         unsafe { free(ptr) };
     }
+}
+extern "C" fn cxx_delete_aligned(ptr: *mut c_void, _align: usize) {
+    cxx_delete(ptr);
 }
 extern "C" fn cxa_guard_acquire(guard: *mut u64) -> i32 {
     if guard.is_null() { return 0; }
@@ -2998,6 +3239,186 @@ mod apple_libcxx {
         out
     }
 
+    pub unsafe extern "C" fn str_init_ptr_len(this: *mut AppleString, s: *const c_char, n: usize) {
+        std::ptr::write_bytes(this as *mut u8, 0, 24);
+        let data = if s.is_null() || n == 0 {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(s as *const u8, n)
+        };
+        set_bytes(this, data);
+    }
+
+    pub unsafe extern "C" fn str_init_ptr_len_cap(
+        this: *mut AppleString,
+        s: *const c_char,
+        len: usize,
+        _cap: usize,
+    ) {
+        str_init_ptr_len(this, s, len);
+    }
+
+    pub unsafe extern "C" fn str_init_count_char(this: *mut AppleString, count: usize, ch: c_char) {
+        std::ptr::write_bytes(this as *mut u8, 0, 24);
+        let data = vec![ch as u8; count];
+        set_bytes(this, &data);
+    }
+
+    pub unsafe extern "C" fn str_at(this: *mut AppleString, idx: usize) -> *mut c_char {
+        let p = this as *mut u8;
+        let (base, len) = if is_long(p) {
+            (*(this as *const *mut u8), *((this as *const usize).add(1)))
+        } else {
+            (p, (*p.add(23) & 0x7F) as usize)
+        };
+        if idx >= len || base.is_null() {
+            throw_abort();
+        }
+        base.add(idx) as *mut c_char
+    }
+
+    pub unsafe extern "C" fn str_compare_pos_n_cstr(
+        this: *const AppleString,
+        pos: usize,
+        n: usize,
+        rhs: *const c_char,
+    ) -> c_int {
+        let b = if rhs.is_null() { &[][..] } else { CStr::from_ptr(rhs).to_bytes() };
+        str_compare_pos_n_cstr_len(this, pos, n, b.as_ptr() as *const c_char, b.len())
+    }
+
+    pub unsafe extern "C" fn str_compare_pos_n_cstr_len(
+        this: *const AppleString,
+        pos: usize,
+        n: usize,
+        rhs: *const c_char,
+        rhs_len: usize,
+    ) -> c_int {
+        let slice = read_slice(this);
+        if pos > slice.len() {
+            throw_abort();
+        }
+        let sub = &slice[pos..pos.saturating_add(n).min(slice.len())];
+        let b = if rhs.is_null() || rhs_len == 0 {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(rhs as *const u8, rhs_len)
+        };
+        match sub.cmp(b) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        }
+    }
+
+    pub unsafe extern "C" fn str_append_substr(
+        this: *mut AppleString,
+        other: *const AppleString,
+        pos: usize,
+        n: usize,
+    ) -> *mut AppleString {
+        let src = if other.is_null() { &[] } else { read_slice(other) };
+        let start = pos.min(src.len());
+        let end = start.saturating_add(n).min(src.len());
+        let tail = src[start..end].to_vec();
+        let mut buf = read_slice(this).to_vec();
+        buf.extend_from_slice(&tail);
+        set_bytes(this, &buf);
+        this
+    }
+
+    pub unsafe extern "C" fn str_append_count_char(
+        this: *mut AppleString,
+        count: usize,
+        ch: c_char,
+    ) -> *mut AppleString {
+        let mut buf = read_slice(this).to_vec();
+        buf.resize(buf.len() + count, ch as u8);
+        set_bytes(this, &buf);
+        this
+    }
+
+    pub unsafe extern "C" fn str_assign_substr(
+        this: *mut AppleString,
+        other: *const AppleString,
+        pos: usize,
+        n: usize,
+    ) -> *mut AppleString {
+        let src = if other.is_null() { &[] } else { read_slice(other) };
+        let start = pos.min(src.len());
+        let end = start.saturating_add(n).min(src.len());
+        let data = src[start..end].to_vec();
+        set_bytes(this, &data);
+        this
+    }
+
+    pub unsafe extern "C" fn str_assign_count_char(
+        this: *mut AppleString,
+        count: usize,
+        ch: c_char,
+    ) -> *mut AppleString {
+        let data = vec![ch as u8; count];
+        set_bytes(this, &data);
+        this
+    }
+
+    pub unsafe extern "C" fn str_insert_cstr(
+        this: *mut AppleString,
+        pos: usize,
+        s: *const c_char,
+    ) -> *mut AppleString {
+        let ins = if s.is_null() { &[][..] } else { CStr::from_ptr(s).to_bytes() };
+        str_insert_cstr_n(this, pos, ins.as_ptr() as *const c_char, ins.len())
+    }
+
+    pub unsafe extern "C" fn str_insert_cstr_n(
+        this: *mut AppleString,
+        pos: usize,
+        s: *const c_char,
+        n: usize,
+    ) -> *mut AppleString {
+        let cur = read_slice(this);
+        let at = pos.min(cur.len());
+        let ins = if s.is_null() || n == 0 {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(s as *const u8, n)
+        };
+        let mut out = Vec::with_capacity(cur.len() + ins.len());
+        out.extend_from_slice(&cur[..at]);
+        out.extend_from_slice(ins);
+        out.extend_from_slice(&cur[at..]);
+        set_bytes(this, &out);
+        this
+    }
+
+    pub unsafe extern "C" fn str_grow_by_and_replace(
+        this: *mut AppleString,
+        old_cap: usize,
+        delta_cap: usize,
+        old_sz: usize,
+        n_copy: usize,
+        n_del: usize,
+        n_add: usize,
+        p_new_stuff: *const c_char,
+    ) {
+        let _ = (old_cap, delta_cap);
+        let cur = read_slice(this);
+        let prefix = &cur[..n_copy.min(old_sz).min(cur.len())];
+        let tail_start = n_copy.saturating_add(n_del).min(old_sz).min(cur.len());
+        let suffix = &cur[tail_start..old_sz.min(cur.len())];
+        let add = if p_new_stuff.is_null() || n_add == 0 {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(p_new_stuff as *const u8, n_add)
+        };
+        let mut out = Vec::with_capacity(prefix.len() + add.len() + suffix.len());
+        out.extend_from_slice(prefix);
+        out.extend_from_slice(add);
+        out.extend_from_slice(suffix);
+        set_bytes(this, &out);
+    }
+
     #[derive(Default)]
     struct RecLockState {
         owner: Option<std::thread::ThreadId>,
@@ -3099,6 +3520,261 @@ mod apple_libcxx {
     pub extern "C" fn throw_abort() -> ! {
         eprintln!("[pear-runtime][libc++] container/length error");
         std::process::abort()
+    }
+
+    pub unsafe extern "C" fn call_once_impl(
+        flag: *mut std::sync::atomic::AtomicUsize,
+        arg: *mut c_void,
+        func: unsafe extern "C" fn(*mut c_void),
+    ) {
+        use std::sync::atomic::Ordering;
+        const DONE: usize = !0usize;
+        if flag.is_null() {
+            return;
+        }
+        let atom = &*flag;
+        if atom.load(Ordering::Acquire) == DONE {
+            return;
+        }
+        static ONCE_SYNC: OnceLock<(Mutex<()>, Condvar)> = OnceLock::new();
+        let (mtx, cv) = ONCE_SYNC.get_or_init(|| (Mutex::new(()), Condvar::new()));
+        let mut guard = mtx.lock().unwrap();
+        loop {
+            match atom.load(Ordering::Acquire) {
+                DONE => return,
+                0 => {
+                    atom.store(1, Ordering::Release);
+                    drop(guard);
+                    func(arg);
+                    let _done_guard = mtx.lock().unwrap();
+                    atom.store(DONE, Ordering::Release);
+                    cv.notify_all();
+                    return;
+                }
+                _ => {
+                    guard = cv.wait(guard).unwrap();
+                }
+            }
+        }
+    }
+
+    fn plain_mutex_map() -> &'static Mutex<HashMap<usize, std::sync::Arc<(Mutex<bool>, Condvar)>>> {
+        static M: OnceLock<Mutex<HashMap<usize, std::sync::Arc<(Mutex<bool>, Condvar)>>>> = OnceLock::new();
+        M.get_or_init(Default::default)
+    }
+
+    fn get_plain_mutex(ptr: usize) -> std::sync::Arc<(Mutex<bool>, Condvar)> {
+        let mut g = plain_mutex_map().lock().unwrap();
+        g.entry(ptr)
+            .or_insert_with(|| std::sync::Arc::new((Mutex::new(false), Condvar::new())))
+            .clone()
+    }
+
+    pub extern "C" fn mutex_ctor(this: *mut c_void) -> *mut c_void {
+        if !this.is_null() {
+            let _ = get_plain_mutex(this as usize);
+        }
+        this
+    }
+    pub extern "C" fn mutex_dtor(this: *mut c_void) -> *mut c_void {
+        if !this.is_null() {
+            plain_mutex_map().lock().unwrap().remove(&(this as usize));
+        }
+        this
+    }
+    pub extern "C" fn mutex_lock(this: *mut c_void) {
+        if this.is_null() { return; }
+        let entry = get_plain_mutex(this as usize);
+        let mut locked = entry.0.lock().unwrap();
+        while *locked {
+            locked = entry.1.wait(locked).unwrap();
+        }
+        *locked = true;
+    }
+    pub extern "C" fn mutex_trylock(this: *mut c_void) -> bool {
+        if this.is_null() { return false; }
+        let entry = get_plain_mutex(this as usize);
+        let mut locked = entry.0.lock().unwrap();
+        if *locked {
+            false
+        } else {
+            *locked = true;
+            true
+        }
+    }
+    pub extern "C" fn mutex_unlock(this: *mut c_void) {
+        if this.is_null() { return; }
+        let entry = get_plain_mutex(this as usize);
+        let mut locked = entry.0.lock().unwrap();
+        *locked = false;
+        entry.1.notify_one();
+    }
+
+    fn cv_map() -> &'static Mutex<HashMap<usize, std::sync::Arc<(Mutex<u64>, Condvar)>>> {
+        static M: OnceLock<Mutex<HashMap<usize, std::sync::Arc<(Mutex<u64>, Condvar)>>>> = OnceLock::new();
+        M.get_or_init(Default::default)
+    }
+
+    fn get_cv(ptr: usize) -> std::sync::Arc<(Mutex<u64>, Condvar)> {
+        let mut g = cv_map().lock().unwrap();
+        g.entry(ptr)
+            .or_insert_with(|| std::sync::Arc::new((Mutex::new(0), Condvar::new())))
+            .clone()
+    }
+
+    pub extern "C" fn cv_dtor(this: *mut c_void) -> *mut c_void {
+        if !this.is_null() {
+            cv_map().lock().unwrap().remove(&(this as usize));
+        }
+        this
+    }
+    pub unsafe extern "C" fn cv_wait(this: *mut c_void, unique_lock: *mut c_void) {
+        if this.is_null() || unique_lock.is_null() { return; }
+        let mtx = *(unique_lock as *const *mut c_void);
+        let cv = get_cv(this as usize);
+        let mut seq_guard = cv.0.lock().unwrap();
+        let target_seq = *seq_guard;
+        mutex_unlock(mtx);
+        while *seq_guard == target_seq {
+            seq_guard = cv.1.wait(seq_guard).unwrap();
+        }
+        drop(seq_guard);
+        mutex_lock(mtx);
+    }
+    pub unsafe extern "C" fn cv_timed_wait(
+        this: *mut c_void,
+        unique_lock: *mut c_void,
+        abs_ns_ptr: *const i64,
+    ) {
+        if abs_ns_ptr.is_null() {
+            cv_wait(this, unique_lock);
+            return;
+        }
+        if this.is_null() || unique_lock.is_null() { return; }
+        let mtx = *(unique_lock as *const *mut c_void);
+        let abs_ns = *abs_ns_ptr;
+        let now_ns = chrono_system_now() * 1_000;
+        let cv = get_cv(this as usize);
+        let seq_guard = cv.0.lock().unwrap();
+        let target_seq = *seq_guard;
+        mutex_unlock(mtx);
+        if abs_ns > now_ns {
+            let dur = std::time::Duration::from_nanos((abs_ns - now_ns) as u64);
+            let (g, _) = cv.1.wait_timeout_while(seq_guard, dur, |s| *s == target_seq).unwrap();
+            drop(g);
+        } else {
+            drop(seq_guard);
+        }
+        mutex_lock(mtx);
+    }
+    pub extern "C" fn cv_notify_one(this: *mut c_void) {
+        if this.is_null() { return; }
+        let cv = get_cv(this as usize);
+        let mut seq = cv.0.lock().unwrap();
+        *seq = seq.wrapping_add(1);
+        cv.1.notify_one();
+    }
+    pub extern "C" fn cv_notify_all(this: *mut c_void) {
+        if this.is_null() { return; }
+        let cv = get_cv(this as usize);
+        let mut seq = cv.0.lock().unwrap();
+        *seq = seq.wrapping_add(1);
+        cv.1.notify_all();
+    }
+
+    pub unsafe extern "C" fn this_thread_sleep_for(ns_ptr: *const i64) {
+        if !ns_ptr.is_null() && *ns_ptr > 0 {
+            std::thread::sleep(std::time::Duration::from_nanos(*ns_ptr as u64));
+        }
+    }
+
+    pub extern "C" fn chrono_steady_now() -> i64 {
+        static ORIGIN: OnceLock<std::time::Instant> = OnceLock::new();
+        let orig = ORIGIN.get_or_init(std::time::Instant::now);
+        orig.elapsed().as_nanos().min(i64::MAX as u128) as i64
+    }
+
+    pub extern "C" fn chrono_system_now() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros().min(i64::MAX as u128) as i64)
+            .unwrap_or(0)
+    }
+
+    pub unsafe extern "C" fn chrono_to_time_t(tp_us: *const i64) -> isize {
+        if tp_us.is_null() { 0 } else { (*tp_us / 1_000_000) as isize }
+    }
+
+    pub extern "C" fn chrono_from_time_t(t: isize) -> i64 {
+        (t as i64).saturating_mul(1_000_000)
+    }
+
+    fn sp_mut_pool() -> &'static [std::sync::atomic::AtomicU32; 16] {
+        static POOL: OnceLock<[std::sync::atomic::AtomicU32; 16]> = OnceLock::new();
+        POOL.get_or_init(|| std::array::from_fn(|_| std::sync::atomic::AtomicU32::new(0)))
+    }
+    pub extern "C" fn get_sp_mut(obj: *const c_void) -> *const c_void {
+        let pool = sp_mut_pool();
+        let idx = ((obj as usize) >> 4) & 15;
+        &pool[idx] as *const std::sync::atomic::AtomicU32 as *const c_void
+    }
+    pub extern "C" fn sp_mut_lock(m: *mut c_void) {
+        super::os_unfair_lock_lock(m as *mut std::sync::atomic::AtomicU32);
+    }
+    pub extern "C" fn sp_mut_unlock(m: *mut c_void) {
+        super::os_unfair_lock_unlock(m as *mut std::sync::atomic::AtomicU32);
+    }
+
+    pub unsafe extern "C" fn shared_count_dtor(this: *mut c_void) -> *mut c_void { this }
+    pub unsafe extern "C" fn shared_weak_release_weak(this: *mut c_void) {
+        if this.is_null() { return; }
+        let weak = &*((this as *const std::sync::atomic::AtomicIsize).add(2));
+        if weak.fetch_sub(1, std::sync::atomic::Ordering::AcqRel) == 0 {
+            let vtbl = *(this as *const *const usize);
+            if !vtbl.is_null() {
+                let on_zero_weak: unsafe extern "C" fn(*mut c_void) = std::mem::transmute(*vtbl.add(4));
+                on_zero_weak(this);
+            }
+        }
+    }
+    pub unsafe extern "C" fn shared_weak_lock(this: *mut c_void) -> *mut c_void {
+        if this.is_null() { return std::ptr::null_mut(); }
+        let owners = &*((this as *const std::sync::atomic::AtomicIsize).add(1));
+        let mut cur = owners.load(std::sync::atomic::Ordering::Acquire);
+        loop {
+            if cur < 0 {
+                return std::ptr::null_mut();
+            }
+            match owners.compare_exchange_weak(
+                cur,
+                cur + 1,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            ) {
+                Ok(_) => return this,
+                Err(next) => cur = next,
+            }
+        }
+    }
+    pub unsafe extern "C" fn shared_weak_get_deleter(_this: *const c_void, _ti: *const c_void) -> *const c_void {
+        std::ptr::null()
+    }
+
+    pub unsafe extern "C" fn sort_u32(first: *mut u32, last: *mut u32, _comp: *const c_void) {
+        if first.is_null() || last.is_null() || last <= first { return; }
+        let len = (last as usize - first as usize) / std::mem::size_of::<u32>();
+        std::slice::from_raw_parts_mut(first, len).sort_unstable();
+    }
+    pub unsafe extern "C" fn sort_u64(first: *mut u64, last: *mut u64, _comp: *const c_void) {
+        if first.is_null() || last.is_null() || last <= first { return; }
+        let len = (last as usize - first as usize) / std::mem::size_of::<u64>();
+        std::slice::from_raw_parts_mut(first, len).sort_unstable();
+    }
+
+    pub extern "C" fn random_device_ctor(this: *mut c_void, _token: *const c_void) -> *mut c_void { this }
+    pub extern "C" fn random_device_dtor(this: *mut c_void) -> *mut c_void { this }
+    pub extern "C" fn random_device_call(_this: *mut c_void) -> u32 {
+        rs_default_call(std::ptr::null_mut())
     }
 }
 
@@ -3510,7 +4186,9 @@ pub fn init() {
 fn libcxx_symbol(symbol: &str) -> Option<usize> {
     match symbol {
         "__Znwm" | "__Znam" => Some(cxx_new as *const () as usize),
+        "__ZnwmSt11align_val_t" => Some(cxx_new_aligned as *const () as usize),
         "__ZdlPv" | "__ZdaPv" => Some(cxx_delete as *const () as usize),
+        "__ZdlPvSt11align_val_t" => Some(cxx_delete_aligned as *const () as usize),
         "___cxa_guard_acquire" => Some(cxa_guard_acquire as *const () as usize),
         "___cxa_guard_release" => Some(cxa_guard_release as *const () as usize),
         "___cxa_guard_abort" => Some(cxa_guard_abort as *const () as usize),
@@ -3523,8 +4201,21 @@ fn libcxx_symbol(symbol: &str) -> Option<usize> {
         | "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEC2ERKS5_mmRKS4_" => {
             Some(apple_libcxx::str_substr_ctor as *const () as usize)
         }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6__initEPKcm" => {
+            Some(apple_libcxx::str_init_ptr_len as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6__initEPKcmm" => {
+            Some(apple_libcxx::str_init_ptr_len_cap as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6__initEmc" => {
+            Some(apple_libcxx::str_init_count_char as *const () as usize)
+        }
         "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEED1Ev" => {
             Some(apple_libcxx::str_dtor as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE2atEm"
+        | "__ZNKSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE2atEm" => {
+            Some(apple_libcxx::str_at as *const () as usize)
         }
         "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEaSERKS5_" => {
             Some(apple_libcxx::str_assign_str as *const () as usize)
@@ -3538,11 +4229,32 @@ fn libcxx_symbol(symbol: &str) -> Option<usize> {
         "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6assignEPKcm" => {
             Some(apple_libcxx::str_assign_cstr_n as *const () as usize)
         }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6assignERKS5_mm" => {
+            Some(apple_libcxx::str_assign_substr as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6assignEmc" => {
+            Some(apple_libcxx::str_assign_count_char as *const () as usize)
+        }
         "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6appendEPKc" => {
             Some(apple_libcxx::str_append_cstr as *const () as usize)
         }
         "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6appendEPKcm" => {
             Some(apple_libcxx::str_append_cstr_n as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6appendERKS5_mm" => {
+            Some(apple_libcxx::str_append_substr as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6appendEmc" => {
+            Some(apple_libcxx::str_append_count_char as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6insertEmPKc" => {
+            Some(apple_libcxx::str_insert_cstr as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6insertEmPKcm" => {
+            Some(apple_libcxx::str_insert_cstr_n as *const () as usize)
+        }
+        "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE21__grow_by_and_replaceEmmmmmmPKc" => {
+            Some(apple_libcxx::str_grow_by_and_replace as *const () as usize)
         }
         "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE9push_backEc" => {
             Some(apple_libcxx::str_push_back as *const () as usize)
@@ -3565,20 +4277,72 @@ fn libcxx_symbol(symbol: &str) -> Option<usize> {
         "__ZNKSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE7compareEPKc" => {
             Some(apple_libcxx::str_compare_cstr as *const () as usize)
         }
+        "__ZNKSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE7compareEmmPKc" => {
+            Some(apple_libcxx::str_compare_pos_n_cstr as *const () as usize)
+        }
+        "__ZNKSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE7compareEmmPKcm" => {
+            Some(apple_libcxx::str_compare_pos_n_cstr_len as *const () as usize)
+        }
         "__ZNSt3__1plIcNS_11char_traitsIcEENS_9allocatorIcEEEENS_12basic_stringIT_T0_T1_EEPKS6_RKS9_" => {
             Some(apple_libcxx::str_plus_cstr_str as *const () as usize)
         }
+        "__ZNSt3__111__call_onceERVmPvPFvS2_E" => Some(apple_libcxx::call_once_impl as *const () as usize),
+        "__ZNSt3__15mutexC1Ev" => Some(apple_libcxx::mutex_ctor as *const () as usize),
+        "__ZNSt3__15mutexD1Ev" => Some(apple_libcxx::mutex_dtor as *const () as usize),
+        "__ZNSt3__15mutex4lockEv" => Some(apple_libcxx::mutex_lock as *const () as usize),
+        "__ZNSt3__15mutex8try_lockEv" => Some(apple_libcxx::mutex_trylock as *const () as usize),
+        "__ZNSt3__15mutex6unlockEv" => Some(apple_libcxx::mutex_unlock as *const () as usize),
         "__ZNSt3__115recursive_mutexC1Ev" => Some(apple_libcxx::rmutex_ctor as *const () as usize),
         "__ZNSt3__115recursive_mutexD1Ev" => Some(apple_libcxx::rmutex_dtor as *const () as usize),
         "__ZNSt3__115recursive_mutex4lockEv" => Some(apple_libcxx::rmutex_lock as *const () as usize),
         "__ZNSt3__115recursive_mutex6unlockEv" => Some(apple_libcxx::rmutex_unlock as *const () as usize),
+        "__ZNSt3__118condition_variableD1Ev" => Some(apple_libcxx::cv_dtor as *const () as usize),
+        "__ZNSt3__118condition_variable4waitERNS_11unique_lockINS_5mutexEEE" => {
+            Some(apple_libcxx::cv_wait as *const () as usize)
+        }
+        "__ZNSt3__118condition_variable15__do_timed_waitERNS_11unique_lockINS_5mutexEEENS_6chrono10time_pointINS5_12system_clockENS5_8durationIxNS_5ratioILl1ELl1000000000EEEEEEE" => {
+            Some(apple_libcxx::cv_timed_wait as *const () as usize)
+        }
+        "__ZNSt3__118condition_variable10notify_oneEv" => Some(apple_libcxx::cv_notify_one as *const () as usize),
+        "__ZNSt3__118condition_variable10notify_allEv" => Some(apple_libcxx::cv_notify_all as *const () as usize),
+        "__ZNSt3__111this_thread9sleep_forERKNS_6chrono8durationIxNS_5ratioILl1ELl1000000000EEEEE" => {
+            Some(apple_libcxx::this_thread_sleep_for as *const () as usize)
+        }
+        "__ZNSt3__16chrono12steady_clock3nowEv" => Some(apple_libcxx::chrono_steady_now as *const () as usize),
+        "__ZNSt3__16chrono12system_clock3nowEv" => Some(apple_libcxx::chrono_system_now as *const () as usize),
+        "__ZNSt3__16chrono12system_clock9to_time_tERKNS0_10time_pointIS1_NS0_8durationIxNS_5ratioILl1ELl1000000EEEEEEE" => {
+            Some(apple_libcxx::chrono_to_time_t as *const () as usize)
+        }
+        "__ZNSt3__16chrono12system_clock11from_time_tEl" => {
+            Some(apple_libcxx::chrono_from_time_t as *const () as usize)
+        }
+        "__ZNSt3__112__get_sp_mutEPKv" => Some(apple_libcxx::get_sp_mut as *const () as usize),
+        "__ZNSt3__18__sp_mut4lockEv" => Some(apple_libcxx::sp_mut_lock as *const () as usize),
+        "__ZNSt3__18__sp_mut6unlockEv" => Some(apple_libcxx::sp_mut_unlock as *const () as usize),
+        "__ZNSt3__114__shared_countD2Ev"
+        | "__ZNSt3__119__shared_weak_countD2Ev" => Some(apple_libcxx::shared_count_dtor as *const () as usize),
+        "__ZNSt3__119__shared_weak_count14__release_weakEv" => {
+            Some(apple_libcxx::shared_weak_release_weak as *const () as usize)
+        }
+        "__ZNSt3__119__shared_weak_count4lockEv" => Some(apple_libcxx::shared_weak_lock as *const () as usize),
+        "__ZNKSt3__119__shared_weak_count13__get_deleterERKSt9type_info" => {
+            Some(apple_libcxx::shared_weak_get_deleter as *const () as usize)
+        }
         "__ZNSt3__112__next_primeEm" => Some(apple_libcxx::next_prime as *const () as usize),
         "__ZNSt3__16__sortIRNS_6__lessIiiEEPiEEvT0_S5_T_" => Some(apple_libcxx::sort_ints as *const () as usize),
+        "__ZNSt3__16__sortIRNS_6__lessIjjEEPjEEvT0_S5_T_" => Some(apple_libcxx::sort_u32 as *const () as usize),
+        "__ZNSt3__16__sortIRNS_6__lessImmEEPmEEvT0_S5_T_" => Some(apple_libcxx::sort_u64 as *const () as usize),
+        "__ZNSt3__113random_deviceC1ERKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEE" => {
+            Some(apple_libcxx::random_device_ctor as *const () as usize)
+        }
+        "__ZNSt3__113random_deviceD1Ev" => Some(apple_libcxx::random_device_dtor as *const () as usize),
+        "__ZNSt3__113random_deviceclEv" => Some(apple_libcxx::random_device_call as *const () as usize),
         "__ZNSt3__18__rs_getEv" => Some(apple_libcxx::rs_get as *const () as usize),
         "__ZNSt3__112__rs_defaultclEv" => Some(apple_libcxx::rs_default_call as *const () as usize),
         "__ZNSt3__112__rs_defaultD1Ev" => Some(apple_libcxx::rs_default_dtor as *const () as usize),
         "__ZNKSt3__120__vector_base_commonILb1EE20__throw_length_errorEv"
         | "__ZNKSt3__120__vector_base_commonILb1EE20__throw_out_of_rangeEv"
+        | "__ZNKSt3__121__basic_string_commonILb1EE20__throw_length_errorEv"
         | "__ZNSt20bad_array_new_lengthC1Ev" => Some(apple_libcxx::throw_abort as *const () as usize),
         _ => dlopen_dlsym(&[c"libc++.so.1", c"libc++abi.so.1", c"libstdc++.so.6"], symbol),
     }
@@ -3597,6 +4361,14 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "___stack_chk_fail" => Some(stack_chk_fail_trap as *const () as usize),
             "___error" => Some(tls_errno_ptr as *const () as usize),
             "___memcpy_chk" => Some(memcpy_chk as *const () as usize),
+            "___memset_chk" => Some(memset_chk as *const () as usize),
+            "_strlcpy" => Some(strlcpy_impl as *const () as usize),
+            "___strlcpy_chk" => Some(strlcpy_chk as *const () as usize),
+            "_strlcat" => Some(strlcat_impl as *const () as usize),
+            "___strlcat_chk" => Some(strlcat_chk as *const () as usize),
+            "_realpath$DARWIN_EXTSN" => libc_dlsym("_realpath"),
+            "_dladdr" => Some(guest_dladdr as *const () as usize),
+            "__tlv_atexit" => Some(dispatch_noop_2 as *const () as usize),
             "___sincosf_stret" => Some(sincosf_stret as *const () as usize),
             "___sincos_stret" => Some(sincos_stret as *const () as usize),
             "___exp10" => Some(exp10_impl as *const () as usize),
@@ -3634,6 +4406,7 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_dispatch_group_enter"
             | "_dispatch_group_leave"
             | "_dispatch_resume"
+            | "_dispatch_release"
             | "_dispatch_block_cancel"
             | "_dispatch_source_cancel"
             | "_dispatch_assert_queue$V2"
@@ -3654,11 +4427,14 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_dispatch_semaphore_signal" => Some(dispatch_semaphore_signal_impl as *const () as usize),
             "_dispatch_semaphore_wait" => Some(dispatch_semaphore_wait_impl as *const () as usize),
             "_dispatch_block_create" => Some(dispatch_block_create_impl as *const () as usize),
+            "__os_log_default" => Some(&raw const OS_LOG_STUB as usize),
             "_os_log_create" => Some(os_log_create_impl as *const () as usize),
             "_os_log_type_enabled" => Some(os_log_type_enabled_impl as *const () as usize),
             "__os_log_impl" => Some(status_ok_stub as *const () as usize),
-            "_os_unfair_lock_lock"
-            | "_os_unfair_lock_unlock" => Some(os_unfair_lock_noop as *const () as usize),
+            "_os_unfair_lock_lock" => Some(os_unfair_lock_lock as *const () as usize),
+            "_os_unfair_lock_lock_with_options" => Some(os_unfair_lock_lock_with_options as *const () as usize),
+            "_os_unfair_lock_trylock" => Some(os_unfair_lock_trylock as *const () as usize),
+            "_os_unfair_lock_unlock" => Some(os_unfair_lock_unlock as *const () as usize),
             "_asl_open" => Some(asl_open_stub as *const () as usize),
             "_asl_log"
             | "_asl_add_log_file"
@@ -3666,11 +4442,38 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_mach_absolute_time" => Some(mach_absolute_time_impl as *const () as usize),
             "_mach_timebase_info" => Some(mach_timebase_info_impl as *const () as usize),
             "_mach_task_self_" => Some(&raw const MACH_TASK_SELF_STUB as usize),
+            "_mach_host_self" => Some(mach_host_self_impl as *const () as usize),
+            "_host_info" | "_host_statistics64" => Some(host_info_stub as *const () as usize),
+            "_mach_error_string" => Some(mach_error_string_stub as *const () as usize),
+            "_mach_port_allocate"
+            | "_mach_port_construct"
+            | "_mach_port_deallocate"
+            | "_mach_port_mod_refs"
+            | "_mach_port_peek"
+            | "_mach_msg"
+            | "_mach_msg_send"
+            | "_mach_msg_destroy"
+            | "_thread_switch" => Some(status_ok_stub as *const () as usize),
+            "_vm_page_size" => Some(&raw const VM_PAGE_SIZE_VAL as usize),
+            "_malloc_default_zone" => Some(malloc_default_zone_impl as *const () as usize),
+            "_malloc_create_zone" => Some(malloc_create_zone_impl as *const () as usize),
+            "_malloc_set_zone_name" => Some(dispatch_noop_2 as *const () as usize),
+            "_malloc_zone_malloc" => Some(malloc_zone_malloc_impl as *const () as usize),
+            "_malloc_zone_calloc" => Some(malloc_zone_calloc_impl as *const () as usize),
+            "_malloc_zone_realloc" => Some(malloc_zone_realloc_impl as *const () as usize),
+            "_malloc_zone_free" => Some(malloc_zone_free_impl as *const () as usize),
+            "_malloc_size" => Some(malloc_size_impl as *const () as usize),
             "_memset_pattern16" => Some(memset_pattern16_impl as *const () as usize),
             "_pthread_mach_thread_np" => Some(pthread_mach_thread_np_impl as *const () as usize),
             "_pthread_mutexattr_init" => Some(darwin_pthread::mutexattr_init as *const () as usize),
             "_pthread_mutexattr_destroy" => Some(darwin_pthread::mutexattr_destroy as *const () as usize),
             "_pthread_mutexattr_settype" => Some(darwin_pthread::mutexattr_settype as *const () as usize),
+            "_pthread_mutexattr_setprotocol"
+            | "_pthread_attr_setstacksize"
+            | "_pthread_set_qos_class_self_np"
+            | "_pthread_setname_np" => Some(status_ok_stub as *const () as usize),
+            "_pthread_threadid_np" => Some(darwin_pthread::threadid_np as *const () as usize),
+            "_pthread_getname_np" => Some(darwin_pthread::getname_np as *const () as usize),
             "_pthread_mutex_init" => Some(darwin_pthread::mutex_init as *const () as usize),
             "_pthread_mutex_destroy" => Some(darwin_pthread::mutex_destroy as *const () as usize),
             "_pthread_mutex_lock" => Some(darwin_pthread::mutex_lock as *const () as usize),
@@ -3682,6 +4485,7 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_pthread_cond_broadcast" => Some(darwin_pthread::cond_broadcast as *const () as usize),
             "_pthread_cond_wait" => Some(darwin_pthread::cond_wait as *const () as usize),
             "_pthread_cond_timedwait" => Some(darwin_pthread::cond_timedwait as *const () as usize),
+            "_pthread_cond_timedwait_relative_np" => Some(darwin_pthread::cond_timedwait_relative_np as *const () as usize),
             "_pthread_attr_init" => Some(darwin_pthread::attr_init as *const () as usize),
             "_pthread_attr_destroy" => Some(darwin_pthread::attr_destroy as *const () as usize),
             "_pthread_attr_setdetachstate" => Some(darwin_pthread::attr_setdetachstate as *const () as usize),
@@ -3691,6 +4495,9 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_thread_policy_set" => Some(thread_policy_set_impl as *const () as usize),
             "__DefaultRuneLocale" => Some(&raw const DEFAULT_RUNE_LOCALE as usize),
             "___maskrune" => Some(maskrune_impl as *const () as usize),
+            "___maskrune_l" => Some(maskrune_l_impl as *const () as usize),
+            "____mb_cur_max_l" => Some(mb_cur_max_l_impl as *const () as usize),
+            "_srandomdev" => Some(srandomdev_impl as *const () as usize),
             "___stdinp" => Some(&raw const STDIN_STUB as usize),
             "___stdoutp" => Some(&raw const STDOUT_STUB as usize),
             "___stderrp" => Some(&raw const STDERR_STUB as usize),
@@ -3859,6 +4666,15 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
         Some(path) if path.contains("libz") => dlopen_dlsym(&[c"libz.so.1", c"libz.1.dylib"], symbol),
         Some(path) if path.contains("libsqlite3") => dlopen_dlsym(&[c"libsqlite3.so.0", c"libsqlite3.dylib"], symbol),
         Some(path) if path.contains("libxml2") => dlopen_dlsym(&[c"libxml2.so.2", c"libxml2.2.dylib"], symbol),
+        Some(path) if path.contains("libiconv") => dlopen_dlsym(&[c"libiconv.so.2", c"libiconv.2.dylib", c"libc.so.6"], symbol),
+        Some(path) if path.contains("libbz2") => dlopen_dlsym(&[c"libbz2.so.1.0", c"libbz2.so.1", c"libbz2.1.0.dylib"], symbol),
+        Some(path) if path.contains("liblzma") => dlopen_dlsym(&[c"liblzma.so.5", c"liblzma.5.dylib"], symbol),
+        Some(path) if path.contains("libresolv") => match symbol {
+            "_res_9_init" | "_res_9_ninit" | "_res_9_nclose" | "_res_9_ndestroy" | "_res_9_getservers" => {
+                Some(resolv_zero_stub as *const () as usize)
+            }
+            _ => None,
+        },
         Some(path) if path.contains("Metal") && !path.contains("MetalKit") => match symbol {
             "_MTLCreateSystemDefaultDevice" | "_MTLCopyAllDevices" => Some(ptr_null_stub as *const () as usize),
             _ => None,
@@ -4321,5 +5137,54 @@ mod tests {
         let app_main: extern "C" fn(i32, *const *const c_char) -> i32 =
             unsafe { std::mem::transmute(app_img.symbol("_main").unwrap()) };
         assert_eq!(app_main(0, std::ptr::null()), 63);
+
+        // guest_dladdr resolves addresses inside loaded guest images
+        unsafe {
+            let mut info = std::mem::zeroed::<DlInfo>();
+            assert_ne!(guest_dladdr(app_main as *const c_void, &mut info), 0);
+            assert!(!info.dli_fbase.is_null());
+            assert!(!info.dli_fname.is_null());
+        }
+    }
+
+    #[test]
+    fn os_unfair_lock_and_apple_libcxx_runtime_work() {
+        let lock = std::sync::atomic::AtomicU32::new(0);
+        let ptr = &lock as *const _ as *mut std::sync::atomic::AtomicU32;
+        assert!(os_unfair_lock_trylock(ptr));
+        assert!(!os_unfair_lock_trylock(ptr));
+        os_unfair_lock_unlock(ptr);
+        os_unfair_lock_lock(ptr);
+        assert!(!os_unfair_lock_trylock(ptr));
+        os_unfair_lock_unlock(ptr);
+
+        unsafe {
+            let mut s = apple_libcxx::AppleString { words: [0xDEAD; 3] };
+            apple_libcxx::str_init_ptr_len(&mut s, c"hello".as_ptr(), 5);
+            apple_libcxx::str_append_cstr(&mut s, c" pear".as_ptr());
+            apple_libcxx::str_insert_cstr(&mut s, 6, c"world ".as_ptr());
+            assert_eq!(apple_libcxx::str_compare_cstr(&s, c"hello world pear".as_ptr()), 0);
+            assert_eq!(*apple_libcxx::str_at(&mut s, 6) as u8, b'w');
+            apple_libcxx::str_grow_by_and_replace(&mut s, 22, 32, 16, 5, 11, 7, c" runtime".as_ptr());
+            assert_eq!(apple_libcxx::str_compare_cstr(&s, c"hello runtim".as_ptr()), 0);
+            apple_libcxx::str_dtor(&mut s);
+
+            static CALL_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            unsafe extern "C" fn bump(_arg: *mut c_void) {
+                CALL_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            let once_flag = std::sync::atomic::AtomicUsize::new(0);
+            apple_libcxx::call_once_impl(&once_flag as *const _ as *mut _, std::ptr::null_mut(), bump);
+            apple_libcxx::call_once_impl(&once_flag as *const _ as *mut _, std::ptr::null_mut(), bump);
+            assert_eq!(CALL_COUNT.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+            let t1 = apple_libcxx::chrono_steady_now();
+            apple_libcxx::this_thread_sleep_for(&1_000_000i64);
+            let t2 = apple_libcxx::chrono_steady_now();
+            assert!(t2 > t1);
+            let sys = apple_libcxx::chrono_system_now();
+            let tt = apple_libcxx::chrono_to_time_t(&sys);
+            assert_eq!(apple_libcxx::chrono_from_time_t(tt), (tt as i64) * 1_000_000);
+        }
     }
 }
