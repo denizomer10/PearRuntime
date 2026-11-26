@@ -9,6 +9,28 @@
 
 use crate::abi::*;
 use crate::runtime;
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
+
+static SOFT_UNRECOGNIZED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_soft_unrecognized(enabled: bool) {
+    SOFT_UNRECOGNIZED.store(enabled, Ordering::Release);
+}
+
+pub fn is_soft_unrecognized() -> bool {
+    SOFT_UNRECOGNIZED.load(Ordering::Acquire)
+        || std::env::var("PEAR_SOFT_SELECTORS").as_deref() == Ok("1")
+}
+
+extern "C" fn soft_return_zero(_this: Id, _cmd: Sel) -> usize {
+    0
+}
+
+extern "C" fn soft_return_self(this: Id, _cmd: Sel) -> Id {
+    this
+}
 
 /// What the assembly gets back: the IMP to jump to and the receiver to
 /// pass it (a forwarding target may replace the original one).
@@ -117,6 +139,28 @@ unsafe fn forward(receiver: Id, cls: *const ClassT, s: Sel, skip_resolve: u8) ->
         if !target.is_null() && target != receiver {
             return lookup_for_send(target, s);
         }
+    }
+    if is_soft_unrecognized() {
+        static LOGGED: OnceLock<Mutex<HashSet<(bool, String, String)>>> = OnceLock::new();
+        let name = runtime::class(cls).map_or_else(|| format!("{cls:p}"), |c| c.name.clone());
+        let sel_name = runtime::sel_name(s);
+        let log = LOGGED.get_or_init(Default::default);
+        if log.lock().unwrap().insert((meta, name.clone(), sel_name.clone())) {
+            eprintln!(
+                "[PearRuntime][objc][soft] {}[{name} {sel_name}]",
+                if meta { "+" } else { "-" },
+            );
+        }
+        if !meta && sel_name.starts_with("init") {
+            return Dispatch {
+                imp: soft_return_self as *const () as Imp,
+                receiver,
+            };
+        }
+        return Dispatch {
+            imp: soft_return_zero as *const () as Imp,
+            receiver,
+        };
     }
     unrecognized(receiver, cls, s)
 }
@@ -317,4 +361,32 @@ pub fn register_variant(name: &str) -> Option<usize> {
         _ => return None,
     };
     Some(f as *const () as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::object::{alloc, init_runtime, NSOBJECT_CLASS};
+
+    #[test]
+    fn soft_unrecognized_selector_returns_self_on_init_and_zero_on_getter() {
+        init_runtime();
+        let was_soft = is_soft_unrecognized();
+        set_soft_unrecognized(true);
+        unsafe {
+            let obj = alloc(NSOBJECT_CLASS.ptr());
+            let init_sel = runtime::sel("initWithPearCustomArg:");
+            let d_init = lookup_for_send(obj, init_sel);
+            let f_init: extern "C" fn(Id, Sel, usize) -> Id = std::mem::transmute(d_init.imp);
+            assert_eq!(f_init(d_init.receiver, init_sel, 123), obj);
+
+            let get_sel = runtime::sel("pearMissingProperty");
+            let d_get = lookup_for_send(obj, get_sel);
+            let f_get: extern "C" fn(Id, Sel) -> usize = std::mem::transmute(d_get.imp);
+            assert_eq!(f_get(d_get.receiver, get_sel), 0);
+
+            crate::object::release(obj);
+        }
+        set_soft_unrecognized(was_soft);
+    }
 }

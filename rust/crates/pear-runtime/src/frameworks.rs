@@ -914,3 +914,606 @@ pub fn misc_framework_symbol(path: &str, name: &str) -> Option<usize> {
 
 #[allow(dead_code)]
 fn _keep_misc_types(_c: *const c_char, _cs: Option<&CStr>) {}
+
+// ---- Virtual Mach port & kqueue/kevent64 bridge (for Linux hosts) ---------
+
+#[cfg(not(target_os = "macos"))]
+pub mod linux_mach_kqueue {
+    use std::collections::{HashMap, VecDeque};
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Condvar, LazyLock, Mutex};
+
+    static NEXT_PORT: AtomicU32 = AtomicU32::new(0x100);
+    static NEXT_KQ: AtomicU32 = AtomicU32::new(1000);
+    static PORT_MSGS: LazyLock<Mutex<HashMap<u32, VecDeque<Vec<u8>>>>> = LazyLock::new(Default::default);
+    static KQUEUES: LazyLock<Mutex<HashMap<i32, std::sync::Arc<(Mutex<Vec<usize>>, Condvar)>>>> =
+        LazyLock::new(Default::default);
+
+    pub unsafe extern "C" fn mach_port_allocate(_task: u32, _right: u32, name_out: *mut u32) -> i32 {
+        let p = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
+        if !name_out.is_null() {
+            *name_out = p;
+        }
+        PORT_MSGS.lock().unwrap().insert(p, VecDeque::new());
+        0
+    }
+
+    pub unsafe extern "C" fn mach_port_construct(
+        task: u32,
+        _opts: *const c_void,
+        _ctx: usize,
+        name_out: *mut u32,
+    ) -> i32 {
+        mach_port_allocate(task, 0, name_out)
+    }
+
+    pub extern "C" fn mach_port_deallocate(_task: u32, name: u32) -> i32 {
+        PORT_MSGS.lock().unwrap().remove(&name);
+        0
+    }
+
+    pub extern "C" fn mach_port_mod_refs(_task: u32, _name: u32, _right: i32, _delta: i32) -> i32 {
+        0
+    }
+
+    pub extern "C" fn mach_port_peek() -> i32 {
+        -15 // KERN_NAME_EXISTS / empty
+    }
+
+    pub unsafe extern "C" fn mach_msg(
+        msg: *mut u8,
+        option: i32,
+        send_size: u32,
+        rcv_size: u32,
+        rcv_name: u32,
+        timeout_ms: u32,
+        _notify: u32,
+    ) -> i32 {
+        const MACH_SEND_MSG: i32 = 1;
+        const MACH_RCV_MSG: i32 = 2;
+        if !msg.is_null() && (option & MACH_SEND_MSG) != 0 && send_size >= 24 {
+            let remote_port = *(msg.add(8) as *const u32);
+            let buf = std::slice::from_raw_parts(msg, send_size as usize).to_vec();
+            PORT_MSGS.lock().unwrap().entry(remote_port).or_default().push_back(buf);
+            for kq in KQUEUES.lock().unwrap().values() {
+                kq.0.lock().unwrap().push(remote_port as usize);
+                kq.1.notify_all();
+            }
+        }
+        if !msg.is_null() && (option & MACH_RCV_MSG) != 0 {
+            if let Some(pkt) = PORT_MSGS.lock().unwrap().get_mut(&rcv_name).and_then(|q| q.pop_front()) {
+                let n = pkt.len().min(rcv_size as usize);
+                std::ptr::copy_nonoverlapping(pkt.as_ptr(), msg, n);
+                return 0;
+            }
+            if timeout_ms > 0 {
+                std::thread::sleep(std::time::Duration::from_millis((timeout_ms as u64).min(5)));
+            }
+            return 0x10004003; // MACH_RCV_TIMED_OUT
+        }
+        0
+    }
+
+    pub extern "C" fn kqueue_impl() -> i32 {
+        let fd = NEXT_KQ.fetch_add(1, Ordering::Relaxed) as i32;
+        KQUEUES.lock().unwrap().insert(
+            fd,
+            std::sync::Arc::new((Mutex::new(Vec::new()), Condvar::new())),
+        );
+        fd
+    }
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct Kevent64S {
+        pub ident: u64,
+        pub filter: i16,
+        pub flags: u16,
+        pub fflags: u32,
+        pub data: i64,
+        pub udata: u64,
+        pub ext: [u64; 2],
+    }
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    pub struct Timespec {
+        pub tv_sec: isize,
+        pub tv_nsec: isize,
+    }
+
+    pub unsafe extern "C" fn kevent64_impl(
+        kq: i32,
+        _changelist: *const Kevent64S,
+        _nchanges: i32,
+        eventlist: *mut Kevent64S,
+        nevents: i32,
+        _flags: u32,
+        timeout: *const Timespec,
+    ) -> i32 {
+        let handle = KQUEUES.lock().unwrap().get(&kq).cloned();
+        let Some(h) = handle else { return 0 };
+        let wait_dur = if timeout.is_null() {
+            std::time::Duration::from_millis(16)
+        } else {
+            let ts = *timeout;
+            std::time::Duration::new(ts.tv_sec.max(0) as u64, ts.tv_nsec.clamp(0, 999_999_999) as u32)
+        };
+        let mut q = h.0.lock().unwrap();
+        if q.is_empty() && !wait_dur.is_zero() {
+            let res = h.1.wait_timeout(q, wait_dur).unwrap();
+            q = res.0;
+        }
+        if q.is_empty() || eventlist.is_null() || nevents <= 0 {
+            return 0;
+        }
+        let port = q.remove(0) as u64;
+        *eventlist = Kevent64S {
+            ident: port,
+            filter: -8, // EVFILT_MACHPORT
+            flags: 0,
+            fflags: 0,
+            data: 0,
+            udata: 0,
+            ext: [0, 0],
+        };
+        1
+    }
+}
+
+// ---- Foundation collection & concurrency ObjC classes ----------------------
+
+macro_rules! fw_guest_class {
+    ($cls:ident, $meta:ident) => {
+        static $meta: pear_libobjc::object::StaticClass =
+            pear_libobjc::object::StaticClass(std::cell::UnsafeCell::new(pear_libobjc::abi::ClassT {
+                isa: &raw const pear_libobjc::object::NSOBJECT_META as *const pear_libobjc::abi::ClassT,
+                superclass: &raw const pear_libobjc::object::NSOBJECT_META as *const pear_libobjc::abi::ClassT,
+                cache: &raw const pear_libobjc::object::EMPTY_CACHE as *const c_void,
+                vtable: std::ptr::null(),
+                bits: 0,
+            }));
+        static $cls: pear_libobjc::object::StaticClass =
+            pear_libobjc::object::StaticClass(std::cell::UnsafeCell::new(pear_libobjc::abi::ClassT {
+                isa: &raw const $meta as *const pear_libobjc::abi::ClassT,
+                superclass: &raw const pear_libobjc::object::NSOBJECT_CLASS as *const pear_libobjc::abi::ClassT,
+                cache: &raw const pear_libobjc::object::EMPTY_CACHE as *const c_void,
+                vtable: std::ptr::null(),
+                bits: 0,
+            }));
+    };
+}
+
+fw_guest_class!(NSMAPTABLE_CLASS, NSMAPTABLE_META);
+fw_guest_class!(NSHASHTABLE_CLASS, NSHASHTABLE_META);
+fw_guest_class!(NSLOCK_CLASS, NSLOCK_META);
+fw_guest_class!(NSRECURSIVELOCK_CLASS, NSRECURSIVELOCK_META);
+fw_guest_class!(NSCACHE_CLASS, NSCACHE_META);
+fw_guest_class!(NSOPERATION_CLASS, NSOPERATION_META);
+fw_guest_class!(NSBLOCKOPERATION_CLASS, NSBLOCKOPERATION_META);
+fw_guest_class!(NSDATEFORMATTER_CLASS, NSDATEFORMATTER_META);
+
+#[derive(Default)]
+struct MapTableBacking {
+    by_ptr: HashMap<usize, usize>,
+    by_str: HashMap<String, usize>,
+}
+
+static MAP_TABLES: LazyLock<Mutex<HashMap<usize, MapTableBacking>>> = LazyLock::new(Default::default);
+static HASH_TABLES: LazyLock<Mutex<HashMap<usize, Vec<usize>>>> = LazyLock::new(Default::default);
+static CACHES: LazyLock<Mutex<HashMap<usize, (HashMap<String, usize>, String)>>> = LazyLock::new(Default::default);
+static LOCKS: LazyLock<Mutex<HashMap<usize, std::sync::Arc<(Mutex<(Option<std::thread::ThreadId>, usize, String)>, std::sync::Condvar)>>>> =
+    LazyLock::new(Default::default);
+static OPS: LazyLock<Mutex<HashMap<usize, (Vec<usize>, usize, bool, bool)>>> = LazyLock::new(Default::default);
+static DATE_FORMATTERS: LazyLock<Mutex<HashMap<usize, String>>> = LazyLock::new(Default::default);
+
+extern "C" fn col_self(this: Id, _cmd: pear_libobjc::abi::Sel) -> Id { this }
+extern "C" fn col_noop0(_this: Id, _cmd: pear_libobjc::abi::Sel) {}
+extern "C" fn col_noop1(_this: Id, _cmd: pear_libobjc::abi::Sel, _a: usize) {}
+extern "C" fn col_true(_this: Id, _cmd: pear_libobjc::abi::Sel) -> bool { true }
+extern "C" fn col_false(_this: Id, _cmd: pear_libobjc::abi::Sel) -> bool { false }
+
+extern "C" fn map_table_alloc(cls: Id, _cmd: pear_libobjc::abi::Sel, _ko: usize, _vo: usize) -> Id {
+    let inst = unsafe { pear_libobjc::object::alloc(cls as *const pear_libobjc::abi::ClassT) };
+    MAP_TABLES.lock().unwrap().insert(inst as usize, MapTableBacking::default());
+    inst
+}
+extern "C" fn map_table_alloc0(cls: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
+    map_table_alloc(cls, _cmd, 0, 0)
+}
+extern "C" fn map_table_init_cap(this: Id, _cmd: pear_libobjc::abi::Sel, _ko: usize, _vo: usize, _cap: usize) -> Id {
+    MAP_TABLES.lock().unwrap().entry(this as usize).or_default();
+    this
+}
+extern "C" fn map_table_set(this: Id, _cmd: pear_libobjc::abi::Sel, obj: Id, key: Id) {
+    if key.is_null() { return; }
+    let s = rust_str_from_nsstring(key);
+    let mut map = MAP_TABLES.lock().unwrap();
+    let entry = map.entry(this as usize).or_default();
+    if obj.is_null() {
+        entry.by_ptr.remove(&(key as usize));
+        if let Some(ks) = s { entry.by_str.remove(&ks); }
+    } else {
+        entry.by_ptr.insert(key as usize, obj as usize);
+        if let Some(ks) = s { entry.by_str.insert(ks, obj as usize); }
+    }
+}
+extern "C" fn map_table_get(this: Id, _cmd: pear_libobjc::abi::Sel, key: Id) -> Id {
+    if key.is_null() { return std::ptr::null_mut(); }
+    let s = rust_str_from_nsstring(key);
+    let map = MAP_TABLES.lock().unwrap();
+    if let Some(entry) = map.get(&(this as usize)) {
+        if let Some(&v) = entry.by_ptr.get(&(key as usize)) {
+            return v as Id;
+        }
+        if let Some(ks) = s {
+            if let Some(&v) = entry.by_str.get(&ks) {
+                return v as Id;
+            }
+        }
+    }
+    std::ptr::null_mut()
+}
+extern "C" fn map_table_remove(this: Id, _cmd: pear_libobjc::abi::Sel, key: Id) {
+    let s = rust_str_from_nsstring(key);
+    if let Some(entry) = MAP_TABLES.lock().unwrap().get_mut(&(this as usize)) {
+        entry.by_ptr.remove(&(key as usize));
+        if let Some(ks) = s { entry.by_str.remove(&ks); }
+    }
+}
+extern "C" fn map_table_remove_all(this: Id, _cmd: pear_libobjc::abi::Sel) {
+    if let Some(entry) = MAP_TABLES.lock().unwrap().get_mut(&(this as usize)) {
+        entry.by_ptr.clear();
+        entry.by_str.clear();
+    }
+}
+extern "C" fn map_table_count(this: Id, _cmd: pear_libobjc::abi::Sel) -> usize {
+    MAP_TABLES.lock().unwrap().get(&(this as usize)).map_or(0, |e| e.by_ptr.len())
+}
+extern "C" fn map_table_dict_rep(this: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
+    let pairs: Vec<(String, Id)> = MAP_TABLES
+        .lock()
+        .unwrap()
+        .get(&(this as usize))
+        .map(|e| e.by_str.iter().map(|(k, &v)| (k.clone(), v as Id)).collect())
+        .unwrap_or_default();
+    nsdict_from_pairs(pairs)
+}
+
+extern "C" fn hash_table_alloc0(cls: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
+    let inst = unsafe { pear_libobjc::object::alloc(cls as *const pear_libobjc::abi::ClassT) };
+    HASH_TABLES.lock().unwrap().insert(inst as usize, Vec::new());
+    inst
+}
+extern "C" fn hash_table_alloc1(cls: Id, cmd: pear_libobjc::abi::Sel, _opts: usize) -> Id {
+    hash_table_alloc0(cls, cmd)
+}
+extern "C" fn hash_table_init(this: Id, _cmd: pear_libobjc::abi::Sel, _opts: usize, _cap: usize) -> Id {
+    HASH_TABLES.lock().unwrap().entry(this as usize).or_default();
+    this
+}
+extern "C" fn hash_table_add(this: Id, _cmd: pear_libobjc::abi::Sel, obj: Id) {
+    if obj.is_null() { return; }
+    let mut map = HASH_TABLES.lock().unwrap();
+    let v = map.entry(this as usize).or_default();
+    if !v.contains(&(obj as usize)) {
+        v.push(obj as usize);
+    }
+}
+extern "C" fn hash_table_remove(this: Id, _cmd: pear_libobjc::abi::Sel, obj: Id) {
+    if let Some(v) = HASH_TABLES.lock().unwrap().get_mut(&(this as usize)) {
+        v.retain(|&x| x != obj as usize);
+    }
+}
+extern "C" fn hash_table_contains(this: Id, _cmd: pear_libobjc::abi::Sel, obj: Id) -> bool {
+    HASH_TABLES.lock().unwrap().get(&(this as usize)).map_or(false, |v| v.contains(&(obj as usize)))
+}
+extern "C" fn hash_table_remove_all(this: Id, _cmd: pear_libobjc::abi::Sel) {
+    if let Some(v) = HASH_TABLES.lock().unwrap().get_mut(&(this as usize)) {
+        v.clear();
+    }
+}
+extern "C" fn hash_table_count(this: Id, _cmd: pear_libobjc::abi::Sel) -> usize {
+    HASH_TABLES.lock().unwrap().get(&(this as usize)).map_or(0, Vec::len)
+}
+extern "C" fn hash_table_all(this: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
+    let items: Vec<Id> = HASH_TABLES
+        .lock()
+        .unwrap()
+        .get(&(this as usize))
+        .map(|v| v.iter().map(|&p| p as Id).collect())
+        .unwrap_or_default();
+    nsarray_from_ids(items)
+}
+
+fn lock_handle(this: Id) -> std::sync::Arc<(Mutex<(Option<std::thread::ThreadId>, usize, String)>, std::sync::Condvar)> {
+    let mut map = LOCKS.lock().unwrap();
+    map.entry(this as usize)
+        .or_insert_with(|| std::sync::Arc::new((Mutex::new((None, 0, String::new())), std::sync::Condvar::new())))
+        .clone()
+}
+extern "C" fn nslock_lock(this: Id, _cmd: pear_libobjc::abi::Sel) {
+    let h = lock_handle(this);
+    let me = std::thread::current().id();
+    let mut st = h.0.lock().unwrap();
+    while st.0.is_some() && st.0 != Some(me) {
+        st = h.1.wait(st).unwrap();
+    }
+    st.0 = Some(me);
+    st.1 += 1;
+}
+extern "C" fn nslock_try_lock(this: Id, _cmd: pear_libobjc::abi::Sel) -> bool {
+    let h = lock_handle(this);
+    let me = std::thread::current().id();
+    let mut st = h.0.lock().unwrap();
+    if st.0.is_none() || st.0 == Some(me) {
+        st.0 = Some(me);
+        st.1 += 1;
+        true
+    } else {
+        false
+    }
+}
+extern "C" fn nslock_unlock(this: Id, _cmd: pear_libobjc::abi::Sel) {
+    let h = lock_handle(this);
+    let mut st = h.0.lock().unwrap();
+    if st.1 > 0 {
+        st.1 -= 1;
+        if st.1 == 0 {
+            st.0 = None;
+            h.1.notify_one();
+        }
+    }
+}
+extern "C" fn nslock_set_name(this: Id, _cmd: pear_libobjc::abi::Sel, name: Id) {
+    let h = lock_handle(this);
+    h.0.lock().unwrap().2 = rust_str_from_nsstring(name).unwrap_or_default();
+}
+extern "C" fn nslock_name(this: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
+    let h = lock_handle(this);
+    let n = h.0.lock().unwrap().2.clone();
+    nsstring_from_rust(&n)
+}
+
+extern "C" fn nscache_get(this: Id, _cmd: pear_libobjc::abi::Sel, key: Id) -> Id {
+    let k = rust_str_from_nsstring(key).unwrap_or_else(|| format!("{:#x}", key as usize));
+    CACHES.lock().unwrap().get(&(this as usize)).and_then(|(m, _)| m.get(&k).copied()).unwrap_or(0) as Id
+}
+extern "C" fn nscache_set(this: Id, _cmd: pear_libobjc::abi::Sel, obj: Id, key: Id) {
+    let k = rust_str_from_nsstring(key).unwrap_or_else(|| format!("{:#x}", key as usize));
+    let mut map = CACHES.lock().unwrap();
+    let (m, _) = map.entry(this as usize).or_default();
+    if obj.is_null() { m.remove(&k); } else { m.insert(k, obj as usize); }
+}
+extern "C" fn nscache_set_cost(this: Id, cmd: pear_libobjc::abi::Sel, obj: Id, key: Id, _cost: usize) {
+    nscache_set(this, cmd, obj, key);
+}
+extern "C" fn nscache_rem(this: Id, _cmd: pear_libobjc::abi::Sel, key: Id) {
+    let k = rust_str_from_nsstring(key).unwrap_or_else(|| format!("{:#x}", key as usize));
+    if let Some((m, _)) = CACHES.lock().unwrap().get_mut(&(this as usize)) { m.remove(&k); }
+}
+extern "C" fn nscache_rem_all(this: Id, _cmd: pear_libobjc::abi::Sel) {
+    if let Some((m, _)) = CACHES.lock().unwrap().get_mut(&(this as usize)) { m.clear(); }
+}
+extern "C" fn nscache_set_name(this: Id, _cmd: pear_libobjc::abi::Sel, name: Id) {
+    let mut map = CACHES.lock().unwrap();
+    map.entry(this as usize).or_default().1 = rust_str_from_nsstring(name).unwrap_or_default();
+}
+extern "C" fn nscache_name(this: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
+    let n = CACHES.lock().unwrap().get(&(this as usize)).map(|(_, s)| s.clone()).unwrap_or_default();
+    nsstring_from_rust(&n)
+}
+
+unsafe fn invoke_objc_block(block: usize) {
+    if block < 0x10000 { return; }
+    let invoke = *((block as *const usize).add(2));
+    if invoke > 0x10000 {
+        let f: extern "C" fn(usize) = std::mem::transmute(invoke);
+        f(block);
+    }
+}
+
+extern "C" fn nsop_block_with_block(cls: Id, _cmd: pear_libobjc::abi::Sel, block: Id) -> Id {
+    let inst = unsafe { pear_libobjc::object::alloc(cls as *const pear_libobjc::abi::ClassT) };
+    let mut blocks = Vec::new();
+    if !block.is_null() { blocks.push(block as usize); }
+    OPS.lock().unwrap().insert(inst as usize, (blocks, 0, false, false));
+    inst
+}
+extern "C" fn nsop_add_block(this: Id, _cmd: pear_libobjc::abi::Sel, block: Id) {
+    if !block.is_null() {
+        OPS.lock().unwrap().entry(this as usize).or_default().0.push(block as usize);
+    }
+}
+extern "C" fn nsop_set_completion(this: Id, _cmd: pear_libobjc::abi::Sel, block: Id) {
+    OPS.lock().unwrap().entry(this as usize).or_default().1 = block as usize;
+}
+extern "C" fn nsop_start(this: Id, _cmd: pear_libobjc::abi::Sel) {
+    let entry = OPS.lock().unwrap().get(&(this as usize)).cloned();
+    if let Some((blocks, comp, cancelled, _)) = entry {
+        if !cancelled {
+            for b in blocks {
+                unsafe { invoke_objc_block(b) };
+            }
+        }
+        if let Some(st) = OPS.lock().unwrap().get_mut(&(this as usize)) {
+            st.3 = true;
+        }
+        if comp != 0 {
+            unsafe { invoke_objc_block(comp) };
+        }
+    }
+}
+extern "C" fn nsop_cancel(this: Id, _cmd: pear_libobjc::abi::Sel) {
+    OPS.lock().unwrap().entry(this as usize).or_default().2 = true;
+}
+extern "C" fn nsop_is_cancelled(this: Id, _cmd: pear_libobjc::abi::Sel) -> bool {
+    OPS.lock().unwrap().get(&(this as usize)).map_or(false, |s| s.2)
+}
+extern "C" fn nsop_is_finished(this: Id, _cmd: pear_libobjc::abi::Sel) -> bool {
+    OPS.lock().unwrap().get(&(this as usize)).map_or(true, |s| s.3)
+}
+
+extern "C" fn df_set_fmt(this: Id, _cmd: pear_libobjc::abi::Sel, fmt: Id) {
+    DATE_FORMATTERS.lock().unwrap().insert(this as usize, rust_str_from_nsstring(fmt).unwrap_or_default());
+}
+extern "C" fn df_fmt(this: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
+    let f = DATE_FORMATTERS.lock().unwrap().get(&(this as usize)).cloned().unwrap_or_default();
+    nsstring_from_rust(&f)
+}
+extern "C" fn df_str_from_date(_this: Id, _cmd: pear_libobjc::abi::Sel, _date: Id) -> Id {
+    nsstring_from_rust("2026-01-01T00:00:00Z")
+}
+extern "C" fn df_date_from_str(_this: Id, _cmd: pear_libobjc::abi::Sel, _s: Id) -> Id {
+    if let Some(cls) = pear_libobjc::runtime::class_named("NSDate") {
+        unsafe { pear_libobjc::object::alloc(cls) }
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// Registers real Foundation collection, concurrency, and formatter classes
+/// (`NSMapTable`, `NSHashTable`, `NSLock`, `NSRecursiveLock`, `NSCache`,
+/// `NSOperation`, `NSBlockOperation`, `NSDateFormatter`).
+pub fn register_foundation_collection_classes() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let i = |p: *const ()| p as pear_libobjc::abi::Imp;
+        pear_libobjc::runtime::register_builtin(
+            NSMAPTABLE_CLASS.ptr(),
+            NSMAPTABLE_META.ptr(),
+            "NSMapTable",
+            32,
+            &[
+                ("initWithKeyOptions:valueOptions:capacity:", i(map_table_init_cap as *const ())),
+                ("objectForKey:", i(map_table_get as *const ())),
+                ("setObject:forKey:", i(map_table_set as *const ())),
+                ("removeObjectForKey:", i(map_table_remove as *const ())),
+                ("removeAllObjects", i(map_table_remove_all as *const ())),
+                ("count", i(map_table_count as *const ())),
+                ("dictionaryRepresentation", i(map_table_dict_rep as *const ())),
+            ],
+            &[
+                ("mapTableWithKeyOptions:valueOptions:", i(map_table_alloc as *const ())),
+                ("strongToWeakObjectsMapTable", i(map_table_alloc0 as *const ())),
+                ("weakToStrongObjectsMapTable", i(map_table_alloc0 as *const ())),
+                ("strongToStrongObjectsMapTable", i(map_table_alloc0 as *const ())),
+                ("weakToWeakObjectsMapTable", i(map_table_alloc0 as *const ())),
+                ("mapTableWithStrongToStrongObjects", i(map_table_alloc0 as *const ())),
+                ("mapTableWithWeakToStrongObjects", i(map_table_alloc0 as *const ())),
+                ("mapTableWithStrongToWeakObjects", i(map_table_alloc0 as *const ())),
+                ("mapTableWithWeakToWeakObjects", i(map_table_alloc0 as *const ())),
+            ],
+        );
+        pear_libobjc::runtime::register_builtin(
+            NSHASHTABLE_CLASS.ptr(),
+            NSHASHTABLE_META.ptr(),
+            "NSHashTable",
+            32,
+            &[
+                ("initWithOptions:capacity:", i(hash_table_init as *const ())),
+                ("addObject:", i(hash_table_add as *const ())),
+                ("removeObject:", i(hash_table_remove as *const ())),
+                ("containsObject:", i(hash_table_contains as *const ())),
+                ("removeAllObjects", i(hash_table_remove_all as *const ())),
+                ("count", i(hash_table_count as *const ())),
+                ("allObjects", i(hash_table_all as *const ())),
+            ],
+            &[
+                ("weakObjectsHashTable", i(hash_table_alloc0 as *const ())),
+                ("hashTableWithOptions:", i(hash_table_alloc1 as *const ())),
+            ],
+        );
+        for (cls, meta, name) in [
+            (&NSLOCK_CLASS, &NSLOCK_META, "NSLock"),
+            (&NSRECURSIVELOCK_CLASS, &NSRECURSIVELOCK_META, "NSRecursiveLock"),
+        ] {
+            pear_libobjc::runtime::register_builtin(
+                cls.ptr(),
+                meta.ptr(),
+                name,
+                32,
+                &[
+                    ("lock", i(nslock_lock as *const ())),
+                    ("unlock", i(nslock_unlock as *const ())),
+                    ("tryLock", i(nslock_try_lock as *const ())),
+                    ("lockBeforeDate:", i(col_true as *const ())),
+                    ("setName:", i(nslock_set_name as *const ())),
+                    ("name", i(nslock_name as *const ())),
+                ],
+                &[],
+            );
+        }
+        pear_libobjc::runtime::register_builtin(
+            NSCACHE_CLASS.ptr(),
+            NSCACHE_META.ptr(),
+            "NSCache",
+            32,
+            &[
+                ("objectForKey:", i(nscache_get as *const ())),
+                ("setObject:forKey:", i(nscache_set as *const ())),
+                ("setObject:forKey:cost:", i(nscache_set_cost as *const ())),
+                ("removeObjectForKey:", i(nscache_rem as *const ())),
+                ("removeAllObjects", i(nscache_rem_all as *const ())),
+                ("setCountLimit:", i(col_noop1 as *const ())),
+                ("setTotalCostLimit:", i(col_noop1 as *const ())),
+                ("setDelegate:", i(col_noop1 as *const ())),
+                ("setName:", i(nscache_set_name as *const ())),
+                ("name", i(nscache_name as *const ())),
+            ],
+            &[],
+        );
+        pear_libobjc::runtime::register_builtin(
+            NSOPERATION_CLASS.ptr(),
+            NSOPERATION_META.ptr(),
+            "NSOperation",
+            32,
+            &[
+                ("start", i(nsop_start as *const ())),
+                ("main", i(col_noop0 as *const ())),
+                ("cancel", i(nsop_cancel as *const ())),
+                ("isCancelled", i(nsop_is_cancelled as *const ())),
+                ("isFinished", i(nsop_is_finished as *const ())),
+                ("isExecuting", i(col_false as *const ())),
+                ("isReady", i(col_true as *const ())),
+                ("setCompletionBlock:", i(nsop_set_completion as *const ())),
+                ("setQualityOfService:", i(col_noop1 as *const ())),
+            ],
+            &[],
+        );
+        unsafe { (*NSBLOCKOPERATION_CLASS.0.get()).superclass = NSOPERATION_CLASS.ptr() };
+        unsafe { (*NSBLOCKOPERATION_META.0.get()).superclass = NSOPERATION_META.ptr() };
+        pear_libobjc::runtime::register_builtin(
+            NSBLOCKOPERATION_CLASS.ptr(),
+            NSBLOCKOPERATION_META.ptr(),
+            "NSBlockOperation",
+            32,
+            &[
+                ("addExecutionBlock:", i(nsop_add_block as *const ())),
+                ("start", i(nsop_start as *const ())),
+                ("main", i(nsop_start as *const ())),
+                ("cancel", i(nsop_cancel as *const ())),
+                ("isCancelled", i(nsop_is_cancelled as *const ())),
+                ("isFinished", i(nsop_is_finished as *const ())),
+            ],
+            &[("blockOperationWithBlock:", i(nsop_block_with_block as *const ()))],
+        );
+        pear_libobjc::runtime::register_builtin(
+            NSDATEFORMATTER_CLASS.ptr(),
+            NSDATEFORMATTER_META.ptr(),
+            "NSDateFormatter",
+            32,
+            &[
+                ("init", i(col_self as *const ())),
+                ("setDateFormat:", i(df_set_fmt as *const ())),
+                ("dateFormat", i(df_fmt as *const ())),
+                ("setLocale:", i(col_noop1 as *const ())),
+                ("setTimeZone:", i(col_noop1 as *const ())),
+                ("stringFromDate:", i(df_str_from_date as *const ())),
+                ("dateFromString:", i(df_date_from_str as *const ())),
+            ],
+            &[],
+        );
+    });
+}

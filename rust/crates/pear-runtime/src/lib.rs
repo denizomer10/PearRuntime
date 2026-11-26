@@ -1565,6 +1565,8 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
         let ui_gr = UIGESTURERECOGNIZER_CLASS.ptr();
         let ca_layer = CALAYER_CLASS.ptr();
 
+        frameworks::register_foundation_collection_classes();
+
         // Foundation / CFNetwork base classes
         for name in [
             "NSProxy", "NSOperation", "NSHTTPURLResponse", "NSURLResponse",
@@ -1674,6 +1676,52 @@ extern "C" {
     fn malloc_size(ptr: *const c_void) -> usize;
     #[cfg(target_os = "linux")]
     fn malloc_usable_size(ptr: *mut c_void) -> usize;
+    fn signal(sig: i32, handler: usize) -> usize;
+    fn backtrace(array: *mut *mut c_void, size: i32) -> i32;
+    fn backtrace_symbols_fd(array: *const *mut c_void, size: i32, fd: i32);
+    fn _exit(status: i32) -> !;
+}
+
+extern "C" fn pear_crash_handler(sig: i32) {
+    eprintln!("[PearRuntime][crash] caught signal {sig}");
+    let mut frames = [std::ptr::null_mut::<c_void>(); 32];
+    let n = unsafe { backtrace(frames.as_mut_ptr(), 32) };
+    if let Ok(guard) = LOADED_IMAGES.try_lock() {
+        for (idx, &pc) in frames.iter().take(n.max(0) as usize).enumerate() {
+            let addr = pc as usize;
+            let mut matched = false;
+            for img in guard.iter() {
+                if addr >= img.addr_start && addr < img.addr_end {
+                    eprintln!(
+                        "  frame[{idx}] {addr:#x} -> {} + {:#x} (fileoff ~ {:#x})",
+                        img.name.to_string_lossy(),
+                        addr - img.header,
+                        addr.wrapping_sub(img.slide as usize)
+                    );
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
+                eprintln!("  frame[{idx}] {addr:#x} (host)");
+            }
+        }
+    }
+    unsafe {
+        backtrace_symbols_fd(frames.as_ptr(), n, 2);
+        _exit(128 + sig);
+    }
+}
+
+pub fn install_crash_diagnostics() {
+    unsafe {
+        for sig in [4, 6, 10, 11] {
+            // SIGILL=4, SIGABRT=6, SIGBUS=10(macOS)/7(linux), SIGSEGV=11
+            signal(sig, pear_crash_handler as *const () as usize);
+        }
+        #[cfg(target_os = "linux")]
+        signal(7, pear_crash_handler as *const () as usize);
+    }
 }
 
 #[repr(C)]
@@ -2221,10 +2269,27 @@ extern "C" fn stack_chk_fail_trap() -> ! {
 }
 
 extern "C" fn tls_errno_ptr() -> *mut i32 {
-    thread_local! {
-        static ERRNO: std::cell::UnsafeCell<i32> = const { std::cell::UnsafeCell::new(0) };
+    extern "C" {
+        #[cfg(target_os = "macos")]
+        fn __error() -> *mut i32;
+        #[cfg(target_os = "linux")]
+        fn __errno_location() -> *mut i32;
     }
-    ERRNO.with(|e| e.get())
+    #[cfg(target_os = "macos")]
+    unsafe {
+        return __error();
+    }
+    #[cfg(target_os = "linux")]
+    unsafe {
+        return __errno_location();
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        thread_local! {
+            static ERRNO: std::cell::UnsafeCell<i32> = const { std::cell::UnsafeCell::new(0) };
+        }
+        ERRNO.with(|e| e.get())
+    }
 }
 
 extern "C" fn memcpy_chk(dst: *mut c_void, src: *const c_void, n: usize, _dstlen: usize) -> *mut c_void {
@@ -2319,7 +2384,25 @@ unsafe extern "C" fn memset_pattern16_impl(b: *mut u8, pattern16: *const u8, len
     }
 }
 
-extern "C" fn pthread_mach_thread_np_impl(_t: usize) -> u32 { 1 }
+extern "C" fn pthread_mach_thread_np_impl(t: usize) -> u32 {
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn pthread_mach_thread_np(thread: usize) -> u32;
+        }
+        return unsafe { pthread_mach_thread_np(t) };
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        static NEXT_TID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(100);
+        static MAP: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<usize, u32>>> =
+            std::sync::LazyLock::new(Default::default);
+        *MAP.lock()
+            .unwrap()
+            .entry(t)
+            .or_insert_with(|| NEXT_TID.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
 extern "C" fn sysctlbyname_impl(_n: *const c_char, _oldp: *mut c_void, _oldlenp: *mut usize, _newp: *const c_void, _newlen: usize) -> i32 { -1 }
 extern "C" fn task_info_impl(_task: u32, _flavor: u32, _info: *mut c_void, _count: *mut u32) -> i32 { -1 }
 extern "C" fn thread_policy_set_impl(_t: u32, _flavor: u32, _policy: *const c_void, _count: u32) -> i32 { 0 }
@@ -2989,7 +3072,66 @@ extern "C" fn os_unfair_lock_unlock(lock: *mut std::sync::atomic::AtomicU32) {
 }
 
 static VM_PAGE_SIZE_VAL: usize = 4096;
-static MALLOC_DEFAULT_ZONE_STUB: usize = 0x4D5A_4F4E;
+
+#[repr(C)]
+struct DarwinMallocZone {
+    reserved1: *const c_void,
+    reserved2: *const c_void,
+    size: unsafe extern "C" fn(*mut c_void, *const c_void) -> usize,
+    malloc: unsafe extern "C" fn(*mut c_void, usize) -> *mut c_void,
+    calloc: unsafe extern "C" fn(*mut c_void, usize, usize) -> *mut c_void,
+    valloc: unsafe extern "C" fn(*mut c_void, usize) -> *mut c_void,
+    free: unsafe extern "C" fn(*mut c_void, *mut c_void),
+    realloc: unsafe extern "C" fn(*mut c_void, *mut c_void, usize) -> *mut c_void,
+    destroy: extern "C" fn(*mut c_void),
+    zone_name: *const c_char,
+    batch_malloc: *const c_void,
+    batch_free: *const c_void,
+    introspect: *const c_void,
+    version: u32,
+    _pad: u32,
+    memalign: unsafe extern "C" fn(*mut c_void, usize, usize) -> *mut c_void,
+    free_definite_size: unsafe extern "C" fn(*mut c_void, *mut c_void, usize),
+    pressure_relief: unsafe extern "C" fn(*mut c_void, usize) -> usize,
+}
+unsafe impl Sync for DarwinMallocZone {}
+
+unsafe extern "C" fn malloc_zone_size_cb(_zone: *mut c_void, ptr: *const c_void) -> usize {
+    malloc_size_impl(ptr)
+}
+extern "C" fn malloc_zone_destroy_cb(_zone: *mut c_void) {}
+unsafe extern "C" fn malloc_zone_memalign_cb(_zone: *mut c_void, alignment: usize, sz: usize) -> *mut c_void {
+    let mut p: *mut c_void = std::ptr::null_mut();
+    let align = alignment.max(std::mem::size_of::<usize>());
+    if posix_memalign(&mut p, align, sz.max(1)) == 0 { p } else { std::ptr::null_mut() }
+}
+unsafe extern "C" fn malloc_zone_free_definite_cb(_zone: *mut c_void, ptr: *mut c_void, _sz: usize) {
+    free(ptr);
+}
+unsafe extern "C" fn malloc_zone_pressure_cb(_zone: *mut c_void, _goal: usize) -> usize {
+    0
+}
+
+static MALLOC_DEFAULT_ZONE: DarwinMallocZone = DarwinMallocZone {
+    reserved1: std::ptr::null(),
+    reserved2: std::ptr::null(),
+    size: malloc_zone_size_cb,
+    malloc: malloc_zone_malloc_impl,
+    calloc: malloc_zone_calloc_impl,
+    valloc: malloc_zone_malloc_impl,
+    free: malloc_zone_free_impl,
+    realloc: malloc_zone_realloc_impl,
+    destroy: malloc_zone_destroy_cb,
+    zone_name: c"PearDefaultZone".as_ptr(),
+    batch_malloc: std::ptr::null(),
+    batch_free: std::ptr::null(),
+    introspect: std::ptr::null(),
+    version: 12,
+    _pad: 0,
+    memalign: malloc_zone_memalign_cb,
+    free_definite_size: malloc_zone_free_definite_cb,
+    pressure_relief: malloc_zone_pressure_cb,
+};
 
 unsafe extern "C" fn memset_chk(dst: *mut c_void, c: i32, n: usize, _dstlen: usize) -> *mut c_void {
     memset(dst, c, n)
@@ -3031,7 +3173,7 @@ unsafe extern "C" fn strlcat_chk(dst: *mut c_char, src: *const c_char, size: usi
     strlcat_impl(dst, src, size)
 }
 unsafe extern "C" fn malloc_default_zone_impl() -> *mut c_void {
-    &raw const MALLOC_DEFAULT_ZONE_STUB as *mut c_void
+    &raw const MALLOC_DEFAULT_ZONE as *mut c_void
 }
 unsafe extern "C" fn malloc_create_zone_impl(_start: usize, _flags: u32) -> *mut c_void {
     malloc_default_zone_impl()
@@ -4337,6 +4479,21 @@ impl pear_host::GuestEvents for DefaultGuestEvents {
 /// Initializes the portable PearRuntime subsystems (ObjC runtime, Foundation,
 /// and the platform's host backend when running on Linux).
 pub fn init() {
+    static STDIO_INIT: Once = Once::new();
+    STDIO_INIT.call_once(|| {
+        for (dst, names) in [
+            (&raw mut STDIN_STUB, &["___stdinp", "_stdin"][..]),
+            (&raw mut STDOUT_STUB, &["___stdoutp", "_stdout"][..]),
+            (&raw mut STDERR_STUB, &["___stderrp", "_stderr"][..]),
+        ] {
+            for &sym in names {
+                if let Some(p) = libc_dlsym(sym) {
+                    unsafe { *dst = *(p as *const usize) };
+                    break;
+                }
+            }
+        }
+    });
     pear_libobjc::object::init_runtime();
     pear_libobjc::blocks::init_blocks();
     pear_foundation::init_foundation();
@@ -4611,9 +4768,24 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             | "_asl_set_filter" => Some(asl_ok_stub as *const () as usize),
             "_mach_absolute_time" => Some(mach_absolute_time_impl as *const () as usize),
             "_mach_timebase_info" => Some(mach_timebase_info_impl as *const () as usize),
-            "_mach_task_self_" => Some(&raw const MACH_TASK_SELF_STUB as usize),
-            "_mach_host_self" => Some(mach_host_self_impl as *const () as usize),
-            "_host_info" | "_host_statistics64" => Some(host_info_stub as *const () as usize),
+            "_mach_task_self_" => {
+                #[cfg(target_os = "macos")]
+                { libc_dlsym(symbol).or(Some(&raw const MACH_TASK_SELF_STUB as usize)) }
+                #[cfg(not(target_os = "macos"))]
+                { Some(&raw const MACH_TASK_SELF_STUB as usize) }
+            }
+            "_mach_host_self" => {
+                #[cfg(target_os = "macos")]
+                { libc_dlsym(symbol).or(Some(mach_host_self_impl as *const () as usize)) }
+                #[cfg(not(target_os = "macos"))]
+                { Some(mach_host_self_impl as *const () as usize) }
+            }
+            "_host_info" | "_host_statistics64" => {
+                #[cfg(target_os = "macos")]
+                { libc_dlsym(symbol).or(Some(host_info_stub as *const () as usize)) }
+                #[cfg(not(target_os = "macos"))]
+                { Some(host_info_stub as *const () as usize) }
+            }
             "_mach_error_string" => Some(mach_error_string_stub as *const () as usize),
             "_mach_port_allocate"
             | "_mach_port_construct"
@@ -4622,8 +4794,35 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             | "_mach_port_peek"
             | "_mach_msg"
             | "_mach_msg_send"
-            | "_mach_msg_destroy"
-            | "_thread_switch" => Some(status_ok_stub as *const () as usize),
+            | "_mach_msg_destroy" => {
+                #[cfg(target_os = "macos")]
+                { libc_dlsym(symbol).or(Some(status_ok_stub as *const () as usize)) }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    match symbol {
+                        "_mach_port_allocate" => Some(frameworks::linux_mach_kqueue::mach_port_allocate as *const () as usize),
+                        "_mach_port_construct" => Some(frameworks::linux_mach_kqueue::mach_port_construct as *const () as usize),
+                        "_mach_port_deallocate" => Some(frameworks::linux_mach_kqueue::mach_port_deallocate as *const () as usize),
+                        "_mach_port_mod_refs" => Some(frameworks::linux_mach_kqueue::mach_port_mod_refs as *const () as usize),
+                        "_mach_port_peek" => Some(frameworks::linux_mach_kqueue::mach_port_peek as *const () as usize),
+                        "_mach_msg" | "_mach_msg_send" => Some(frameworks::linux_mach_kqueue::mach_msg as *const () as usize),
+                        _ => Some(status_ok_stub as *const () as usize),
+                    }
+                }
+            }
+            "_kqueue" | "_kevent64" => {
+                #[cfg(target_os = "macos")]
+                { libc_dlsym(symbol) }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    match symbol {
+                        "_kqueue" => Some(frameworks::linux_mach_kqueue::kqueue_impl as *const () as usize),
+                        "_kevent64" => Some(frameworks::linux_mach_kqueue::kevent64_impl as *const () as usize),
+                        _ => None,
+                    }
+                }
+            }
+            "_thread_switch" => Some(status_ok_stub as *const () as usize),
             "_vm_page_size" => Some(&raw const VM_PAGE_SIZE_VAL as usize),
             "_malloc_default_zone" => Some(malloc_default_zone_impl as *const () as usize),
             "_malloc_create_zone" => Some(malloc_create_zone_impl as *const () as usize),
@@ -5256,6 +5455,8 @@ pub fn load_bundle_and_boot(
         selectors: 0,
     };
     for &idx in &set.init_order {
+        let name = set.images[idx].path.as_deref().unwrap_or("<image>");
+        eprintln!("[PearRuntime][boot] register_image {name}");
         let report = unsafe { pear_libobjc::register_image(&set.images[idx]) };
         total.classes += report.classes;
         total.categories += report.categories;
@@ -5268,9 +5469,12 @@ pub fn load_bundle_and_boot(
 
     unsafe {
         for &idx in &set.init_order {
+            let name = set.images[idx].path.as_deref().unwrap_or("<image>");
+            eprintln!("[PearRuntime][boot] call_load_methods {name}");
             pear_libobjc::call_load_methods(&set.images[idx]);
+            eprintln!("[PearRuntime][boot] run_initializers {name}");
+            set.images[idx].run_initializers();
         }
-        set.run_initializers();
     }
     Ok((set, total))
 }
@@ -5474,6 +5678,47 @@ mod tests {
             assert_eq!(frameworks::cv_pb_get_height(pb), 12);
             assert!(!frameworks::cv_pb_get_base(pb).is_null());
             frameworks::cv_pb_release(pb);
+
+            // Foundation collection & concurrency ObjC classes
+            let mt_cls = objc_rt::class_named("NSMapTable").unwrap() as Id;
+            let sel_mk = objc_rt::sel("mapTableWithKeyOptions:valueOptions:");
+            let d_mk = pear_libobjc::message::lookup_for_send(mt_cls, sel_mk);
+            let f_mk: extern "C" fn(Id, Sel, usize, usize) -> Id = std::mem::transmute(d_mk.imp);
+            let mt = f_mk(d_mk.receiver, sel_mk, 0, 5);
+            assert!(!mt.is_null());
+            let key = pear_foundation::nsstring_from_rust("k1");
+            let val = pear_foundation::nsstring_from_rust("v1");
+            let sel_set = objc_rt::sel("setObject:forKey:");
+            let d_set = pear_libobjc::message::lookup_for_send(mt, sel_set);
+            let f_set: extern "C" fn(Id, Sel, Id, Id) = std::mem::transmute(d_set.imp);
+            f_set(d_set.receiver, sel_set, val, key);
+            let sel_get = objc_rt::sel("objectForKey:");
+            let d_get = pear_libobjc::message::lookup_for_send(mt, sel_get);
+            let f_get: extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(d_get.imp);
+            assert_eq!(
+                pear_foundation::rust_str_from_nsstring(f_get(d_get.receiver, sel_get, key)).as_deref(),
+                Some("v1")
+            );
+
+            let lock_cls = objc_rt::class_named("NSRecursiveLock").unwrap() as Id;
+            let lock = alloc(lock_cls as *const ClassT);
+            let s_try = objc_rt::sel("tryLock");
+            let d_try = pear_libobjc::message::lookup_for_send(lock, s_try);
+            let f_try: extern "C" fn(Id, Sel) -> bool = std::mem::transmute(d_try.imp);
+            assert!(f_try(d_try.receiver, s_try));
+            assert!(f_try(d_try.receiver, s_try));
+            let s_un = objc_rt::sel("unlock");
+            let d_un = pear_libobjc::message::lookup_for_send(lock, s_un);
+            let f_un: extern "C" fn(Id, Sel) = std::mem::transmute(d_un.imp);
+            f_un(d_un.receiver, s_un);
+            f_un(d_un.receiver, s_un);
+
+            // DarwinMallocZone vtable check
+            let zone = malloc_default_zone_impl() as *const DarwinMallocZone;
+            let buf = ((*zone).malloc)(zone as *mut c_void, 64);
+            assert!(!buf.is_null());
+            assert!(((*zone).size)(zone as *mut c_void, buf) >= 64);
+            ((*zone).free)(zone as *mut c_void, buf);
         }
     }
 }

@@ -2802,11 +2802,17 @@ pub fn init_foundation() {
                 ("start", i(timer_invalidate as *const ())),
                 ("setName:", i(noop_arg1 as *const ())),
                 ("name", i(thread_name as *const ())),
+                ("isMainThread", i(thread_is_main as *const ())),
+                ("isMultiThreaded", i(thread_is_main as *const ())),
+                ("setThreadPriority:", i(noop_f64 as *const ())),
+                ("threadPriority", i(ret_one_f64 as *const ())),
                 ("threadDictionary", i(empty_dict_obj as *const ())),
                 ("dealloc", i(f_dealloc as *const ())),
             ],
             &[
                 ("isMainThread", i(thread_is_main as *const ())),
+                ("isMultiThreaded", i(thread_is_main as *const ())),
+                ("setThreadPriority:", i(noop_f64 as *const ())),
                 ("currentThread", i(thread_current as *const ())),
                 ("mainThread", i(thread_current as *const ())),
                 ("sleepForTimeInterval:", i(thread_sleep as *const ())),
@@ -3002,12 +3008,13 @@ extern "C" fn thread_detach(_self: Id, _cmd: Sel, _sel: Sel, _target: Id, _arg: 
 extern "C" fn noop_arg1(_self: Id, _cmd: Sel, _arg: usize) {}
 extern "C" fn noop_f64(_self: Id, _cmd: Sel, _arg: f64) {}
 extern "C" fn ret_one_isize(_self: Id, _cmd: Sel) -> isize { 1 }
+extern "C" fn ret_one_f64(_self: Id, _cmd: Sel) -> f64 { 0.5 }
 extern "C" fn ret_false(_self: Id, _cmd: Sel) -> bool { false }
 extern "C" fn empty_arr_obj(_self: Id, _cmd: Sel) -> Id {
     unsafe { alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(Vec::new())) }
 }
 extern "C" fn empty_dict_obj(_self: Id, _cmd: Sel) -> Id {
-    unsafe { alloc_with_backing(NSDICTIONARY_CLASS.ptr(), Backing::Dict(HashMap::new())) }
+    unsafe { alloc_with_backing(NSMUTABLEDICTIONARY_CLASS.ptr(), Backing::Dict(HashMap::new())) }
 }
 extern "C" fn opqueue_main(_self: Id, _cmd: Sel) -> Id {
     static Q: OnceLock<usize> = OnceLock::new();

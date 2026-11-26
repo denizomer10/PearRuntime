@@ -305,6 +305,11 @@ fn main() {
         }
     }
 
+    if env::var("PEAR_STRICT_SELECTORS").as_deref() != Ok("1") {
+        pear_runtime::pear_libobjc::message::set_soft_unrecognized(true);
+    }
+    pear_runtime::install_crash_diagnostics();
+    eprintln!("[pearruntime] loading & running initializers for {}...", exe_path.display());
     match pear_runtime::load_bundle_and_boot(&exe_path, opts) {
         Ok((set, report)) => {
             if let Some(ref p) = plan {
@@ -320,6 +325,7 @@ fn main() {
             );
             let main_img = set.main_image();
             if let Some(entry) = main_img.symbol("_main").or_else(|| main_img.entry()) {
+                eprintln!("[pearruntime] entering guest _main at {:#x}...", entry as usize);
                 let main_fn: extern "C" fn(i32, *const *const std::os::raw::c_char) -> i32 =
                     unsafe { std::mem::transmute(entry) };
                 let arg0 = std::ffi::CString::new(exe_path.to_string_lossy().as_bytes())
