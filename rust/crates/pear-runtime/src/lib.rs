@@ -117,6 +117,10 @@ guest_class!(CKQUERYOPERATION_CLASS, CKQUERYOPERATION_META);
 guest_class!(CKRECORD_CLASS, CKRECORD_META);
 guest_class!(CKRECORDID_CLASS, CKRECORDID_META);
 guest_class!(GCCONTROLLER_CLASS, GCCONTROLLER_META);
+guest_class!(OS_DISPATCH_SEMAPHORE_CLASS, OS_DISPATCH_SEMAPHORE_META);
+guest_class!(OS_DISPATCH_GROUP_CLASS, OS_DISPATCH_GROUP_META);
+guest_class!(UISCENESESSION_CLASS, UISCENESESSION_META);
+guest_class!(UISCENECONNECTIONOPTIONS_CLASS, UISCENECONNECTIONOPTIONS_META);
 
 extern "C" fn shared_app_stub(_self: Id, _cmd: Sel) -> Id {
     static APP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -790,12 +794,49 @@ extern "C" fn ui_application_main(
                     let d_did = pear_libobjc::message::lookup_for_send(del, sel_did);
                     let f_did: extern "C" fn(Id, Sel, Id, Id) -> bool = std::mem::transmute(d_did.imp);
                     let _ = f_did(d_did.receiver, sel_did, app, std::ptr::null_mut());
-                    let sel_active = objc_rt::sel("applicationDidBecomeActive:");
-                    if pear_libobjc::runtime::lookup(cls, sel_active).is_some() {
-                        eprintln!("[PearRuntime][boot] calling -[{name} applicationDidBecomeActive:]");
-                        let d_act = pear_libobjc::message::lookup_for_send(del, sel_active);
-                        let f_act: extern "C" fn(Id, Sel, Id) = std::mem::transmute(d_act.imp);
-                        f_act(d_act.receiver, sel_active, app);
+                    let mut became_active_via_scene = false;
+                    if let Some(scene_del_name) = scene_delegate_class_from_bundle() {
+                        if let Some(scene_del_cls) = objc_rt::class_named(&scene_del_name) {
+                            let scene = alloc(UIWINDOWSCENE_CLASS.ptr());
+                            CONNECTED_SCENE.store(scene as usize, std::sync::atomic::Ordering::Release);
+                            let session = alloc(UISCENESESSION_CLASS.ptr());
+                            let opts = alloc(UISCENECONNECTIONOPTIONS_CLASS.ptr());
+                            let s_del = alloc(scene_del_cls);
+                            let d_sinit = pear_libobjc::message::lookup_for_send(s_del, sel_init);
+                            let f_sinit: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_sinit.imp);
+                            let s_del = f_sinit(d_sinit.receiver, sel_init);
+                            SCENE_DELEGATE.store(s_del as usize, std::sync::atomic::Ordering::Release);
+                            eprintln!("[PearRuntime][boot] connecting UIWindowScene to {scene_del_name}");
+                            let sel_conn = objc_rt::sel("scene:willConnectToSession:options:");
+                            if pear_libobjc::runtime::lookup(scene_del_cls, sel_conn).is_some() {
+                                let d_conn = pear_libobjc::message::lookup_for_send(s_del, sel_conn);
+                                let f_conn: extern "C" fn(Id, Sel, Id, Id, Id) = std::mem::transmute(d_conn.imp);
+                                f_conn(d_conn.receiver, sel_conn, scene, session, opts);
+                            }
+                            let sel_fg = objc_rt::sel("sceneWillEnterForeground:");
+                            if pear_libobjc::runtime::lookup(scene_del_cls, sel_fg).is_some() {
+                                let d_fg = pear_libobjc::message::lookup_for_send(s_del, sel_fg);
+                                let f_fg: extern "C" fn(Id, Sel, Id) = std::mem::transmute(d_fg.imp);
+                                f_fg(d_fg.receiver, sel_fg, scene);
+                            }
+                            let sel_sact = objc_rt::sel("sceneDidBecomeActive:");
+                            if pear_libobjc::runtime::lookup(scene_del_cls, sel_sact).is_some() {
+                                eprintln!("[PearRuntime][boot] calling -[{scene_del_name} sceneDidBecomeActive:]");
+                                let d_sact = pear_libobjc::message::lookup_for_send(s_del, sel_sact);
+                                let f_sact: extern "C" fn(Id, Sel, Id) = std::mem::transmute(d_sact.imp);
+                                f_sact(d_sact.receiver, sel_sact, scene);
+                                became_active_via_scene = true;
+                            }
+                        }
+                    }
+                    if !became_active_via_scene {
+                        let sel_active = objc_rt::sel("applicationDidBecomeActive:");
+                        if pear_libobjc::runtime::lookup(cls, sel_active).is_some() {
+                            eprintln!("[PearRuntime][boot] calling -[{name} applicationDidBecomeActive:]");
+                            let d_act = pear_libobjc::message::lookup_for_send(del, sel_active);
+                            let f_act: extern "C" fn(Id, Sel, Id) = std::mem::transmute(d_act.imp);
+                            f_act(d_act.receiver, sel_active, app);
+                        }
                     }
                     let headless = cfg!(not(target_os = "linux"))
                         || std::env::var("PEAR_HEADLESS").as_deref() == Ok("1");
@@ -842,6 +883,106 @@ static EAGL_LAST_BOUND_FBO: std::sync::atomic::AtomicU32 = std::sync::atomic::At
 static EAGL_WINDOW_FBO: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(u32::MAX);
 static EAGL_SURFACE_SIZE: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new((1280u64 << 32) | 720u64);
+static CONNECTED_SCENE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static SCENE_DELEGATE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+extern "C" fn scene_delegate_get(_self: Id, _cmd: Sel) -> Id {
+    SCENE_DELEGATE.load(std::sync::atomic::Ordering::Acquire) as Id
+}
+
+extern "C" fn scene_delegate_set(_self: Id, _cmd: Sel, del: Id) {
+    SCENE_DELEGATE.store(del as usize, std::sync::atomic::Ordering::Release);
+}
+
+extern "C" fn scene_session_role(_self: Id, _cmd: Sel) -> Id {
+    pear_foundation::nsstring_from_rust("UIWindowSceneSessionRoleApplication")
+}
+
+extern "C" fn ret_empty_set(_self: Id, _cmd: Sel) -> Id {
+    unsafe {
+        let cls = objc_rt::class_named("NSSet").unwrap_or(std::ptr::null());
+        if cls.is_null() {
+            return std::ptr::null_mut();
+        }
+        let s = objc_rt::sel("set");
+        let d = pear_libobjc::message::lookup_for_send(cls as Id, s);
+        let f: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d.imp);
+        f(d.receiver, s)
+    }
+}
+
+extern "C" fn app_connected_scenes(_self: Id, _cmd: Sel) -> Id {
+    let sc = CONNECTED_SCENE.load(std::sync::atomic::Ordering::Acquire) as Id;
+    if sc.is_null() {
+        return ret_empty_set(_self, _cmd);
+    }
+    unsafe {
+        let cls = objc_rt::class_named("NSSet").unwrap_or(std::ptr::null());
+        if cls.is_null() {
+            return std::ptr::null_mut();
+        }
+        let s = objc_rt::sel("setWithObject:");
+        let d = pear_libobjc::message::lookup_for_send(cls as Id, s);
+        let f: extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(d.imp);
+        f(d.receiver, s, sc)
+    }
+}
+
+fn scene_delegate_class_from_bundle() -> Option<String> {
+    fn dict_get(dict: Id, key: &str) -> Id {
+        if dict.is_null() {
+            return std::ptr::null_mut();
+        }
+        unsafe {
+            let k = pear_foundation::nsstring_from_rust(key);
+            let s = objc_rt::sel("objectForKey:");
+            let d = pear_libobjc::message::lookup_for_send(dict, s);
+            let f: extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(d.imp);
+            f(d.receiver, s, k)
+        }
+    }
+    unsafe {
+        let b_cls = objc_rt::class_named("NSBundle").unwrap_or(std::ptr::null());
+        if b_cls.is_null() {
+            return None;
+        }
+        let s_main = objc_rt::sel("mainBundle");
+        let d_main = pear_libobjc::message::lookup_for_send(b_cls as Id, s_main);
+        let f_main: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_main.imp);
+        let bundle = f_main(d_main.receiver, s_main);
+        let s_info = objc_rt::sel("infoDictionary");
+        let d_info = pear_libobjc::message::lookup_for_send(bundle, s_info);
+        let f_info: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_info.imp);
+        let info = f_info(d_info.receiver, s_info);
+        let manifest = dict_get(info, "UIApplicationSceneManifest");
+        let configs = dict_get(manifest, "UISceneConfigurations");
+        let roles = dict_get(configs, "UIWindowSceneSessionRoleApplication");
+        if roles.is_null() {
+            return None;
+        }
+        let s_cnt = objc_rt::sel("count");
+        let d_cnt = pear_libobjc::message::lookup_for_send(roles, s_cnt);
+        let f_cnt: extern "C" fn(Id, Sel) -> usize = std::mem::transmute(d_cnt.imp);
+        if f_cnt(d_cnt.receiver, s_cnt) == 0 {
+            return None;
+        }
+        let s_at = objc_rt::sel("objectAtIndex:");
+        let d_at = pear_libobjc::message::lookup_for_send(roles, s_at);
+        let f_at: extern "C" fn(Id, Sel, usize) -> Id = std::mem::transmute(d_at.imp);
+        let first = f_at(d_at.receiver, s_at, 0);
+        let name_ns = dict_get(first, "UISceneDelegateClassName");
+        pear_foundation::rust_str_from_nsstring(name_ns)
+    }
+}
+
+extern "C" fn ui_window_init_with_scene(self_obj: Id, cmd: Sel, _scene: Id) -> Id {
+    let bounds = screen_bounds(self_obj, cmd);
+    ui_window_init_with_frame(self_obj, cmd, bounds)
+}
+
+extern "C" fn ui_window_scene_stub(_self: Id, _cmd: Sel) -> Id {
+    CONNECTED_SCENE.load(std::sync::atomic::Ordering::Acquire) as Id
+}
 
 extern "C" fn ui_window_init_with_frame(
     self_obj: Id,
@@ -1134,7 +1275,6 @@ fn init_guest_frameworks() {
             (&UIACTIVITYVIEWCONTROLLER_CLASS, &UIACTIVITYVIEWCONTROLLER_META, "UIActivityViewController"),
             (&UIALERTVIEW_CLASS, &UIALERTVIEW_META, "UIAlertView"),
             (&UIPASTEBOARD_CLASS, &UIPASTEBOARD_META, "UIPasteboard"),
-            (&UIWINDOWSCENE_CLASS, &UIWINDOWSCENE_META, "UIWindowScene"),
             (&AVAUDIOSESSION_CLASS, &AVAUDIOSESSION_META, "AVAudioSession"),
             (&AVAUDIOPLAYER_CLASS, &AVAUDIOPLAYER_META, "AVAudioPlayer"),
             (&AVPLAYER_CLASS, &AVPLAYER_META, "AVPlayer"),
@@ -1165,6 +1305,7 @@ fn init_guest_frameworks() {
                 ("setDelegate:", i(app_set_delegate as *const ())),
                 ("windows", i(app_windows as *const ())),
                 ("keyWindow", i(app_key_window as *const ())),
+                ("connectedScenes", i(app_connected_scenes as *const ())),
                 ("applicationState", i(app_state as *const ())),
                 ("statusBarOrientation", i(app_orientation as *const ())),
                 ("isStatusBarHidden", i(app_true as *const ())),
@@ -1527,6 +1668,9 @@ fn init_guest_frameworks() {
             64,
             &[
                 ("initWithFrame:", i(ui_window_init_with_frame as *const ())),
+                ("initWithWindowScene:", i(ui_window_init_with_scene as *const ())),
+                ("windowScene", i(ui_window_scene_stub as *const ())),
+                ("screen", i(main_screen_stub as *const ())),
                 ("makeKeyAndVisible", i(ui_window_make_key_and_visible as *const ())),
                 ("bounds", i(uiview_bounds as *const ())),
                 ("frame", i(uiview_bounds as *const ())),
@@ -1542,6 +1686,44 @@ fn init_guest_frameworks() {
                 ("touchesMoved:withEvent:", i(touches_noop as *const ())),
                 ("touchesEnded:withEvent:", i(touches_noop as *const ())),
                 ("touchesCancelled:withEvent:", i(touches_noop as *const ())),
+            ],
+            &[],
+        );
+        objc_rt::register_builtin(
+            UIWINDOWSCENE_CLASS.ptr(),
+            UIWINDOWSCENE_META.ptr(),
+            "UIWindowScene",
+            32,
+            &[
+                ("screen", i(main_screen_stub as *const ())),
+                ("windows", i(app_windows as *const ())),
+                ("coordinateSpace", i(main_screen_stub as *const ())),
+                ("bounds", i(screen_bounds as *const ())),
+                ("delegate", i(scene_delegate_get as *const ())),
+                ("setDelegate:", i(scene_delegate_set as *const ())),
+                ("activationState", i(app_state as *const ())),
+                ("interfaceOrientation", i(app_orientation as *const ())),
+                ("sizeRestrictions", i(uivc_nil as *const ())),
+                ("statusBarManager", i(uivc_nil as *const ())),
+            ],
+            &[],
+        );
+        objc_rt::register_builtin(
+            UISCENESESSION_CLASS.ptr(),
+            UISCENESESSION_META.ptr(),
+            "UISceneSession",
+            16,
+            &[("role", i(scene_session_role as *const ()))],
+            &[],
+        );
+        objc_rt::register_builtin(
+            UISCENECONNECTIONOPTIONS_CLASS.ptr(),
+            UISCENECONNECTIONOPTIONS_META.ptr(),
+            "UISceneConnectionOptions",
+            16,
+            &[
+                ("URLContexts", i(ret_empty_set as *const ())),
+                ("userActivities", i(ret_empty_set as *const ())),
             ],
             &[],
         );
@@ -1720,6 +1902,22 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
                 ("show", i(noop_method as *const ())),
                 ("dismissWithClickedButtonIndex:animated:", i(alert_dismiss as *const ())),
             ],
+            &[],
+        );
+        objc_rt::register_builtin(
+            OS_DISPATCH_SEMAPHORE_CLASS.ptr(),
+            OS_DISPATCH_SEMAPHORE_META.ptr(),
+            "OS_dispatch_semaphore",
+            16,
+            &[("dealloc", i(dispatch_semaphore_dealloc as *const ()))],
+            &[],
+        );
+        objc_rt::register_builtin(
+            OS_DISPATCH_GROUP_CLASS.ptr(),
+            OS_DISPATCH_GROUP_META.ptr(),
+            "OS_dispatch_group",
+            16,
+            &[("dealloc", i(dispatch_group_dealloc as *const ()))],
             &[],
         );
 
@@ -2606,14 +2804,35 @@ extern "C" fn arc4random_impl() -> u32 {
 }
 extern "C" fn availability_version_check(_count: u32, _versions: *const c_void) -> bool { true }
 
-extern "C" fn dispatch_once_f_impl(pred: *mut usize, ctx: *mut c_void, func: extern "C" fn(*mut c_void)) {
-    if pred.is_null() { return; }
-    unsafe {
-        let p = &*(pred as *const std::sync::atomic::AtomicUsize);
-        if p.swap(1, std::sync::atomic::Ordering::AcqRel) == 0 {
-            func(ctx);
+fn run_dispatch_once<F: FnOnce()>(pred: *mut usize, f: F) {
+    if pred.is_null() {
+        return;
+    }
+    let p = unsafe { &*(pred as *const std::sync::atomic::AtomicUsize) };
+    loop {
+        match p.load(std::sync::atomic::Ordering::Acquire) {
+            usize::MAX => return,
+            0 => {
+                if p.compare_exchange(
+                    0,
+                    1,
+                    std::sync::atomic::Ordering::AcqRel,
+                    std::sync::atomic::Ordering::Acquire,
+                )
+                .is_ok()
+                {
+                    f();
+                    p.store(usize::MAX, std::sync::atomic::Ordering::Release);
+                    return;
+                }
+            }
+            _ => std::thread::yield_now(),
         }
     }
+}
+
+extern "C" fn dispatch_once_f_impl(pred: *mut usize, ctx: *mut c_void, func: extern "C" fn(*mut c_void)) {
+    run_dispatch_once(pred, || func(ctx));
 }
 
 extern "C" fn mach_absolute_time_impl() -> u64 {
@@ -3397,17 +3616,14 @@ static mut STDOUT_STUB: usize = 0;
 static mut STDERR_STUB: usize = 0;
 
 extern "C" fn dispatch_once_impl(pred: *mut usize, block: *mut c_void) {
-    if pred.is_null() || block.is_null() {
+    if block.is_null() {
         return;
     }
-    unsafe {
-        let p = &*(pred as *const std::sync::atomic::AtomicUsize);
-        if p.swap(1, std::sync::atomic::Ordering::AcqRel) == 0 {
-            let invoke = *((block as *const usize).add(2));
-            let f: extern "C" fn(*mut c_void) = std::mem::transmute(invoke);
-            f(block);
-        }
-    }
+    run_dispatch_once(pred, || unsafe {
+        let invoke = *((block as *const usize).add(2));
+        let f: extern "C" fn(*mut c_void) = std::mem::transmute(invoke);
+        f(block);
+    });
 }
 
 extern "C" fn dispatch_sync_impl(_q: *mut c_void, block: *mut c_void) {
@@ -3427,6 +3643,50 @@ extern "C" fn dispatch_get_global_queue_impl(_id: isize, _flags: usize) -> *cons
 static DISPATCH_QUEUE_ATTR_STUB: [usize; 4] = [0; 4];
 static OS_LOG_STUB: [usize; 4] = [0; 4];
 
+fn dispatch_now_ns() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let elapsed = START.get_or_init(std::time::Instant::now).elapsed().as_nanos() as u64;
+    1_000_000_000u64.saturating_add(elapsed).min(u64::MAX - 1)
+}
+
+type SemaphoreEntry = std::sync::Arc<(std::sync::Mutex<(isize, usize)>, std::sync::Condvar)>;
+type GroupEntry = std::sync::Arc<(std::sync::Mutex<isize>, std::sync::Condvar)>;
+
+static DISPATCH_SEMAPHORES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<usize, SemaphoreEntry>>,
+> = std::sync::LazyLock::new(Default::default);
+static DISPATCH_GROUPS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<usize, GroupEntry>>,
+> = std::sync::LazyLock::new(Default::default);
+
+extern "C" fn dispatch_semaphore_dealloc(this: Id, _cmd: Sel) {
+    DISPATCH_SEMAPHORES.lock().unwrap().remove(&(this as usize));
+    unsafe { pear_libobjc::object::dispose(this) };
+}
+
+extern "C" fn dispatch_group_dealloc(this: Id, _cmd: Sel) {
+    DISPATCH_GROUPS.lock().unwrap().remove(&(this as usize));
+    unsafe { pear_libobjc::object::dispose(this) };
+}
+
+extern "C" fn dispatch_release_impl(obj: *mut c_void) {
+    if obj.is_null() {
+        return;
+    }
+    let addr = obj as usize;
+    if addr == (&raw const DISPATCH_MAIN_Q as usize)
+        || addr == (&raw const DISPATCH_QUEUE_ATTR_STUB as usize)
+        || addr == (&raw const OS_LOG_STUB as usize)
+    {
+        return;
+    }
+    if DISPATCH_SEMAPHORES.lock().unwrap().contains_key(&addr)
+        || DISPATCH_GROUPS.lock().unwrap().contains_key(&addr)
+    {
+        pear_libobjc::object::release(obj as Id);
+    }
+}
+
 extern "C" fn dispatch_queue_create_impl(_label: *const c_char, _attr: *const c_void) -> *const c_void {
     &raw const DISPATCH_MAIN_Q as *const c_void
 }
@@ -3437,23 +3697,169 @@ extern "C" fn dispatch_queue_get_label_impl(_q: *const c_void) -> *const c_char 
     c"com.pear.main".as_ptr()
 }
 extern "C" fn dispatch_group_create_impl() -> *const c_void {
-    &raw const DISPATCH_MAIN_Q as *const c_void
+    let g = unsafe { alloc(OS_DISPATCH_GROUP_CLASS.ptr()) };
+    let entry = std::sync::Arc::new((std::sync::Mutex::new(0isize), std::sync::Condvar::new()));
+    DISPATCH_GROUPS.lock().unwrap().insert(g as usize, entry);
+    g as *const c_void
+}
+extern "C" fn dispatch_group_enter_impl(g: *mut c_void) {
+    if g.is_null() {
+        return;
+    }
+    let entry = DISPATCH_GROUPS.lock().unwrap().get(&(g as usize)).cloned();
+    if let Some(entry) = entry {
+        let mut count = entry.0.lock().unwrap();
+        *count += 1;
+    }
+}
+extern "C" fn dispatch_group_leave_impl(g: *mut c_void) {
+    if g.is_null() {
+        return;
+    }
+    let entry = DISPATCH_GROUPS.lock().unwrap().get(&(g as usize)).cloned();
+    if let Some(entry) = entry {
+        let mut count = entry.0.lock().unwrap();
+        *count = (*count - 1).max(0);
+        if *count == 0 {
+            entry.1.notify_all();
+        }
+    }
 }
 extern "C" fn dispatch_group_async_impl(_g: *mut c_void, q: *mut c_void, block: *mut c_void) {
     dispatch_sync_impl(q, block);
 }
-extern "C" fn dispatch_group_wait_impl(_g: *mut c_void, _timeout: u64) -> isize { 0 }
+extern "C" fn dispatch_group_wait_impl(g: *mut c_void, timeout: u64) -> isize {
+    if g.is_null() {
+        return 0;
+    }
+    let Some(entry) = DISPATCH_GROUPS.lock().unwrap().get(&(g as usize)).cloned() else {
+        return 0;
+    };
+    let mut guard = entry.0.lock().unwrap();
+    loop {
+        if *guard <= 0 {
+            return 0;
+        }
+        if timeout == 0 {
+            return 1;
+        }
+        if timeout == u64::MAX {
+            guard = entry.1.wait(guard).unwrap();
+        } else {
+            let now = dispatch_now_ns();
+            if now >= timeout {
+                return 1;
+            }
+            let (g2, _) = entry
+                .1
+                .wait_timeout(guard, std::time::Duration::from_nanos(timeout - now))
+                .unwrap();
+            guard = g2;
+        }
+    }
+}
 extern "C" fn dispatch_after_impl(_when: u64, q: *mut c_void, block: *mut c_void) {
     let _ = (q, block);
 }
 extern "C" fn dispatch_time_impl(when: u64, delta: i64) -> u64 {
-    if delta >= 0 { when.saturating_add(delta as u64) } else { when.saturating_sub((-delta) as u64) }
+    if when == u64::MAX {
+        return u64::MAX;
+    }
+    let base = if when == 0 { dispatch_now_ns() } else { when };
+    if delta >= 0 {
+        base.saturating_add(delta as u64).min(u64::MAX - 1)
+    } else {
+        base.saturating_sub(delta.unsigned_abs()).max(1)
+    }
 }
-extern "C" fn dispatch_semaphore_create_impl(_val: isize) -> *const c_void {
-    &raw const DISPATCH_MAIN_Q as *const c_void
+#[repr(C)]
+struct DarwinTimespec {
+    tv_sec: i64,
+    tv_nsec: i64,
 }
-extern "C" fn dispatch_semaphore_signal_impl(_sem: *mut c_void) -> isize { 1 }
-extern "C" fn dispatch_semaphore_wait_impl(_sem: *mut c_void, _timeout: u64) -> isize { 0 }
+extern "C" fn dispatch_walltime_impl(ts: *const c_void, delta: i64) -> u64 {
+    if ts.is_null() {
+        return dispatch_time_impl(0, delta);
+    }
+    let spec = unsafe { &*(ts as *const DarwinTimespec) };
+    let target_ns = (spec.tv_sec as i128)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(spec.tv_nsec as i128)
+        .saturating_add(delta as i128);
+    let now_wall = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0i128, |d| d.as_nanos() as i128);
+    let diff = target_ns - now_wall;
+    let base = dispatch_now_ns();
+    if diff >= 0 {
+        base.saturating_add(diff.min((u64::MAX - 1) as i128) as u64).min(u64::MAX - 1)
+    } else {
+        base.saturating_sub((-diff).min(u64::MAX as i128) as u64).max(1)
+    }
+}
+extern "C" fn dispatch_semaphore_create_impl(val: isize) -> *const c_void {
+    if val < 0 {
+        return std::ptr::null();
+    }
+    let sem = unsafe { alloc(OS_DISPATCH_SEMAPHORE_CLASS.ptr()) };
+    let entry = std::sync::Arc::new((std::sync::Mutex::new((val, 0usize)), std::sync::Condvar::new()));
+    DISPATCH_SEMAPHORES.lock().unwrap().insert(sem as usize, entry);
+    sem as *const c_void
+}
+extern "C" fn dispatch_semaphore_signal_impl(sem: *mut c_void) -> isize {
+    if sem.is_null() {
+        return 0;
+    }
+    let Some(entry) = DISPATCH_SEMAPHORES.lock().unwrap().get(&(sem as usize)).cloned() else {
+        return 0;
+    };
+    let mut guard = entry.0.lock().unwrap();
+    guard.0 += 1;
+    if guard.1 > 0 {
+        entry.1.notify_one();
+        1
+    } else {
+        0
+    }
+}
+extern "C" fn dispatch_semaphore_wait_impl(sem: *mut c_void, timeout: u64) -> isize {
+    if sem.is_null() {
+        return 0;
+    }
+    let Some(entry) = DISPATCH_SEMAPHORES.lock().unwrap().get(&(sem as usize)).cloned() else {
+        return 0;
+    };
+    let mut guard = entry.0.lock().unwrap();
+    if guard.0 > 0 {
+        guard.0 -= 1;
+        return 0;
+    }
+    if timeout == 0 {
+        return 1;
+    }
+    guard.1 += 1;
+    loop {
+        if timeout == u64::MAX {
+            guard = entry.1.wait(guard).unwrap();
+        } else {
+            let now = dispatch_now_ns();
+            if now >= timeout {
+                guard.1 -= 1;
+                return 1;
+            }
+            let (g2, _) = entry
+                .1
+                .wait_timeout(guard, std::time::Duration::from_nanos(timeout - now))
+                .unwrap();
+            guard = g2;
+        }
+        if guard.0 > 0 {
+            guard.0 -= 1;
+            guard.1 -= 1;
+            return 0;
+        }
+    }
+}
 extern "C" fn dispatch_block_create_impl(_flags: usize, block: *mut c_void) -> *mut c_void { block }
 extern "C" fn dispatch_source_create_impl(_t: *const c_void, _h: usize, _m: usize, _q: *const c_void) -> *const c_void {
     &raw const DISPATCH_MAIN_Q as *const c_void
@@ -5225,14 +5631,14 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_dispatch_queue_attr_make_with_qos_class" => Some(dispatch_queue_attr_qos_impl as *const () as usize),
             "_dispatch_queue_get_label" => Some(dispatch_queue_get_label_impl as *const () as usize),
             "_dispatch_group_create" => Some(dispatch_group_create_impl as *const () as usize),
-            "_dispatch_group_enter"
-            | "_dispatch_group_leave"
-            | "_dispatch_resume"
-            | "_dispatch_release"
+            "_dispatch_group_enter" => Some(dispatch_group_enter_impl as *const () as usize),
+            "_dispatch_group_leave" => Some(dispatch_group_leave_impl as *const () as usize),
+            "_dispatch_resume"
             | "_dispatch_block_cancel"
             | "_dispatch_source_cancel"
-            | "_dispatch_assert_queue$V2"
-            | "_os_release" => Some(dispatch_noop_1 as *const () as usize),
+            | "_dispatch_assert_queue$V2" => Some(dispatch_noop_1 as *const () as usize),
+            "_dispatch_release"
+            | "_os_release" => Some(dispatch_release_impl as *const () as usize),
             "_dispatch_set_target_queue"
             | "_dispatch_source_set_event_handler" => Some(dispatch_noop_2 as *const () as usize),
             "_dispatch_source_set_timer" => Some(status_ok_stub as *const () as usize),
@@ -5243,8 +5649,8 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_dispatch_group_wait"
             | "_dispatch_block_wait" => Some(dispatch_group_wait_impl as *const () as usize),
             "_dispatch_after" => Some(dispatch_after_impl as *const () as usize),
-            "_dispatch_time"
-            | "_dispatch_walltime" => Some(dispatch_time_impl as *const () as usize),
+            "_dispatch_time" => Some(dispatch_time_impl as *const () as usize),
+            "_dispatch_walltime" => Some(dispatch_walltime_impl as *const () as usize),
             "_dispatch_semaphore_create" => Some(dispatch_semaphore_create_impl as *const () as usize),
             "_dispatch_semaphore_signal" => Some(dispatch_semaphore_signal_impl as *const () as usize),
             "_dispatch_semaphore_wait" => Some(dispatch_semaphore_wait_impl as *const () as usize),
@@ -5480,6 +5886,8 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_OBJC_CLASS_$_UIAlertView" => Some(UIALERTVIEW_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UIPasteboard" => Some(UIPASTEBOARD_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UIWindowScene" => Some(UIWINDOWSCENE_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UISceneSession" => Some(UISCENESESSION_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UISceneConnectionOptions" => Some(UISCENECONNECTIONOPTIONS_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UITouch" => Some(UITOUCH_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UIEvent" => Some(UIEVENT_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UIViewLayoutRegion" => Some(UIVIEWLAYOUTREGION_CLASS.ptr() as usize),
@@ -6416,6 +6824,98 @@ mod tests {
             let f_ps: extern "C" fn(Id, Sel, usize) -> usize = std::mem::transmute(d_ps.imp);
             assert_eq!(f_ps(d_ps.receiver, s_ps, 1), 2);
             assert_eq!(f_ps(d_ps.receiver, s_ps, 2), 2);
+        }
+    }
+
+    #[test]
+    fn phase5_5_dispatch_and_window_scene_work() {
+        init();
+        // 1. Semaphore wait/timeout/signal
+        let sem = dispatch_semaphore_create_impl(0) as *mut c_void;
+        assert!(!sem.is_null());
+        assert_eq!(dispatch_semaphore_wait_impl(sem, 0), 1);
+        let t_short = dispatch_time_impl(0, 15_000_000);
+        assert_eq!(dispatch_semaphore_wait_impl(sem, t_short), 1);
+
+        let sem_addr = sem as usize;
+        let t1 = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            dispatch_semaphore_signal_impl(sem_addr as *mut c_void);
+        });
+        assert_eq!(dispatch_semaphore_wait_impl(sem, u64::MAX), 0);
+        t1.join().unwrap();
+
+        // 2. Dispatch group enter/leave/wait
+        let grp = dispatch_group_create_impl() as *mut c_void;
+        assert!(!grp.is_null());
+        dispatch_group_enter_impl(grp);
+        assert_eq!(dispatch_group_wait_impl(grp, 0), 1);
+        let grp_addr = grp as usize;
+        let t2 = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            dispatch_group_leave_impl(grp_addr as *mut c_void);
+        });
+        assert_eq!(dispatch_group_wait_impl(grp, u64::MAX), 0);
+        t2.join().unwrap();
+
+        // 3. dispatch_once_f runs once across 4 threads and publishes usize::MAX
+        static ONCE_PRED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        static ONCE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        extern "C" fn once_cb(_ctx: *mut c_void) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            ONCE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        ONCE_PRED.store(0, std::sync::atomic::Ordering::SeqCst);
+        ONCE_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+        let pred_ptr = &raw const ONCE_PRED as usize;
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    dispatch_once_f_impl(pred_ptr as *mut usize, std::ptr::null_mut(), once_cb);
+                    assert_eq!(ONCE_PRED.load(std::sync::atomic::Ordering::Acquire), usize::MAX);
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(ONCE_COUNT.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // 4. dispatch_release safely frees sem/grp and ignores DISPATCH_MAIN_Q
+        dispatch_release_impl(&raw const DISPATCH_MAIN_Q as *mut c_void);
+        dispatch_release_impl(sem);
+        dispatch_release_impl(grp);
+        assert!(!DISPATCH_SEMAPHORES.lock().unwrap().contains_key(&(sem as usize)));
+        assert!(!DISPATCH_GROUPS.lock().unwrap().contains_key(&(grp as usize)));
+
+        // 5. UIWindowScene, UISceneSession and UIWindow initWithWindowScene:
+        unsafe {
+            let scene = alloc(UIWINDOWSCENE_CLASS.ptr());
+            let s_scr = objc_rt::sel("screen");
+            let d_scr = pear_libobjc::message::lookup_for_send(scene, s_scr);
+            let f_scr: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_scr.imp);
+            assert!(!f_scr(d_scr.receiver, s_scr).is_null());
+
+            let s_act = objc_rt::sel("activationState");
+            let d_act = pear_libobjc::message::lookup_for_send(scene, s_act);
+            let f_act: extern "C" fn(Id, Sel) -> isize = std::mem::transmute(d_act.imp);
+            assert_eq!(f_act(d_act.receiver, s_act), 0);
+
+            let sess = alloc(UISCENESESSION_CLASS.ptr());
+            let s_role = objc_rt::sel("role");
+            let d_role = pear_libobjc::message::lookup_for_send(sess, s_role);
+            let f_role: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_role.imp);
+            let role = f_role(d_role.receiver, s_role);
+            assert_eq!(
+                pear_foundation::rust_str_from_nsstring(role).as_deref(),
+                Some("UIWindowSceneSessionRoleApplication")
+            );
+
+            let win = alloc(UIWINDOW_CLASS.ptr());
+            let s_iws = objc_rt::sel("initWithWindowScene:");
+            let d_iws = pear_libobjc::message::lookup_for_send(win, s_iws);
+            let f_iws: extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(d_iws.imp);
+            assert_eq!(f_iws(d_iws.receiver, s_iws, scene), win);
         }
     }
 }
