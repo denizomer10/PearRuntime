@@ -184,6 +184,19 @@ unsafe extern "C" fn class_add_method(cls: *const ClassT, s: Sel, imp: Imp, _typ
     runtime::add_methods(cls, &[MethodDesc { name: s, types: _types, imp }]);
     true
 }
+unsafe extern "C" fn objc_read_class_pair(cls: *const ClassT, _info: *const c_void) -> *const ClassT {
+    if !cls.is_null() && runtime::class(cls).is_none() {
+        runtime::realize(cls);
+    }
+    cls
+}
+unsafe extern "C" fn objc_set_hook_get_class(new_hook: *const c_void, old_hook_out: *mut *const c_void) {
+    static HOOK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let prev = HOOK.swap(new_hook as usize, std::sync::atomic::Ordering::AcqRel);
+    if !old_hook_out.is_null() {
+        *old_hook_out = prev as *const c_void;
+    }
+}
 
 /// The address of a libobjc symbol (Mach-O name, with its `_`), for a
 /// pear-dyld resolver (and libclosure symbols imported from libSystem).
@@ -243,6 +256,8 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_objc_allocateClassPair" => f(reflection::objc_allocate_class_pair as *const ()),
         "_objc_initializeClassPair" => f(reflection::objc_initialize_class_pair as *const ()),
         "_objc_registerClassPair" => f(reflection::objc_register_class_pair as *const ()),
+        "_objc_readClassPair" => f(objc_read_class_pair as *const ()),
+        "_objc_setHook_getClass" => f(objc_set_hook_get_class as *const ()),
         "_object_getClass" => f(object_get_class as *const ()),
         "_object_setClass" => f(reflection::object_set_class as *const ()),
         "_object_getClassName" => f(reflection::object_get_class_name as *const ()),

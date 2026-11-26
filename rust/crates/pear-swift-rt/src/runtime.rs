@@ -1028,7 +1028,7 @@ pub fn runtime_symbol(name: &str) -> Option<usize> {
         "_swift_initStackObject" => f(swift_init_stack_object as *const ()),
         "_swift_initStaticObject" => f(swift_init_static_object as *const ()),
         "_swift_setDeallocating" => f(swift_set_deallocating as *const ()),
-        "_swift_slowAlloc" => f(swift_slow_alloc as *const ()),
+        "_swift_slowAlloc" | "_swift_coroFrameAlloc" => f(swift_slow_alloc as *const ()),
         "_swift_slowDealloc" => f(swift_slow_dealloc as *const ()),
         "_swift_allocBox" => f(swift_alloc_box as *const ()),
         "_swift_projectBox" => f(swift_project_box as *const ()),

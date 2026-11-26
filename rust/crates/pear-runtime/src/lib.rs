@@ -14,6 +14,10 @@ pub use pear_macho;
 pub use pear_metal_vk;
 pub use pear_swift_rt;
 
+pub mod accelerate;
+pub mod frameworks;
+pub mod security;
+
 #[cfg(target_os = "linux")]
 pub use pear_host_linux;
 
@@ -1615,7 +1619,7 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
             "UICollectionViewFlowLayout", "UIActivity", "UIAlertAction",
             "UIBarButtonItem", "UIBezierPath", "UIGraphicsImageRenderer",
             "UIGraphicsImageRendererFormat", "UILocalNotification", "UIPopoverController",
-            "UISceneConfiguration", "UIUserNotificationSettings",
+            "UIScene", "UISceneConfiguration", "UIUserNotificationSettings", "UIViewLayoutRegion",
             "NSLayoutManager", "NSMutableParagraphStyle", "NSTextAttachment",
             "NSTextContainer", "NSTextStorage",
             "WKWebViewConfiguration", "WKUserContentController", "WKUserScript",
@@ -1631,6 +1635,19 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
             "MPMediaItemArtwork", "MPMoviePlayerController", "MPNowPlayingInfoCenter", "MPRemoteCommandCenter",
             "JSContext", "JSValue", "SFSafariViewController", "ASIdentifierManager",
             "ASWebAuthenticationSession", "GKLocalPlayer", "SLComposeViewController",
+            // Photos, PhotosUI, CoreHaptics, AVFoundation, AuthenticationServices, GameController, MetalFX, MetricKit, CoreMotion, AdSupport/AdServices
+            "PHAsset", "PHAssetChangeRequest", "PHAssetCollection", "PHAssetCollectionChangeRequest",
+            "PHAssetResource", "PHAssetResourceManager", "PHFetchOptions", "PHImageManager",
+            "PHImageRequestOptions", "PHLivePhoto", "PHPhotoLibrary", "PHVideoRequestOptions",
+            "PHPickerConfiguration", "PHPickerFilter", "PHPickerViewController",
+            "CHHapticEngine", "CHHapticEvent", "CHHapticEventParameter", "CHHapticPattern",
+            "AVAssetImageGenerator", "AVCaptureDevice", "AVMutableAudioMix",
+            "AVMutableAudioMixInputParameters", "AVPlayerLayer",
+            "ASAuthorizationAppleIDCredential", "ASAuthorizationAppleIDProvider", "ASAuthorizationController",
+            "ATTrackingManager", "CMMotionManager", "AAAttribution",
+            "GCDualShockGamepad", "GCXboxGamepad", "UNLocationNotificationTrigger",
+            "MTLFXSpatialScalerDescriptor", "MTLFXTemporalScalerDescriptor",
+            "MXDiagnosticPayload", "MXMetricManager", "MXMetricPayload",
         ] {
             register_stub_class(name, ns_obj, 32);
         }
@@ -4773,6 +4790,7 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_OBJC_METACLASS_$_UIView" => Some(UIVIEW_META.ptr() as usize),
             "_OBJC_METACLASS_$_UIViewController" => Some(UIVIEWCONTROLLER_META.ptr() as usize),
             "_UIApplicationMain" => Some(ui_application_main as *const () as usize),
+            s if frameworks::uikit_ext_symbol(s).is_some() => frameworks::uikit_ext_symbol(s),
             s if s.starts_with("_UI") => Some(framework_const(Box::leak(s.to_string().into_boxed_str()))),
             _ => None,
         },
@@ -4783,19 +4801,22 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_OBJC_CLASS_$_SKPaymentQueue" => Some(SKPAYMENTQUEUE_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_SKStoreReviewController" => Some(SKSTOREREVIEWCONTROLLER_CLASS.ptr() as usize),
             "_SKErrorDomain" => Some(framework_const("SKErrorDomain")),
-            _ => None,
+            _ => frameworks::misc_framework_symbol(path, symbol),
         },
-        Some(path) if path.contains("AudioToolbox") => audiotoolbox_symbol(symbol),
-        Some(path) if path.contains("CFNetwork") => cfnetwork_symbol(symbol).or_else(|| pear_foundation::symbol(symbol)),
-        Some(path) if path.contains("Security") => match symbol {
-            "_SecItemCopyMatching" | "_SecItemAdd" | "_SecItemUpdate" | "_SecItemDelete" => {
-                Some(sec_item_not_found as *const () as usize)
-            }
-            "_SecKeyCreateWithData" => Some(ptr_null_stub as *const () as usize),
-            "_SecKeyVerifySignature" | "_SecTrustEvaluate" => Some(status_ok_stub as *const () as usize),
-            "_SecRandomCopyBytes" => Some(status_ok_stub as *const () as usize),
-            _ => None,
-        },
+        Some(path) if path.contains("AudioToolbox") => {
+            audiotoolbox_symbol(symbol).or_else(|| frameworks::audiotoolbox_ext_symbol(symbol))
+        }
+        Some(path) if path.contains("CFNetwork") => cfnetwork_symbol(symbol)
+            .or_else(|| frameworks::cfnetwork_ext_symbol(symbol))
+            .or_else(|| pear_foundation::symbol(symbol)),
+        Some(path) if path.contains("Network") => frameworks::network_symbol(symbol),
+        Some(path) if path.contains("Security") => security::symbol(symbol),
+        Some(path) if path.contains("Accelerate") => accelerate::symbol(symbol),
+        Some(path) if path.contains("ImageIO") => pear_graphics::imageio_symbol(symbol),
+        Some(path) if path.contains("CoreText") => pear_graphics::coretext_symbol(symbol),
+        Some(path) if path.contains("CoreServices") => frameworks::coreservices_symbol(symbol),
+        Some(path) if path.contains("VideoToolbox") => frameworks::videotoolbox_symbol(symbol),
+        Some(path) if path.contains("JavaScriptCore") => frameworks::jsc_symbol(symbol),
         Some(path) if path.contains("SystemConfiguration") => match symbol {
             "_SCNetworkReachabilityCreateWithName"
             | "_SCNetworkReachabilityCreateWithAddress" => Some(ptr_null_stub as *const () as usize),
@@ -4804,7 +4825,7 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             | "_SCNetworkReachabilityScheduleWithRunLoop"
             | "_SCNetworkReachabilityUnscheduleFromRunLoop"
             | "_SCNetworkReachabilitySetDispatchQueue" => Some(false_stub as *const () as usize),
-            _ => None,
+            _ => frameworks::misc_framework_symbol(path, symbol),
         },
         Some(path) if path.contains("GLKit") => match symbol {
             "_OBJC_CLASS_$_GLKView" => Some(GLKVIEW_CLASS.ptr() as usize),
@@ -4834,20 +4855,20 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_GCControllerDidDisconnectNotification" => Some(framework_const("GCControllerDidDisconnectNotification")),
             _ => None,
         },
-        Some(path) if path.contains("CoreMedia") => match symbol {
-            "_CMTimeMake" => Some(cm_time_make as *const () as usize),
-            "_CMTimeGetSeconds" => Some(cm_time_get_seconds as *const () as usize),
-            "_kCMTimeZero" => Some(&raw const K_CM_TIME_ZERO as usize),
-            _ => None,
-        },
-        Some(path) if path.contains("CoreVideo") => match symbol {
-            "_CVPixelBufferLockBaseAddress"
-            | "_CVPixelBufferUnlockBaseAddress"
-            | "_CVPixelBufferGetWidth"
-            | "_CVPixelBufferGetHeight" => Some(status_ok_stub as *const () as usize),
-            "_CVPixelBufferGetBaseAddress" => Some(ptr_null_stub as *const () as usize),
-            _ => None,
-        },
+        Some(path) if path.contains("CoreMedia") => frameworks::coremedia_symbol(symbol),
+        Some(path) if path.contains("CoreVideo") => frameworks::corevideo_symbol(symbol),
+        Some(path)
+            if path.contains("CoreTelephony")
+                || path.contains("MediaPlayer")
+                || path.contains("CoreHaptics")
+                || path.contains("AuthenticationServices")
+                || path.contains("CoreImage")
+                || path.contains("Photos")
+                || path.contains("GameKit")
+                || path.contains("WebKit") =>
+        {
+            frameworks::misc_framework_symbol(path, symbol)
+        }
         Some(path) if path.contains("OpenGLES") => match symbol {
             "_OBJC_CLASS_$_EAGLContext" => Some(EAGLCONTEXT_CLASS.ptr() as usize),
             "_kEAGLColorFormatRGBA8" => Some(framework_const("kEAGLColorFormatRGBA8")),
@@ -4867,6 +4888,13 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
     };
     if resolved.is_some() {
         return resolved;
+    }
+    static SWIFT_FORCE_LOAD_ANCHOR: usize = 0;
+    if symbol.starts_with("__swift_FORCE_LOAD_$_") {
+        return Some(&raw const SWIFT_FORCE_LOAD_ANCHOR as usize);
+    }
+    if symbol.starts_with("_$s") || symbol.starts_with("_$S") {
+        return pear_swift_rt::overlays::resolve_mangled_symbol(library, symbol);
     }
     if let Some(cls_name) = symbol.strip_prefix("_OBJC_CLASS_$_") {
         if let Some(cls) = objc_rt::class_named(cls_name) {
@@ -5356,6 +5384,96 @@ mod tests {
             let sys = apple_libcxx::chrono_system_now();
             let tt = apple_libcxx::chrono_to_time_t(&sys);
             assert_eq!(apple_libcxx::chrono_from_time_t(tt), (tt as i64) * 1_000_000);
+        }
+    }
+
+    #[test]
+    fn phase4_security_accelerate_cfnetwork_coremedia_and_corevideo_work() {
+        init();
+        unsafe {
+            // Security: Keychain Add -> CopyMatching -> Update -> Delete & SecRandomCopyBytes
+            let attrs = pear_foundation::nsdict_from_pairs(vec![
+                ("class".into(), pear_foundation::nsstring_from_rust("genp")),
+                ("svce".into(), pear_foundation::nsstring_from_rust("pear.test.svc")),
+                ("acct".into(), pear_foundation::nsstring_from_rust("player1")),
+                ("v_Data".into(), pear_foundation::nsdata_from_bytes(b"secret-token-1")),
+            ]);
+            let _ = security::sec_item_delete(attrs);
+            assert_eq!(security::sec_item_add(attrs, std::ptr::null_mut()), 0);
+
+            let query = pear_foundation::nsdict_from_pairs(vec![
+                ("class".into(), pear_foundation::nsstring_from_rust("genp")),
+                ("svce".into(), pear_foundation::nsstring_from_rust("pear.test.svc")),
+                ("acct".into(), pear_foundation::nsstring_from_rust("player1")),
+                ("r_Data".into(), 1usize as Id),
+            ]);
+            let mut out: Id = std::ptr::null_mut();
+            assert_eq!(security::sec_item_copy_matching(query, &mut out), 0);
+            assert_eq!(pear_foundation::rust_bytes_from_nsdata(out).as_deref(), Some(&b"secret-token-1"[..]));
+
+            let upd = pear_foundation::nsdict_from_pairs(vec![
+                ("v_Data".into(), pear_foundation::nsdata_from_bytes(b"secret-token-2")),
+            ]);
+            assert_eq!(security::sec_item_update(query, upd), 0);
+            assert_eq!(security::sec_item_copy_matching(query, &mut out), 0);
+            assert_eq!(pear_foundation::rust_bytes_from_nsdata(out).as_deref(), Some(&b"secret-token-2"[..]));
+            assert_eq!(security::sec_item_delete(query), 0);
+            assert_ne!(security::sec_item_copy_matching(query, &mut out), 0);
+
+            let mut rnd = [0u8; 32];
+            assert_eq!(security::sec_random_copy_bytes(std::ptr::null(), rnd.len(), rnd.as_mut_ptr()), 0);
+            assert!(rnd.iter().any(|&b| b != 0));
+
+            // Accelerate: vDSP + vvexpf
+            let a = [1.0f32, 2.0, 3.0];
+            let b = [4.0f32, 5.0, 6.0];
+            let mut dot = 0.0f32;
+            accelerate::vdsp_dotpr(a.as_ptr(), 1, b.as_ptr(), 1, &mut dot, 3);
+            assert!((dot - 32.0).abs() < 1e-5);
+            let mut maxv = 0.0f32;
+            accelerate::vdsp_maxv(b.as_ptr(), 1, &mut maxv, 3);
+            assert_eq!(maxv, 6.0);
+            let ma = [1.0f32, 2.0, 3.0, 4.0];
+            let mb = [5.0f32, 6.0, 7.0, 8.0];
+            let mut mc = [0.0f32; 4];
+            accelerate::vdsp_mmul(ma.as_ptr(), 1, mb.as_ptr(), 1, mc.as_mut_ptr(), 1, 2, 2, 2);
+            assert_eq!(mc, [19.0, 22.0, 43.0, 50.0]);
+            let mut ez = [0.0f32; 2];
+            let ex = [0.0f32, 1.0];
+            let en = 2i32;
+            accelerate::vvexpf(ez.as_mut_ptr(), ex.as_ptr(), &en);
+            assert!((ez[0] - 1.0).abs() < 1e-5 && (ez[1] - std::f32::consts::E).abs() < 1e-5);
+
+            // CFNetwork CFHTTPMessage + CoreMedia CMTime + CoreVideo CVPixelBuffer
+            let msg = frameworks::cf_http_msg_create_request(
+                std::ptr::null(),
+                pear_foundation::nsstring_from_rust("POST"),
+                pear_foundation::nsstring_from_rust("https://example.com/api"),
+                pear_foundation::nsstring_from_rust("HTTP/1.1"),
+            );
+            frameworks::cf_http_msg_set_header(
+                msg,
+                pear_foundation::nsstring_from_rust("Content-Type"),
+                pear_foundation::nsstring_from_rust("application/json"),
+            );
+            frameworks::cf_http_msg_set_body(msg, pear_foundation::nsdata_from_bytes(b"{}"));
+            let serialized = frameworks::cf_http_msg_copy_serialized(msg);
+            let raw = String::from_utf8(pear_foundation::rust_bytes_from_nsdata(serialized).unwrap()).unwrap();
+            assert!(raw.starts_with("POST https://example.com/api HTTP/1.1\r\n"));
+            assert!(raw.contains("Content-Type: application/json\r\n"));
+            assert!(raw.ends_with("\r\n\r\n{}"));
+
+            let t1 = frameworks::cm_time_make(30, 60);
+            let t2 = frameworks::cm_time_make(90, 60);
+            let sum = frameworks::cm_time_add(t1, t2);
+            assert!((frameworks::cm_time_get_seconds(sum) - 2.0).abs() < 1e-6);
+
+            let mut pb: *mut c_void = std::ptr::null_mut();
+            assert_eq!(frameworks::cv_pixel_buffer_create(std::ptr::null(), 16, 12, 0x42475241, std::ptr::null_mut(), &mut pb), 0);
+            assert_eq!(frameworks::cv_pb_get_width(pb), 16);
+            assert_eq!(frameworks::cv_pb_get_height(pb), 12);
+            assert!(!frameworks::cv_pb_get_base(pb).is_null());
+            frameworks::cv_pb_release(pb);
         }
     }
 }

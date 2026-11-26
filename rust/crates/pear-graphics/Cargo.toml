@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 pear-image = { path = "../pear-image" }
+pear-foundation = { path = "../pear-foundation" }

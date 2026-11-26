@@ -12,6 +12,8 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::sync::{Mutex, Once, OnceLock};
 
+mod cf_ext;
+
 macro_rules! foundation_class {
     ($cls:ident, $meta:ident) => {
         pub static $meta: StaticClass = StaticClass(UnsafeCell::new(ClassT {
@@ -207,6 +209,68 @@ pub fn rust_str_from_nsstring(obj: Id) -> Option<String> {
 pub fn nsstring_from_rust(s: &str) -> Id {
     init_foundation();
     unsafe { alloc_with_backing(NSSTRING_CLASS.ptr(), Backing::Str(s.to_string())) }
+}
+
+pub fn nsdata_from_bytes(bytes: &[u8]) -> Id {
+    init_foundation();
+    unsafe { alloc_with_backing(NSDATA_CLASS.ptr(), Backing::Bytes(bytes.to_vec())) }
+}
+
+pub fn rust_bytes_from_nsdata(obj: Id) -> Option<Vec<u8>> {
+    if obj.is_null() {
+        return None;
+    }
+    if let Some(Backing::Bytes(b)) = store().lock().unwrap().get(&(obj as usize)) {
+        return Some(b.clone());
+    }
+    None
+}
+
+pub fn nsdict_lookup_str(dict: Id, key: &str) -> Option<Id> {
+    if dict.is_null() {
+        return None;
+    }
+    if let Some(Backing::Dict(m)) = store().lock().unwrap().get(&(dict as usize)) {
+        return m.get(key).copied().map(|p| p as Id);
+    }
+    None
+}
+
+pub fn nsdict_from_pairs(pairs: Vec<(String, Id)>) -> Id {
+    init_foundation();
+    let map: HashMap<String, usize> = pairs.into_iter().map(|(k, v)| (k, v as usize)).collect();
+    unsafe { alloc_with_backing(NSDICTIONARY_CLASS.ptr(), Backing::Dict(map)) }
+}
+
+pub fn nsarray_from_ids(items: Vec<Id>) -> Id {
+    init_foundation();
+    let vec: Vec<usize> = items.into_iter().map(|p| p as usize).collect();
+    unsafe { alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(vec)) }
+}
+
+pub fn nsarray_ids(arr: Id) -> Option<Vec<Id>> {
+    if arr.is_null() {
+        return None;
+    }
+    if let Some(Backing::Arr(v)) = store().lock().unwrap().get(&(arr as usize)) {
+        return Some(v.iter().map(|&p| p as Id).collect());
+    }
+    None
+}
+
+pub fn nsdict_entries(dict: Id) -> Option<HashMap<String, Id>> {
+    if dict.is_null() {
+        return None;
+    }
+    if let Some(Backing::Dict(m)) = store().lock().unwrap().get(&(dict as usize)) {
+        return Some(m.iter().map(|(k, &v)| (k.clone(), v as Id)).collect());
+    }
+    None
+}
+
+pub fn const_nsstr_ptr(s: &'static str) -> usize {
+    init_foundation();
+    const_nsstr(s)
 }
 
 // ---- NSString / NSMutableString --------------------------------------------
@@ -3701,7 +3765,7 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_kCFRunLoopDefaultMode" => Some(const_nsstr("kCFRunLoopDefaultMode") as usize),
         "_kCFTypeArrayCallBacks" => Some(&raw const CF_CALLBACK_STUB as usize),
         "_kCFAbsoluteTimeIntervalSince1970" => Some(&raw const K_CF_ABS_TIME_1970 as usize),
-        _ => None,
+        _ => cf_ext::symbol(name),
     }
 }
 

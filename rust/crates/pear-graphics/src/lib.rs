@@ -4,6 +4,9 @@
 
 use std::ffi::c_void;
 
+mod cg_ext;
+pub use cg_ext::{coretext_symbol, imageio_symbol, CGAffineTransform, CG_AFFINE_TRANSFORM_IDENTITY};
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 pub struct CGColorRgba {
@@ -400,7 +403,7 @@ pub fn quartz_symbol(name: &str) -> Option<usize> {
         "_CATransform3DMakeTranslation" => f(ca_transform_3d_make_translation as *const ()),
         "_CATransform3DScale" => f(ca_transform_3d_scale as *const ()),
         "_CATransform3DTranslate" => f(ca_transform_3d_translate as *const ()),
-        _ => None,
+        _ => cg_ext::quartz_symbol_ext(name),
     }
 }
 
@@ -435,7 +438,7 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_CGImageGetWidth" => f(cg_image_get_width as *const ()),
         "_CGImageGetHeight" => f(cg_image_get_height as *const ()),
         "_CGImageRelease" => f(cg_image_release as *const ()),
-        _ => None,
+        _ => cg_ext::cg_symbol(name),
     }
 }
 
@@ -508,5 +511,41 @@ mod tests {
         c.draw_text("HI!", 2, 2, 2);
         let inked = c.rgba.chunks_exact(4).filter(|p| p[1] == 255).count();
         assert!(inked > 40);
+    }
+
+    #[test]
+    fn cg_affine_and_bitmap_context_work() {
+        let t = cg_ext::cg_affine_concat(
+            cg_ext::cg_affine_make_scale(2.0, 3.0),
+            cg_ext::cg_affine_make_translation(10.0, 20.0),
+        );
+        let r = cg_ext::cg_rect_apply_affine(
+            CGRect {
+                origin: CGPoint { x: 1.0, y: 2.0 },
+                size: CGSize { width: 4.0, height: 5.0 },
+            },
+            t,
+        );
+        assert_eq!(r.origin, CGPoint { x: 12.0, y: 26.0 });
+        assert_eq!(r.size, CGSize { width: 8.0, height: 15.0 });
+
+        let ctx = cg_ext::cg_bitmap_context_create(std::ptr::null_mut(), 8, 8, 8, 32, std::ptr::null_mut(), 0);
+        let red = cg_color_create_srgb(1.0, 0.0, 0.0, 1.0);
+        unsafe {
+            cg_ext::cg_context_set_fill_color(ctx, red);
+            cg_ext::cg_context_fill_rect(
+                ctx,
+                CGRect {
+                    origin: CGPoint { x: 1.0, y: 1.0 },
+                    size: CGSize { width: 2.0, height: 2.0 },
+                },
+            );
+            let img = cg_ext::cg_bitmap_context_create_image(ctx);
+            assert_eq!(cg_image_get_width(img), 8);
+            assert_eq!(cg_image_get_height(img), 8);
+            cg_image_release(img);
+            cg_color_release(red);
+        }
+        cg_ext::cg_context_release(ctx);
     }
 }
