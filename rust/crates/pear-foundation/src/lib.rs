@@ -2121,6 +2121,12 @@ extern "C" fn bundle_url_for_res_in_dir(_this: Id, _: Sel, name: Id, ext: Id, di
 extern "C" fn bundle_paths_for_res(_this: Id, _: Sel, _ext: Id, _dir: Id) -> Id {
     unsafe { alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(Vec::new())) }
 }
+extern "C" fn bundle_class_named(_this: Id, _: Sel, name: Id) -> Id {
+    let Some(s) = rust_str_from_nsstring(name) else {
+        return std::ptr::null_mut();
+    };
+    runtime::class_named(&s).unwrap_or(std::ptr::null()) as Id
+}
 extern "C" fn nc_remove_obs(_this: Id, _: Sel, _obs: Id) {}
 extern "C" fn nc_remove_obs_name_obj(_this: Id, _: Sel, _obs: Id, _name: Id, _obj: Id) {}
 extern "C" fn nc_post_no_info(this: Id, _: Sel, name: Id, obj: Id) {
@@ -2197,7 +2203,7 @@ extern "C" fn rl_main(_cls: Id, _: Sel) -> Id {
     r
 }
 extern "C" fn rl_run_mode(_this: Id, _: Sel, _mode: Id, _date: Id) -> bool {
-    false
+    pear_libobjc::object::drain_delayed_performs() > 0
 }
 
 extern "C" fn date_now(cls: Id, _: Sel) -> Id {
@@ -2756,6 +2762,7 @@ pub fn init_foundation() {
                 ("URLForResource:withExtension:", i(bundle_url_for_res as *const ())),
                 ("URLForResource:withExtension:subdirectory:", i(bundle_url_for_res_in_dir as *const ())),
                 ("pathsForResourcesOfType:inDirectory:", i(bundle_paths_for_res as *const ())),
+                ("classNamed:", i(bundle_class_named as *const ())),
                 ("load", i(ret_true_fn as *const ())),
                 ("isLoaded", i(ret_true_fn as *const ())),
                 ("unload", i(ret_true_fn as *const ())),

@@ -78,6 +78,11 @@ pub fn init_runtime() {
                 ("zone", i(m_null as *const ())),
                 ("performSelector:", i(m_perform as *const ())),
                 ("performSelector:withObject:", i(m_perform_with as *const ())),
+                ("performSelector:withObject:afterDelay:", i(m_perform_after_delay as *const ())),
+                ("performSelector:withObject:afterDelay:inModes:", i(m_perform_after_delay_modes as *const ())),
+                ("performSelectorOnMainThread:withObject:waitUntilDone:", i(m_perform_on_main as *const ())),
+                ("performSelectorOnMainThread:withObject:waitUntilDone:modes:", i(m_perform_on_main_modes as *const ())),
+                ("performSelectorInBackground:withObject:", i(m_perform_in_bg as *const ())),
                 ("copy", i(m_copy as *const ())),
                 ("mutableCopy", i(m_mutable_copy as *const ())),
                 ("methodForSelector:", i(m_method_for as *const ())),
@@ -97,6 +102,8 @@ pub fn init_runtime() {
                 ("isSubclassOfClass:", i(c_is_subclass as *const ())),
                 ("resolveInstanceMethod:", i(c_resolve as *const ())),
                 ("resolveClassMethod:", i(c_resolve as *const ())),
+                ("cancelPreviousPerformRequestsWithTarget:", i(c_cancel_performs_target as *const ())),
+                ("cancelPreviousPerformRequestsWithTarget:selector:object:", i(c_cancel_performs_sel as *const ())),
             ],
         );
     });
@@ -188,11 +195,173 @@ extern "C" fn m_perform(this: Id, _: Sel, s: Sel) -> Id {
     unsafe { send0(this, s) }
 }
 extern "C" fn m_perform_with(this: Id, _: Sel, s: Sel, arg: Id) -> Id {
+    if this.is_null() || s.is_null() {
+        return std::ptr::null_mut();
+    }
     unsafe {
         let d = crate::message::lookup_for_send(this, s);
         let f: extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(d.imp);
         f(d.receiver, s, arg)
     }
+}
+
+struct DelayedPerform {
+    fire_at: std::time::Instant,
+    target: usize,
+    selector: usize,
+    arg: usize,
+}
+
+static DELAYED_PERFORMS: OnceLock<Mutex<Vec<DelayedPerform>>> = OnceLock::new();
+
+fn delayed_queue() -> &'static Mutex<Vec<DelayedPerform>> {
+    DELAYED_PERFORMS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+pub fn schedule_delayed_perform(target: Id, selector: Sel, arg: Id, delay_secs: f64) {
+    if target.is_null() || selector.is_null() {
+        return;
+    }
+    retain(target);
+    if !arg.is_null() {
+        retain(arg);
+    }
+    let clamped = if delay_secs.is_finite() && delay_secs > 0.0 {
+        delay_secs.min(86_400.0)
+    } else {
+        0.0
+    };
+    let fire_at = std::time::Instant::now() + std::time::Duration::from_secs_f64(clamped);
+    delayed_queue().lock().unwrap().push(DelayedPerform {
+        fire_at,
+        target: target as usize,
+        selector: selector as usize,
+        arg: arg as usize,
+    });
+}
+
+pub fn drain_delayed_performs() -> usize {
+    let now = std::time::Instant::now();
+    let due: Vec<DelayedPerform> = {
+        let mut q = delayed_queue().lock().unwrap();
+        let mut ready = Vec::new();
+        let mut pending = Vec::with_capacity(q.len());
+        for item in q.drain(..) {
+            if item.fire_at <= now {
+                ready.push(item);
+            } else {
+                pending.push(item);
+            }
+        }
+        *q = pending;
+        ready
+    };
+    let count = due.len();
+    for item in due {
+        let target = item.target as Id;
+        let s = item.selector as Sel;
+        let arg = item.arg as Id;
+        let _ = m_perform_with(target, s, s, arg);
+        if !arg.is_null() {
+            release(arg);
+        }
+        release(target);
+    }
+    count
+}
+
+pub fn cancel_delayed_performs(target: Id, selector: Sel, arg: Id) {
+    if target.is_null() {
+        return;
+    }
+    let removed: Vec<DelayedPerform> = {
+        let mut q = delayed_queue().lock().unwrap();
+        let mut keep = Vec::with_capacity(q.len());
+        let mut cancelled = Vec::new();
+        for item in q.drain(..) {
+            let match_target = item.target == target as usize;
+            let match_sel = selector.is_null() || item.selector == selector as usize;
+            let match_arg = arg.is_null() || item.arg == arg as usize;
+            if match_target && match_sel && match_arg {
+                cancelled.push(item);
+            } else {
+                keep.push(item);
+            }
+        }
+        *q = keep;
+        cancelled
+    };
+    for item in removed {
+        if item.arg != 0 {
+            release(item.arg as Id);
+        }
+        release(item.target as Id);
+    }
+}
+
+extern "C" fn m_perform_after_delay(this: Id, _: Sel, s: Sel, arg: Id, delay: f64) {
+    schedule_delayed_perform(this, s, arg, delay);
+}
+
+extern "C" fn m_perform_after_delay_modes(
+    this: Id,
+    _: Sel,
+    s: Sel,
+    arg: Id,
+    delay: f64,
+    _modes: Id,
+) {
+    schedule_delayed_perform(this, s, arg, delay);
+}
+
+extern "C" fn m_perform_on_main(this: Id, _: Sel, s: Sel, arg: Id, wait: bool) {
+    if wait {
+        let _ = m_perform_with(this, s, s, arg);
+    } else {
+        schedule_delayed_perform(this, s, arg, 0.0);
+    }
+}
+
+extern "C" fn m_perform_on_main_modes(
+    this: Id,
+    cmd: Sel,
+    s: Sel,
+    arg: Id,
+    wait: bool,
+    _modes: Id,
+) {
+    m_perform_on_main(this, cmd, s, arg, wait);
+}
+
+extern "C" fn m_perform_in_bg(this: Id, _: Sel, s: Sel, arg: Id) {
+    if this.is_null() || s.is_null() {
+        return;
+    }
+    retain(this);
+    if !arg.is_null() {
+        retain(arg);
+    }
+    let t = this as usize;
+    let sl = s as usize;
+    let a = arg as usize;
+    std::thread::spawn(move || {
+        let target = t as Id;
+        let sel_id = sl as Sel;
+        let arg_id = a as Id;
+        let _ = m_perform_with(target, sel_id, sel_id, arg_id);
+        if !arg_id.is_null() {
+            release(arg_id);
+        }
+        release(target);
+    });
+}
+
+extern "C" fn c_cancel_performs_target(_cls: Id, _: Sel, target: Id) {
+    cancel_delayed_performs(target, std::ptr::null(), std::ptr::null_mut());
+}
+
+extern "C" fn c_cancel_performs_sel(_cls: Id, _: Sel, target: Id, s: Sel, arg: Id) {
+    cancel_delayed_performs(target, s, arg);
 }
 extern "C" fn m_copy(this: Id, _: Sel) -> Id {
     unsafe {
@@ -457,5 +626,94 @@ pub fn pool_pop(token: *mut c_void) {
             Some(POOL_BOUNDARY) => continue,
             Some(obj) => release(obj as Id),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static DP_TEST_META: StaticClass = StaticClass(UnsafeCell::new(ClassT {
+        isa: &raw const NSOBJECT_META as *const ClassT,
+        superclass: &raw const NSOBJECT_META as *const ClassT,
+        cache: &raw const EMPTY_CACHE as *const c_void,
+        vtable: std::ptr::null(),
+        bits: 0,
+    }));
+    static DP_TEST_CLASS: StaticClass = StaticClass(UnsafeCell::new(ClassT {
+        isa: &raw const DP_TEST_META as *const ClassT,
+        superclass: &raw const NSOBJECT_CLASS as *const ClassT,
+        cache: &raw const EMPTY_CACHE as *const c_void,
+        vtable: std::ptr::null(),
+        bits: 0,
+    }));
+
+    static INC_COUNT: AtomicUsize = AtomicUsize::new(0);
+    static OTHER_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn test_inc(this: Id, _: Sel, _: Id) -> Id {
+        INC_COUNT.fetch_add(1, Ordering::SeqCst);
+        this
+    }
+    extern "C" fn test_other(this: Id, _: Sel, _: Id) -> Id {
+        OTHER_COUNT.fetch_add(1, Ordering::SeqCst);
+        this
+    }
+    extern "C" fn test_reentrant(this: Id, _: Sel, arg: Id) -> Id {
+        schedule_delayed_perform(this, sel("testInc:"), arg, 0.0);
+        this
+    }
+
+    #[test]
+    fn delayed_perform_drain_reentrant_and_cancel_work() {
+        init_runtime();
+        let i = |p: *const ()| p as Imp;
+        runtime::register_builtin(
+            DP_TEST_CLASS.ptr(),
+            DP_TEST_META.ptr(),
+            "PearDelayedPerformTestTarget",
+            16,
+            &[
+                ("testInc:", i(test_inc as *const ())),
+                ("testOther:", i(test_other as *const ())),
+                ("testReentrant:", i(test_reentrant as *const ())),
+            ],
+            &[],
+        );
+        let target = unsafe { alloc(DP_TEST_CLASS.ptr()) };
+        cancel_delayed_performs(target, std::ptr::null(), std::ptr::null_mut());
+        INC_COUNT.store(0, Ordering::SeqCst);
+        OTHER_COUNT.store(0, Ordering::SeqCst);
+
+        // Basic schedule + drain
+        schedule_delayed_perform(target, sel("testInc:"), std::ptr::null_mut(), 0.0);
+        assert!(drain_delayed_performs() >= 1);
+        assert_eq!(INC_COUNT.load(Ordering::SeqCst), 1);
+
+        // Re-entrant schedule inside drain must not deadlock and runs on the following drain
+        schedule_delayed_perform(target, sel("testReentrant:"), std::ptr::null_mut(), 0.0);
+        assert!(drain_delayed_performs() >= 1);
+        assert_eq!(INC_COUNT.load(Ordering::SeqCst), 1);
+        assert!(drain_delayed_performs() >= 1);
+        assert_eq!(INC_COUNT.load(Ordering::SeqCst), 2);
+
+        // Cancel specific selector preserves other selector
+        schedule_delayed_perform(target, sel("testInc:"), std::ptr::null_mut(), 0.0);
+        schedule_delayed_perform(target, sel("testOther:"), std::ptr::null_mut(), 0.0);
+        cancel_delayed_performs(target, sel("testInc:"), std::ptr::null_mut());
+        assert!(drain_delayed_performs() >= 1);
+        assert_eq!(INC_COUNT.load(Ordering::SeqCst), 2);
+        assert_eq!(OTHER_COUNT.load(Ordering::SeqCst), 1);
+
+        // Cancel all performs for target
+        schedule_delayed_perform(target, sel("testInc:"), std::ptr::null_mut(), 0.0);
+        schedule_delayed_perform(target, sel("testOther:"), std::ptr::null_mut(), 0.0);
+        cancel_delayed_performs(target, std::ptr::null(), std::ptr::null_mut());
+        assert_eq!(drain_delayed_performs(), 0);
+        assert_eq!(INC_COUNT.load(Ordering::SeqCst), 2);
+        assert_eq!(OTHER_COUNT.load(Ordering::SeqCst), 1);
+
+        release(target);
     }
 }

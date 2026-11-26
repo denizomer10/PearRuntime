@@ -96,6 +96,9 @@ guest_class!(UIPASTEBOARD_CLASS, UIPASTEBOARD_META);
 guest_class!(UIWINDOWSCENE_CLASS, UIWINDOWSCENE_META);
 guest_class!(UITOUCH_CLASS, UITOUCH_META);
 guest_class!(UIEVENT_CLASS, UIEVENT_META);
+guest_class!(UIVIEWLAYOUTREGION_CLASS, UIVIEWLAYOUTREGION_META);
+guest_class!(UILAYOUTGUIDE_CLASS, UILAYOUTGUIDE_META);
+guest_class!(UISCREENMODE_CLASS, UISCREENMODE_META);
 guest_class!(AVAUDIOSESSION_CLASS, AVAUDIOSESSION_META);
 guest_class!(AVAUDIOSESSIONROUTEDESCRIPTION_CLASS, AVAUDIOSESSIONROUTEDESCRIPTION_META);
 guest_class!(AVAUDIOPLAYER_CLASS, AVAUDIOPLAYER_META);
@@ -137,6 +140,44 @@ extern "C" fn app_begin_bg_task2(
 extern "C" fn main_screen_stub(_self: Id, _cmd: Sel) -> Id {
     static SCR: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *SCR.get_or_init(|| unsafe { alloc(UISCREEN_CLASS.ptr()) } as usize) as Id
+}
+
+fn nsarray_with_object(obj: Id) -> Id {
+    unsafe {
+        let cls = objc_rt::class_named("NSArray").unwrap_or(std::ptr::null());
+        if cls.is_null() {
+            return std::ptr::null_mut();
+        }
+        let s = objc_rt::sel("arrayWithObject:");
+        let d = pear_libobjc::message::lookup_for_send(cls as Id, s);
+        let f: extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(d.imp);
+        f(d.receiver, s, obj)
+    }
+}
+
+extern "C" fn screen_screens_stub(_self: Id, _cmd: Sel) -> Id {
+    nsarray_with_object(main_screen_stub(std::ptr::null_mut(), std::ptr::null()))
+}
+
+extern "C" fn screen_current_mode(_self: Id, _cmd: Sel) -> Id {
+    static MODE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| unsafe { alloc(UISCREENMODE_CLASS.ptr()) } as usize) as Id
+}
+
+extern "C" fn screen_available_modes(_self: Id, _cmd: Sel) -> Id {
+    nsarray_with_object(screen_current_mode(std::ptr::null_mut(), std::ptr::null()))
+}
+
+extern "C" fn screen_mode_size(_self: Id, _cmd: Sel) -> pear_graphics::CGSize {
+    let s = pear_host::host().screen();
+    pear_graphics::CGSize {
+        width: s.points.width * s.scale,
+        height: s.points.height * s.scale,
+    }
+}
+
+extern "C" fn screen_mode_aspect(_self: Id, _cmd: Sel) -> f64 {
+    1.0
 }
 
 extern "C" fn screen_scale_stub(_self: Id, _cmd: Sel) -> f64 {
@@ -492,12 +533,25 @@ extern "C" fn uiview_bounds(_self: Id, _cmd: Sel) -> pear_graphics::CGRect {
     screen_bounds(_self, _cmd)
 }
 extern "C" fn uiview_layer(self_obj: Id, _cmd: Sel) -> Id {
+    if self_obj.is_null() {
+        return std::ptr::null_mut();
+    }
     let mut g = VIEW_LAYERS.lock().unwrap();
     let map = g.get_or_insert_with(std::collections::HashMap::new);
     if let Some(&layer) = map.get(&(self_obj as usize)) {
         return layer as Id;
     }
-    let layer = unsafe { alloc(CAEAGLLAYER_CLASS.ptr()) };
+    let cls = unsafe { objc_rt::object_class(self_obj) };
+    let layer_cls = if !cls.is_null() {
+        let s_lc = objc_rt::sel("layerClass");
+        let d = pear_libobjc::message::lookup_for_send(cls as Id, s_lc);
+        let f: unsafe extern "C" fn(Id, Sel) -> Id = unsafe { std::mem::transmute(d.imp) };
+        let res = unsafe { f(d.receiver, s_lc) } as *const ClassT;
+        if res.is_null() { CAEAGLLAYER_CLASS.ptr() } else { res }
+    } else {
+        CAEAGLLAYER_CLASS.ptr()
+    };
+    let layer = unsafe { alloc(layer_cls) };
     map.insert(self_obj as usize, layer as usize);
     layer
 }
@@ -699,6 +753,11 @@ extern "C" fn pump_display_links() {
     }
 }
 
+extern "C" fn pump_frame() {
+    let _ = pear_libobjc::object::drain_delayed_performs();
+    pump_display_links();
+}
+
 extern "C" fn noop_method(_self: Id, _cmd: Sel) {}
 
 extern "C" fn ui_application_main(
@@ -714,7 +773,7 @@ extern "C" fn ui_application_main(
     };
     eprintln!("[PearRuntime][boot] UIApplicationMain delegate={delegate_name:?}");
     #[cfg(target_os = "linux")]
-    pear_host_linux::set_frame_tick(pump_display_links);
+    pear_host_linux::set_frame_tick(pump_frame);
     pear_host::host().run(Box::new(move || {
         if let Some(name) = delegate_name {
             if let Some(cls) = objc_rt::class_named(&name) {
@@ -737,6 +796,32 @@ extern "C" fn ui_application_main(
                         let d_act = pear_libobjc::message::lookup_for_send(del, sel_active);
                         let f_act: extern "C" fn(Id, Sel, Id) = std::mem::transmute(d_act.imp);
                         f_act(d_act.receiver, sel_active, app);
+                    }
+                    let headless = cfg!(not(target_os = "linux"))
+                        || std::env::var("PEAR_HEADLESS").as_deref() == Ok("1");
+                    if headless {
+                        let max_frames: usize = std::env::var("PEAR_HEADLESS_FRAMES")
+                            .ok()
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(3);
+                        for frame in 0..max_frames {
+                            let fired = pear_libobjc::object::drain_delayed_performs();
+                            pump_display_links();
+                            if frame == 0 && fired > 0 {
+                                eprintln!(
+                                    "[PearRuntime][boot] pumped frame {frame} (delayed_performs={fired})"
+                                );
+                            }
+                            let has_links = DISPLAY_LINKS
+                                .lock()
+                                .unwrap()
+                                .as_ref()
+                                .is_some_and(|m| !m.is_empty());
+                            if fired == 0 && !has_links {
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(16));
+                        }
                     }
                 }
             } else {
@@ -1106,8 +1191,28 @@ fn init_guest_frameworks() {
                 ("applicationFrame", i(screen_bounds as *const ())),
                 ("maximumFramesPerSecond", i(screen_max_fps as *const ())),
                 ("brightness", i(screen_brightness as *const ())),
+                ("preferredMode", i(screen_current_mode as *const ())),
+                ("currentMode", i(screen_current_mode as *const ())),
+                ("setCurrentMode:", i(app_noop1 as *const ())),
+                ("availableModes", i(screen_available_modes as *const ())),
+                ("overscanCompensation", i(app_state as *const ())),
+                ("setOverscanCompensation:", i(app_noop1 as *const ())),
             ],
-            &[("mainScreen", i(main_screen_stub as *const ()))],
+            &[
+                ("mainScreen", i(main_screen_stub as *const ())),
+                ("screens", i(screen_screens_stub as *const ())),
+            ],
+        );
+        objc_rt::register_builtin(
+            UISCREENMODE_CLASS.ptr(),
+            UISCREENMODE_META.ptr(),
+            "UIScreenMode",
+            16,
+            &[
+                ("size", i(screen_mode_size as *const ())),
+                ("pixelAspectRatio", i(screen_mode_aspect as *const ())),
+            ],
+            &[],
         );
         objc_rt::register_builtin(
             UIDEVICE_CLASS.ptr(),
@@ -1186,6 +1291,7 @@ fn init_guest_frameworks() {
                 ("setExclusiveTouch:", i(app_noop1 as *const ())),
                 ("setIsAccessibilityElement:", i(app_noop1 as *const ())),
                 ("setAccessibilityTraits:", i(app_noop1 as *const ())),
+                ("layoutGuideForLayoutRegion:", i(uiview_layout_guide as *const ())),
                 ("removeFromSuperview", i(uiview_remove_from_superview as *const ())),
                 ("touchesBegan:withEvent:", i(touches_noop as *const ())),
                 ("touchesMoved:withEvent:", i(touches_noop as *const ())),
@@ -1308,6 +1414,26 @@ fn init_guest_frameworks() {
             &[],
         );
         objc_rt::register_builtin(
+            UILAYOUTGUIDE_CLASS.ptr(),
+            UILAYOUTGUIDE_META.ptr(),
+            "UILayoutGuide",
+            32,
+            &[
+                ("layoutFrame", i(uiview_bounds as *const ())),
+                ("owningView", i(uivc_nil as *const ())),
+                ("identifier", i(uivc_nil as *const ())),
+            ],
+            &[],
+        );
+        objc_rt::register_builtin(
+            UIVIEWLAYOUTREGION_CLASS.ptr(),
+            UIVIEWLAYOUTREGION_META.ptr(),
+            "UIViewLayoutRegion",
+            16,
+            &[],
+            &[("marginsLayoutRegionWithCornerAdaptation:", i(ret_alloc1 as *const ()))],
+        );
+        objc_rt::register_builtin(
             CALAYER_CLASS.ptr(),
             CALAYER_META.ptr(),
             "CALayer",
@@ -1414,6 +1540,12 @@ fn init_guest_frameworks() {
         );
 extern "C" fn ret_self1(self_obj: Id, _cmd: Sel, _arg: Id) -> Id {
     self_obj
+}
+extern "C" fn uiview_layout_guide(_self_obj: Id, _cmd: Sel, _region: Id) -> Id {
+    unsafe { alloc(UILAYOUTGUIDE_CLASS.ptr()) }
+}
+extern "C" fn ret_alloc1(cls: Id, _cmd: Sel, _arg: Id) -> Id {
+    unsafe { alloc(cls as *const ClassT) }
 }
 extern "C" fn ret_singleton(cls: Id, _cmd: Sel) -> Id {
     unsafe { alloc(cls as *const ClassT) }
@@ -2315,6 +2447,69 @@ fn libc_dlsym(macho_sym: &str) -> Option<usize> {
     let default_handle = std::ptr::null_mut();
     let ptr = unsafe { dlsym(default_handle, cstr.as_ptr()) };
     if ptr.is_null() { None } else { Some(ptr as usize) }
+}
+
+const GUEST_DL_FLAT_HANDLE: usize = 0x5045_4152_0000_0001;
+static DLOPEN_HANDLES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<usize, String>>> =
+    std::sync::LazyLock::new(Default::default);
+static NEXT_DL_HANDLE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0x5045_4152_0000_0100);
+
+extern "C" fn guest_dlopen(path: *const c_char, mode: i32) -> *mut c_void {
+    if path.is_null() {
+        return GUEST_DL_FLAT_HANDLE as *mut c_void;
+    }
+    let s = unsafe { std::ffi::CStr::from_ptr(path) }.to_string_lossy().into_owned();
+    let is_apple_fw = s.starts_with("/System/Library/")
+        || s.starts_with("/usr/lib/")
+        || s.contains(".framework/");
+    if is_apple_fw {
+        let h = NEXT_DL_HANDLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        DLOPEN_HANDLES.lock().unwrap().insert(h, s);
+        return h as *mut c_void;
+    }
+    unsafe { dlopen(path, mode) }
+}
+
+extern "C" fn guest_dlsym(handle: *mut c_void, sym: *const c_char) -> *mut c_void {
+    if sym.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Ok(name) = (unsafe { std::ffi::CStr::from_ptr(sym) }).to_str() else {
+        return std::ptr::null_mut();
+    };
+    let macho_sym = format!("_{name}");
+    let h_val = handle as usize;
+    let lib_hint = DLOPEN_HANDLES.lock().unwrap().get(&h_val).cloned();
+    if let Some(ref lib) = lib_hint {
+        if let Some(addr) = resolve_symbol(Some(lib), &macho_sym) {
+            return addr as *mut c_void;
+        }
+    }
+    if h_val == GUEST_DL_FLAT_HANDLE || h_val == (-2isize as usize) || h_val == 0 || lib_hint.is_some() {
+        if let Some(addr) = pear_metal_vk::symbol(&macho_sym)
+            .or_else(|| resolve_symbol(Some("/System/Library/Frameworks/Foundation.framework/Foundation"), &macho_sym))
+            .or_else(|| resolve_symbol(Some("/System/Library/Frameworks/UIKit.framework/UIKit"), &macho_sym))
+            .or_else(|| resolve_symbol(Some("/System/Library/Frameworks/Security.framework/Security"), &macho_sym))
+            .or_else(|| resolve_symbol(Some("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"), &macho_sym))
+            .or_else(|| resolve_symbol(Some("/System/Library/Frameworks/QuartzCore.framework/QuartzCore"), &macho_sym))
+            .or_else(|| resolve_symbol(None, &macho_sym))
+        {
+            return addr as *mut c_void;
+        }
+    }
+    if lib_hint.is_some() || h_val == GUEST_DL_FLAT_HANDLE {
+        return std::ptr::null_mut();
+    }
+    unsafe { dlsym(handle, sym) }
+}
+
+extern "C" fn guest_dlclose(handle: *mut c_void) -> i32 {
+    let h_val = handle as usize;
+    if h_val == GUEST_DL_FLAT_HANDLE || DLOPEN_HANDLES.lock().unwrap().remove(&h_val).is_some() {
+        return 0;
+    }
+    0
 }
 
 extern "C" fn ca_current_media_time() -> f64 {
@@ -4984,6 +5179,9 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_strlcat" => Some(strlcat_impl as *const () as usize),
             "___strlcat_chk" => Some(strlcat_chk as *const () as usize),
             "_realpath$DARWIN_EXTSN" => libc_dlsym("_realpath"),
+            "_dlopen" => Some(guest_dlopen as *const () as usize),
+            "_dlsym" => Some(guest_dlsym as *const () as usize),
+            "_dlclose" => Some(guest_dlclose as *const () as usize),
             "_dladdr" => Some(guest_dladdr as *const () as usize),
             "__tlv_atexit" => Some(dispatch_noop_2 as *const () as usize),
             "___sincosf_stret" => Some(sincosf_stret as *const () as usize),
@@ -5277,6 +5475,7 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_OBJC_CLASS_$_UIWindowScene" => Some(UIWINDOWSCENE_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UITouch" => Some(UITOUCH_CLASS.ptr() as usize),
             "_OBJC_CLASS_$_UIEvent" => Some(UIEVENT_CLASS.ptr() as usize),
+            "_OBJC_CLASS_$_UIViewLayoutRegion" => Some(UIVIEWLAYOUTREGION_CLASS.ptr() as usize),
             "_NSStringFromCGRect" => Some(ns_string_from_cgrect as *const () as usize),
             "_NSStringFromCGSize" => Some(ns_string_from_cgsize as *const () as usize),
             "_NSStringFromCGPoint" => Some(ns_string_from_cgpoint as *const () as usize),
@@ -6053,6 +6252,76 @@ mod tests {
             let f_out: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_out.imp);
             let outs = f_out(d_out.receiver, s_out);
             assert!(!outs.is_null());
+        }
+    }
+
+    #[test]
+    fn phase5_3_layer_class_screens_and_dlsym() {
+        init();
+        guest_class!(TEST_METAL_VIEW_CLASS, TEST_METAL_VIEW_META);
+        extern "C" fn test_metal_layer_class(_cls: Id, _cmd: Sel) -> Id {
+            CAMETALLAYER_CLASS.ptr() as Id
+        }
+        objc_rt::register_builtin(
+            TEST_METAL_VIEW_CLASS.ptr(),
+            TEST_METAL_VIEW_META.ptr(),
+            "PearTestMetalView",
+            64,
+            &[],
+            &[("layerClass", test_metal_layer_class as *const () as Imp)],
+        );
+
+        unsafe {
+            // UIView.layer invokes +[cls layerClass]
+            let metal_view = alloc(TEST_METAL_VIEW_CLASS.ptr());
+            let metal_layer = uiview_layer(metal_view, objc_rt::sel("layer"));
+            assert!(!metal_layer.is_null());
+            assert_eq!(objc_rt::object_class(metal_layer), CAMETALLAYER_CLASS.ptr());
+
+            let plain_view = alloc(UIVIEW_CLASS.ptr());
+            let eagl_layer = uiview_layer(plain_view, objc_rt::sel("layer"));
+            assert!(!eagl_layer.is_null());
+            assert_eq!(objc_rt::object_class(eagl_layer), CAEAGLLAYER_CLASS.ptr());
+
+            // +[UIScreen screens] and -[UIScreen currentMode]
+            let scr_cls = objc_rt::class_named("UIScreen").unwrap() as Id;
+            let s_main = objc_rt::sel("mainScreen");
+            let d_main = pear_libobjc::message::lookup_for_send(scr_cls, s_main);
+            let f_main: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_main.imp);
+            let main_scr = f_main(d_main.receiver, s_main);
+            assert!(!main_scr.is_null());
+
+            let s_screens = objc_rt::sel("screens");
+            let d_screens = pear_libobjc::message::lookup_for_send(scr_cls, s_screens);
+            let f_screens: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_screens.imp);
+            let screens = f_screens(d_screens.receiver, s_screens);
+            assert!(!screens.is_null());
+            let s_count = objc_rt::sel("count");
+            let d_count = pear_libobjc::message::lookup_for_send(screens, s_count);
+            let f_count: extern "C" fn(Id, Sel) -> usize = std::mem::transmute(d_count.imp);
+            assert_eq!(f_count(d_count.receiver, s_count), 1);
+            let s_obj_at = objc_rt::sel("objectAtIndex:");
+            let d_obj_at = pear_libobjc::message::lookup_for_send(screens, s_obj_at);
+            let f_obj_at: extern "C" fn(Id, Sel, usize) -> Id = std::mem::transmute(d_obj_at.imp);
+            assert_eq!(f_obj_at(d_obj_at.receiver, s_obj_at, 0), main_scr);
+
+            let s_mode = objc_rt::sel("currentMode");
+            let d_mode = pear_libobjc::message::lookup_for_send(main_scr, s_mode);
+            let f_mode: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_mode.imp);
+            let mode = f_mode(d_mode.receiver, s_mode);
+            assert!(!mode.is_null());
+            let s_size = objc_rt::sel("size");
+            let d_size = pear_libobjc::message::lookup_for_send(mode, s_size);
+            let f_size: extern "C" fn(Id, Sel) -> pear_graphics::CGSize = std::mem::transmute(d_size.imp);
+            let sz = f_size(d_size.receiver, s_size);
+            assert!(sz.width > 0.0 && sz.height > 0.0);
+
+            // guest_dlopen + guest_dlsym resolve Metal framework symbol cleanly
+            let h = guest_dlopen(c"/System/Library/Frameworks/Metal.framework/Metal".as_ptr(), 0);
+            assert!(!h.is_null());
+            let sym = guest_dlsym(h, c"MTLCreateSystemDefaultDevice".as_ptr());
+            assert_eq!(sym, pear_metal_vk::create_system_default_device as *mut c_void);
+            assert_eq!(guest_dlclose(h), 0);
         }
     }
 }
