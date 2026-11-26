@@ -370,32 +370,304 @@ extern "C" fn str_init_with_string(this: Id, _: Sel, other: Id) -> Id {
     unsafe { alloc_with_backing(if this.is_null() { NSSTRING_CLASS.ptr() } else { *(this as *const *const ClassT) }, Backing::Str(s)) }
 }
 
-/// Safe `stringWithFormat:` / `initWithFormat:`: preserves format string safely
-/// without dereferencing unaligned Apple-ARM64 stack varargs on Linux AAPCS64.
-extern "C" fn str_with_format(cls: Id, _: Sel, fmt: Id) -> Id {
-    let s = rust_str_from_nsstring(fmt).unwrap_or_default();
-    unsafe { alloc_with_backing(cls as *const ClassT, Backing::Str(s)) }
+pub(crate) unsafe fn format_nsstring_slots(fmt: &str, mut ap: *const u64) -> String {
+    let bytes = fmt.as_bytes();
+    let mut out = String::with_capacity(bytes.len() + 16);
+    let mut pop = || -> Option<u64> {
+        if ap.is_null() {
+            return None;
+        }
+        let v = *ap;
+        ap = ap.add(1);
+        Some(v)
+    };
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'%' {
+            let start = i;
+            while i < bytes.len() && bytes[i] != b'%' {
+                i += 1;
+            }
+            out.push_str(&String::from_utf8_lossy(&bytes[start..i]));
+            continue;
+        }
+        let pct_start = i;
+        i += 1;
+        if i < bytes.len() && bytes[i] == b'%' {
+            out.push('%');
+            i += 1;
+            continue;
+        }
+        let mut zero_pad = false;
+        let mut left_align = false;
+        while i < bytes.len() && matches!(bytes[i], b'-' | b'+' | b' ' | b'#' | b'0') {
+            if bytes[i] == b'0' {
+                zero_pad = true;
+            } else if bytes[i] == b'-' {
+                left_align = true;
+            }
+            i += 1;
+        }
+        let mut width: Option<usize> = None;
+        if i < bytes.len() && bytes[i] == b'*' {
+            i += 1;
+            if let Some(w) = pop() {
+                let wi = w as i32;
+                if wi < 0 {
+                    left_align = true;
+                    width = Some((-wi) as usize);
+                } else {
+                    width = Some(wi as usize);
+                }
+            }
+        } else {
+            let w_start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i > w_start {
+                width = std::str::from_utf8(&bytes[w_start..i]).ok().and_then(|s| s.parse().ok());
+            }
+        }
+        let mut prec: Option<usize> = None;
+        if i < bytes.len() && bytes[i] == b'.' {
+            i += 1;
+            if i < bytes.len() && bytes[i] == b'*' {
+                i += 1;
+                prec = pop().map(|v| (v as i32).max(0) as usize);
+            } else {
+                let p_start = i;
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+                prec = Some(
+                    std::str::from_utf8(&bytes[p_start..i])
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0),
+                );
+            }
+        }
+        let mut is_long = false;
+        while i < bytes.len() && matches!(bytes[i], b'h' | b'l' | b'z' | b't' | b'q' | b'j') {
+            if matches!(bytes[i], b'l' | b'z' | b't' | b'q' | b'j') {
+                is_long = true;
+            }
+            i += 1;
+        }
+        if i >= bytes.len() {
+            out.push_str(&String::from_utf8_lossy(&bytes[pct_start..]));
+            break;
+        }
+        let conv = bytes[i];
+        i += 1;
+        let Some(slot) = pop() else {
+            out.push_str(&String::from_utf8_lossy(&bytes[pct_start..i]));
+            continue;
+        };
+        let rendered = match conv {
+            b'@' => {
+                let obj = slot as Id;
+                if obj.is_null() {
+                    "(null)".to_string()
+                } else if let Some(s) = rust_str_from_nsstring(obj) {
+                    s
+                } else {
+                    let extra = match store().lock().unwrap().get(&(obj as usize)) {
+                        Some(Backing::NumI64(n)) => Some(n.to_string()),
+                        Some(Backing::NumF64(f)) => Some(f.to_string()),
+                        Some(Backing::NumBool(b)) => Some(if *b { "1" } else { "0" }.to_string()),
+                        Some(Backing::Dict(m)) => Some(format!("<NSDictionary len={}>", m.len())),
+                        Some(Backing::Arr(v)) => Some(format!("<NSArray len={}>", v.len())),
+                        _ => None,
+                    };
+                    extra.unwrap_or_else(|| format!("<0x{:x}>", obj as usize))
+                }
+            }
+            b's' => {
+                let ptr = slot as *const c_char;
+                if ptr.is_null() {
+                    "(null)".to_string()
+                } else {
+                    let mut raw = CStr::from_ptr(ptr).to_bytes();
+                    if let Some(p) = prec {
+                        if raw.len() > p {
+                            raw = &raw[..p];
+                        }
+                    }
+                    String::from_utf8_lossy(raw).into_owned()
+                }
+            }
+            b'd' | b'i' => {
+                let val = if is_long { slot as i64 } else { (slot as i32) as i64 };
+                if let Some(w) = width {
+                    if zero_pad && !left_align {
+                        format!("{val:0w$}")
+                    } else {
+                        val.to_string()
+                    }
+                } else {
+                    val.to_string()
+                }
+            }
+            b'u' => {
+                let val = if is_long { slot } else { (slot as u32) as u64 };
+                if let Some(w) = width {
+                    if zero_pad && !left_align {
+                        format!("{val:0w$}")
+                    } else {
+                        val.to_string()
+                    }
+                } else {
+                    val.to_string()
+                }
+            }
+            b'x' => {
+                let val = if is_long { slot } else { (slot as u32) as u64 };
+                if let Some(w) = width {
+                    if zero_pad && !left_align {
+                        format!("{val:0w$x}")
+                    } else {
+                        format!("{val:x}")
+                    }
+                } else {
+                    format!("{val:x}")
+                }
+            }
+            b'X' => {
+                let val = if is_long { slot } else { (slot as u32) as u64 };
+                if let Some(w) = width {
+                    if zero_pad && !left_align {
+                        format!("{val:0w$X}")
+                    } else {
+                        format!("{val:X}")
+                    }
+                } else {
+                    format!("{val:X}")
+                }
+            }
+            b'o' => {
+                let val = if is_long { slot } else { (slot as u32) as u64 };
+                format!("{val:o}")
+            }
+            b'p' => format!("0x{slot:x}"),
+            b'c' => char::from_u32((slot as u8) as u32).unwrap_or('?').to_string(),
+            b'f' | b'F' | b'e' | b'E' | b'g' | b'G' => {
+                let val = f64::from_bits(slot);
+                if let Some(p) = prec {
+                    format!("{val:.p$}")
+                } else {
+                    format!("{val}")
+                }
+            }
+            b'n' => continue,
+            _ => String::from_utf8_lossy(&bytes[pct_start..i]).into_owned(),
+        };
+        if let Some(w) = width {
+            if rendered.len() < w && !(zero_pad && matches!(conv, b'd' | b'i' | b'u' | b'x' | b'X')) {
+                let pad = w - rendered.len();
+                if left_align {
+                    out.push_str(&rendered);
+                    for _ in 0..pad {
+                        out.push(' ');
+                    }
+                    continue;
+                }
+                let ch = if zero_pad { '0' } else { ' ' };
+                for _ in 0..pad {
+                    out.push(ch);
+                }
+            }
+        }
+        out.push_str(&rendered);
+    }
+    out
 }
 
-extern "C" fn str_init_with_format(_this: Id, _: Sel, fmt: Id) -> Id {
-    let s = rust_str_from_nsstring(fmt).unwrap_or_default();
-    nsstring_from_rust(&s)
+extern "C" fn str_with_format_va(cls: Id, _: Sel, fmt: Id, ap: *const u64) -> Id {
+    let raw = rust_str_from_nsstring(fmt).unwrap_or_default();
+    let formatted = unsafe { format_nsstring_slots(&raw, ap) };
+    unsafe { alloc_with_backing(cls as *const ClassT, Backing::Str(formatted)) }
 }
 
-extern "C" fn str_init_with_format_args(_this: Id, _: Sel, fmt: Id, _args: *const c_void) -> Id {
-    let s = rust_str_from_nsstring(fmt).unwrap_or_default();
-    nsstring_from_rust(&s)
+extern "C" fn str_init_with_format_va(this: Id, _: Sel, fmt: Id, ap: *const u64) -> Id {
+    let raw = rust_str_from_nsstring(fmt).unwrap_or_default();
+    let formatted = unsafe { format_nsstring_slots(&raw, ap) };
+    let cls = unsafe { if this.is_null() { NSSTRING_CLASS.ptr() } else { *(this as *const *const ClassT) } };
+    unsafe { alloc_with_backing(cls, Backing::Str(formatted)) }
+}
+
+extern "C" fn str_by_appending_format_va(this: Id, _: Sel, fmt: Id, ap: *const u64) -> Id {
+    let base = rust_str_from_nsstring(this).unwrap_or_default();
+    let raw = rust_str_from_nsstring(fmt).unwrap_or_default();
+    let tail = unsafe { format_nsstring_slots(&raw, ap) };
+    nsstring_from_rust(&format!("{base}{tail}"))
+}
+
+extern "C" fn mstr_append_format_va(this: Id, _: Sel, fmt: Id, ap: *const u64) {
+    let raw = rust_str_from_nsstring(fmt).unwrap_or_default();
+    let tail = unsafe { format_nsstring_slots(&raw, ap) };
+    if let Some(Backing::Str(s)) = store().lock().unwrap().get_mut(&(this as usize)) {
+        s.push_str(&tail);
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[unsafe(naked)]
+extern "C" fn str_with_format(_cls: Id, _cmd: Sel, _fmt: Id) -> Id {
+    core::arch::naked_asm!("mov x3, sp", "b {dst}", dst = sym str_with_format_va);
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+extern "C" fn str_with_format(cls: Id, sel_id: Sel, fmt: Id) -> Id {
+    str_with_format_va(cls, sel_id, fmt, std::ptr::null())
+}
+
+#[cfg(target_arch = "aarch64")]
+#[unsafe(naked)]
+extern "C" fn str_init_with_format(_this: Id, _cmd: Sel, _fmt: Id) -> Id {
+    core::arch::naked_asm!("mov x3, sp", "b {dst}", dst = sym str_init_with_format_va);
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+extern "C" fn str_init_with_format(this: Id, sel_id: Sel, fmt: Id) -> Id {
+    str_init_with_format_va(this, sel_id, fmt, std::ptr::null())
+}
+
+#[cfg(target_arch = "aarch64")]
+#[unsafe(naked)]
+extern "C" fn str_by_appending_format(_this: Id, _cmd: Sel, _fmt: Id) -> Id {
+    core::arch::naked_asm!("mov x3, sp", "b {dst}", dst = sym str_by_appending_format_va);
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+extern "C" fn str_by_appending_format(this: Id, sel_id: Sel, fmt: Id) -> Id {
+    str_by_appending_format_va(this, sel_id, fmt, std::ptr::null())
+}
+
+#[cfg(target_arch = "aarch64")]
+#[unsafe(naked)]
+extern "C" fn mstr_append_format(_this: Id, _cmd: Sel, _fmt: Id) {
+    core::arch::naked_asm!("mov x3, sp", "b {dst}", dst = sym mstr_append_format_va);
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+extern "C" fn mstr_append_format(this: Id, sel_id: Sel, fmt: Id) {
+    mstr_append_format_va(this, sel_id, fmt, std::ptr::null());
+}
+
+extern "C" fn str_init_with_format_args(this: Id, _: Sel, fmt: Id, args: *const c_void) -> Id {
+    str_init_with_format_va(this, sel("initWithFormat:"), fmt, args as *const u64)
 }
 
 extern "C" fn str_init_with_format_loc_args(
-    _this: Id,
+    this: Id,
     _: Sel,
     fmt: Id,
     _loc: Id,
-    _args: *const c_void,
+    args: *const c_void,
 ) -> Id {
-    let s = rust_str_from_nsstring(fmt).unwrap_or_default();
-    nsstring_from_rust(&s)
+    str_init_with_format_va(this, sel("initWithFormat:"), fmt, args as *const u64)
 }
 
 extern "C" fn str_has_prefix(this: Id, _: Sel, prefix: Id) -> bool {
@@ -1756,10 +2028,14 @@ extern "C" fn bundle_main(_cls: Id, _: Sel) -> Id {
     b
 }
 fn bundle_base_dir() -> String {
-    std::env::var("PEAR_BUNDLE_PATH")
+    let raw = std::env::var("PEAR_BUNDLE_PATH")
         .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().to_string_lossy().into_owned())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().to_string_lossy().into_owned());
+    std::fs::canonicalize(&raw)
+        .unwrap_or_else(|_| std::path::PathBuf::from(raw))
+        .to_string_lossy()
+        .into_owned()
 }
 extern "C" fn bundle_path(_this: Id, _: Sel) -> Id {
     nsstring_from_rust(&bundle_base_dir())
@@ -2045,6 +2321,8 @@ pub fn init_foundation() {
                 ("stringByExpandingTildeInPath", i(str_expand_tilde as *const ())),
                 ("initWithCString:encoding:", i(str_init_cstring_enc as *const ())),
                 ("initWithData:encoding:", i(str_init_data_enc as *const ())),
+                ("initWithBytes:length:encoding:", i(str_init_bytes_enc as *const ())),
+                ("initWithBytesNoCopy:length:encoding:freeWhenDone:", i(str_init_bytes_nocopy_enc as *const ())),
                 ("length", i(str_length as *const ())),
                 ("characterAtIndex:", i(str_char_at as *const ())),
                 ("getCharacters:range:", i(str_get_chars as *const ())),
@@ -2061,6 +2339,8 @@ pub fn init_foundation() {
                 ("getCharacters:range:", i(str_get_chars as *const ())),
                 ("dataUsingEncoding:allowLossyConversion:", i(str_data_lossy as *const ())),
                 ("stringByAppendingString:", i(str_append_str as *const ())),
+                ("stringByAppendingFormat:", i(str_by_appending_format as *const ())),
+                ("appendFormat:", i(mstr_append_format as *const ())),
                 ("stringByAppendingPathComponent:", i(str_append_path as *const ())),
                 ("pathComponents", i(str_path_components as *const ())),
                 ("lastPathComponent", i(str_last_path_comp as *const ())),
@@ -2127,6 +2407,8 @@ pub fn init_foundation() {
                 ("stringByExpandingTildeInPath", i(str_expand_tilde as *const ())),
                 ("initWithCString:encoding:", i(str_init_cstring_enc as *const ())),
                 ("initWithData:encoding:", i(str_init_data_enc as *const ())),
+                ("initWithBytes:length:encoding:", i(str_init_bytes_enc as *const ())),
+                ("initWithBytesNoCopy:length:encoding:freeWhenDone:", i(str_init_bytes_nocopy_enc as *const ())),
                 ("length", i(str_length as *const ())),
                 ("characterAtIndex:", i(str_char_at as *const ())),
                 ("getCharacters:range:", i(str_get_chars as *const ())),
@@ -2143,6 +2425,8 @@ pub fn init_foundation() {
                 ("getCharacters:range:", i(str_get_chars as *const ())),
                 ("dataUsingEncoding:allowLossyConversion:", i(str_data_lossy as *const ())),
                 ("stringByAppendingString:", i(str_append_str as *const ())),
+                ("stringByAppendingFormat:", i(str_by_appending_format as *const ())),
+                ("appendFormat:", i(mstr_append_format as *const ())),
                 ("stringByAppendingPathComponent:", i(str_append_path as *const ())),
                 ("pathComponents", i(str_path_components as *const ())),
                 ("lastPathComponent", i(str_last_path_comp as *const ())),
@@ -2472,6 +2756,9 @@ pub fn init_foundation() {
                 ("URLForResource:withExtension:", i(bundle_url_for_res as *const ())),
                 ("URLForResource:withExtension:subdirectory:", i(bundle_url_for_res_in_dir as *const ())),
                 ("pathsForResourcesOfType:inDirectory:", i(bundle_paths_for_res as *const ())),
+                ("load", i(ret_true_fn as *const ())),
+                ("isLoaded", i(ret_true_fn as *const ())),
+                ("unload", i(ret_true_fn as *const ())),
             ],
             &[
                 ("mainBundle", i(bundle_main as *const ())),
@@ -2557,6 +2844,7 @@ pub fn init_foundation() {
                 ("contentsOfDirectoryAtPath:error:", i(fm_contents_of_dir as *const ())),
                 ("attributesOfItemAtPath:error:", i(fm_attributes_of_item as *const ())),
                 ("URLsForDirectory:inDomains:", i(fm_urls_for_dir as *const ())),
+                ("temporaryDirectory", i(fm_temp_dir as *const ())),
             ],
             &[("defaultManager", i(fm_default as *const ()))],
         );
@@ -2581,6 +2869,8 @@ pub fn init_foundation() {
                 ("URLByDeletingPathExtension", i(url_del_ext as *const ())),
                 ("isFileURL", i(url_is_file as *const ())),
                 ("checkResourceIsReachableAndReturnError:", i(url_check_reachable as *const ())),
+                ("getResourceValue:forKey:error:", i(url_get_resource_val as *const ())),
+                ("setResourceValue:forKey:error:", i(url_set_resource_val as *const ())),
                 ("scheme", i(url_scheme as *const ())),
                 ("host", i(url_host as *const ())),
                 ("query", i(url_query as *const ())),
@@ -2658,10 +2948,12 @@ pub fn init_foundation() {
             16,
             &[
                 ("objectForKey:", i(ud_obj_for_key as *const ())),
+                ("valueForKey:", i(ud_obj_for_key as *const ())),
                 ("stringForKey:", i(ud_string_for_key as *const ())),
                 ("boolForKey:", i(ud_bool_for_key as *const ())),
                 ("integerForKey:", i(ud_int_for_key as *const ())),
                 ("setObject:forKey:", i(ud_set_obj_for_key as *const ())),
+                ("setValue:forKey:", i(ud_set_obj_for_key as *const ())),
                 ("synchronize", i(ud_sync as *const ())),
             ],
             &[("standardUserDefaults", i(ud_standard as *const ()))],
@@ -2684,6 +2976,13 @@ pub fn init_foundation() {
             16,
             &[
                 ("characterIsMember:", i(cs_char_is_member as *const ())),
+                ("invertedSet", i(cs_inverted_set as *const ())),
+                ("mutableCopy", i(cs_mutable_copy as *const ())),
+                ("mutableCopyWithZone:", i(cs_mutable_copy_zone as *const ())),
+                ("copyWithZone:", i(cs_mutable_copy_zone as *const ())),
+                ("addCharactersInString:", i(cs_add_chars as *const ())),
+                ("removeCharactersInString:", i(cs_remove_chars as *const ())),
+                ("formUnionWithCharacterSet:", i(cs_form_union as *const ())),
                 ("dealloc", i(f_dealloc as *const ())),
             ],
             &[
@@ -2691,6 +2990,17 @@ pub fn init_foundation() {
                 ("whitespaceAndNewlineCharacterSet", i(cs_ws_nl as *const ())),
                 ("decimalDigitCharacterSet", i(cs_digits as *const ())),
                 ("alphanumericCharacterSet", i(cs_alnum as *const ())),
+                ("controlCharacterSet", i(cs_control as *const ())),
+                ("newlineCharacterSet", i(cs_newline as *const ())),
+                ("letterCharacterSet", i(cs_letter as *const ())),
+                ("punctuationCharacterSet", i(cs_punct as *const ())),
+                ("characterSetWithCharactersInString:", i(cs_with_string as *const ())),
+                ("URLQueryAllowedCharacterSet", i(cs_url_query as *const ())),
+                ("URLPathAllowedCharacterSet", i(cs_url_path as *const ())),
+                ("URLHostAllowedCharacterSet", i(cs_url_host as *const ())),
+                ("URLFragmentAllowedCharacterSet", i(cs_url_query as *const ())),
+                ("URLUserAllowedCharacterSet", i(cs_url_host as *const ())),
+                ("URLPasswordAllowedCharacterSet", i(cs_url_host as *const ())),
             ],
         );
         runtime::register_builtin(
@@ -2855,6 +3165,23 @@ pub fn init_foundation() {
                 ("setHTTPAdditionalHeaders:", i(noop_arg1 as *const ())),
                 ("setRequestCachePolicy:", i(noop_arg1 as *const ())),
                 ("setURLCache:", i(noop_arg1 as *const ())),
+                ("setAllowsCellularAccess:", i(noop_arg1 as *const ())),
+                ("allowsCellularAccess", i(ret_true_fn as *const ())),
+                ("setSessionSendsLaunchEvents:", i(noop_arg1 as *const ())),
+                ("sessionSendsLaunchEvents", i(ret_false as *const ())),
+                ("setHTTPShouldUsePipelining:", i(noop_arg1 as *const ())),
+                ("HTTPShouldUsePipelining", i(ret_false as *const ())),
+                ("setHTTPMaximumConnectionsPerHost:", i(noop_arg1 as *const ())),
+                ("HTTPMaximumConnectionsPerHost", i(ret_one_isize as *const ())),
+                ("setDiscretionary:", i(noop_arg1 as *const ())),
+                ("isDiscretionary", i(ret_false as *const ())),
+                ("setHTTPShouldSetCookies:", i(noop_arg1 as *const ())),
+                ("setHTTPCookieAcceptPolicy:", i(noop_arg1 as *const ())),
+                ("setHTTPCookieStorage:", i(noop_arg1 as *const ())),
+                ("setTLSMinimumSupportedProtocol:", i(noop_arg1 as *const ())),
+                ("setTLSMaximumSupportedProtocol:", i(noop_arg1 as *const ())),
+                ("setConnectionProxyDictionary:", i(noop_arg1 as *const ())),
+                ("setProtocolClasses:", i(noop_arg1 as *const ())),
                 ("dealloc", i(f_dealloc as *const ())),
             ],
             &[
@@ -3010,6 +3337,7 @@ extern "C" fn noop_f64(_self: Id, _cmd: Sel, _arg: f64) {}
 extern "C" fn ret_one_isize(_self: Id, _cmd: Sel) -> isize { 1 }
 extern "C" fn ret_one_f64(_self: Id, _cmd: Sel) -> f64 { 0.5 }
 extern "C" fn ret_false(_self: Id, _cmd: Sel) -> bool { false }
+extern "C" fn ret_true_fn(_self: Id, _cmd: Sel) -> bool { true }
 extern "C" fn empty_arr_obj(_self: Id, _cmd: Sel) -> Id {
     unsafe { alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(Vec::new())) }
 }
@@ -3141,6 +3469,30 @@ extern "C" fn url_check_reachable(self_: Id, _cmd: Sel, _err: *mut Id) -> bool {
     std::path::Path::new(path).exists()
 }
 
+extern "C" fn url_get_resource_val(
+    _self: Id,
+    _cmd: Sel,
+    out_val: *mut Id,
+    _key: Id,
+    _err: *mut Id,
+) -> bool {
+    if !out_val.is_null() {
+        let num = unsafe { alloc_with_backing(NSNUMBER_CLASS.ptr(), Backing::NumBool(false)) };
+        unsafe { *out_val = num };
+    }
+    true
+}
+
+extern "C" fn url_set_resource_val(
+    _self: Id,
+    _cmd: Sel,
+    _val: Id,
+    _key: Id,
+    _err: *mut Id,
+) -> bool {
+    true
+}
+
 extern "C" fn url_scheme(self_: Id, _cmd: Sel) -> Id {
     let s = rust_str_from_nsstring(self_).unwrap_or_default();
     if let Some((sch, _)) = s.split_once("://") {
@@ -3223,6 +3575,51 @@ extern "C" fn str_init_data_enc(this: Id, _sel: Sel, data: Id, _enc: usize) -> I
     let s = String::from_utf8_lossy(&bytes).into_owned();
     let cls = unsafe { if this.is_null() { NSSTRING_CLASS.ptr() } else { *(this as *const *const ClassT) } };
     unsafe { alloc_with_backing(cls, Backing::Str(s)) }
+}
+
+extern "C" fn str_init_bytes_enc(
+    this: Id,
+    _sel: Sel,
+    bytes: *const u8,
+    len: usize,
+    encoding: usize,
+) -> Id {
+    let raw = if !bytes.is_null() && len > 0 {
+        unsafe { std::slice::from_raw_parts(bytes, len) }
+    } else {
+        &[]
+    };
+    let s = match encoding {
+        10 | 0x9400_0100 => {
+            let units: Vec<u16> = raw
+                .chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            String::from_utf16_lossy(&units)
+        }
+        0x9000_0100 => {
+            let units: Vec<u16> = raw
+                .chunks_exact(2)
+                .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                .collect();
+            String::from_utf16_lossy(&units)
+        }
+        5 => raw.iter().map(|&b| b as char).collect(),
+        _ => String::from_utf8_lossy(raw).into_owned(),
+    };
+    let cls = unsafe { if this.is_null() { NSSTRING_CLASS.ptr() } else { *(this as *const *const ClassT) } };
+    unsafe { alloc_with_backing(cls, Backing::Str(s)) }
+}
+
+extern "C" fn str_init_bytes_nocopy_enc(
+    this: Id,
+    cmd: Sel,
+    bytes: *const u8,
+    len: usize,
+    encoding: usize,
+    _free_when_done: bool,
+) -> Id {
+    str_init_bytes_enc(this, cmd, bytes, len, encoding)
 }
 
 extern "C" fn set_empty(_self: Id, _cmd: Sel) -> Id {
@@ -3493,24 +3890,36 @@ extern "C" fn fm_attributes_of_item(_self: Id, _cmd: Sel, path: Id, _err: *mut I
     unsafe { alloc_with_backing(NSDICTIONARY_CLASS.ptr(), Backing::Dict(map)) }
 }
 
-extern "C" fn fm_urls_for_dir(_self: Id, _cmd: Sel, dir: usize, _mask: usize) -> Id {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+fn pear_container_dir(dir: usize) -> String {
+    let base = std::env::var("PEAR_CONTAINER_DIR").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        if cfg!(target_os = "macos") {
+            format!("{home}/Library/Application Support/PearRuntime/Container")
+        } else {
+            format!("{home}/.local/share/PearRuntime/Container")
+        }
+    });
     let sub = match dir {
+        5 => "Library",
         9 => "Documents",
         13 => "Library/Caches",
-        5 => "Library",
         14 => "Library/Application Support",
-        _ => "",
+        _ => "Documents",
     };
-    let full = if sub.is_empty() {
-        home
-    } else {
-        let p = format!("{home}/{sub}");
-        let _ = std::fs::create_dir_all(&p);
-        p
-    };
+    let full = format!("{base}/{sub}");
+    let _ = std::fs::create_dir_all(&full);
+    full
+}
+
+extern "C" fn fm_urls_for_dir(_self: Id, _cmd: Sel, dir: usize, _mask: usize) -> Id {
+    let full = pear_container_dir(dir);
     let u = unsafe { alloc_with_backing(NSURL_CLASS.ptr(), Backing::Str(full)) };
     unsafe { alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(vec![retain(u) as usize])) }
+}
+
+extern "C" fn fm_temp_dir(_self: Id, _cmd: Sel) -> Id {
+    let tmp = std::env::temp_dir().to_string_lossy().into_owned();
+    unsafe { alloc_with_backing(NSURL_CLASS.ptr(), Backing::Str(tmp)) }
 }
 
 extern "C" fn fm_create_dir(_self: Id, _cmd: Sel, path: Id, inter: bool, _attr: Id, _err: *mut Id) -> bool {
@@ -3553,12 +3962,11 @@ pub extern "C" fn ns_temporary_directory() -> Id {
 }
 
 pub extern "C" fn ns_search_path_for_directories_in_domains(
-    _dir: usize,
+    dir: usize,
     _domain_mask: usize,
     _expand_tilde: bool,
 ) -> Id {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let s = nsstring_from_rust(&home);
+    let s = nsstring_from_rust(&pear_container_dir(dir));
     unsafe { alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(vec![retain(s) as usize])) }
 }
 
@@ -3578,10 +3986,22 @@ pub unsafe extern "C" fn ns_string_from_selector(s: Sel) -> Id {
     nsstring_from_rust(&name)
 }
 
-pub unsafe extern "C" fn ns_log(fmt: Id) {
-    if let Some(s) = rust_str_from_nsstring(fmt) {
-        eprintln!("[NSLog] {s}");
+extern "C" fn ns_log_va(fmt: Id, ap: *const u64) {
+    if let Some(raw) = rust_str_from_nsstring(fmt) {
+        let formatted = unsafe { format_nsstring_slots(&raw, ap) };
+        eprintln!("[NSLog] {formatted}");
     }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[unsafe(naked)]
+pub unsafe extern "C" fn ns_log(_fmt: Id) {
+    core::arch::naked_asm!("mov x1, sp", "b {dst}", dst = sym ns_log_va);
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+pub unsafe extern "C" fn ns_log(fmt: Id) {
+    ns_log_va(fmt, std::ptr::null());
 }
 
 fn boxed_objc_slot(obj: usize) -> usize {
@@ -3953,6 +4373,8 @@ extern "C" fn json_encode(_self: Id, _cmd: Sel, obj: Id, _opts: usize, _err: *mu
     unsafe { alloc_with_backing(NSDATA_CLASS.ptr(), Backing::Bytes(out.into_bytes())) }
 }
 
+const CS_INV_PREFIX: &str = "\x00INV:";
+
 extern "C" fn cs_ws(_self: Id, _cmd: Sel) -> Id {
     unsafe { alloc_with_backing(NSCHARACTERSET_CLASS.ptr(), Backing::Str(" \t".into())) }
 }
@@ -3965,9 +4387,80 @@ extern "C" fn cs_digits(_self: Id, _cmd: Sel) -> Id {
 extern "C" fn cs_alnum(_self: Id, _cmd: Sel) -> Id {
     unsafe { alloc_with_backing(NSCHARACTERSET_CLASS.ptr(), Backing::Str("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".into())) }
 }
+extern "C" fn cs_control(_self: Id, _cmd: Sel) -> Id {
+    let s: String = (0u8..32).map(|b| b as char).collect();
+    unsafe { alloc_with_backing(NSCHARACTERSET_CLASS.ptr(), Backing::Str(s)) }
+}
+extern "C" fn cs_newline(_self: Id, _cmd: Sel) -> Id {
+    unsafe { alloc_with_backing(NSCHARACTERSET_CLASS.ptr(), Backing::Str("\n\r".into())) }
+}
+extern "C" fn cs_letter(_self: Id, _cmd: Sel) -> Id {
+    unsafe { alloc_with_backing(NSCHARACTERSET_CLASS.ptr(), Backing::Str("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".into())) }
+}
+extern "C" fn cs_punct(_self: Id, _cmd: Sel) -> Id {
+    unsafe { alloc_with_backing(NSCHARACTERSET_CLASS.ptr(), Backing::Str("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~".into())) }
+}
+extern "C" fn cs_url_query(_self: Id, _cmd: Sel) -> Id {
+    unsafe { alloc_with_backing(NSCHARACTERSET_CLASS.ptr(), Backing::Str("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-._~!$&'()*+,;=:/?@".into())) }
+}
+extern "C" fn cs_url_path(_self: Id, _cmd: Sel) -> Id {
+    unsafe { alloc_with_backing(NSCHARACTERSET_CLASS.ptr(), Backing::Str("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-._~!$&'()*+,;=:@/".into())) }
+}
+extern "C" fn cs_url_host(_self: Id, _cmd: Sel) -> Id {
+    unsafe { alloc_with_backing(NSCHARACTERSET_CLASS.ptr(), Backing::Str("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-._~!$&'()*+,;=:[]".into())) }
+}
+extern "C" fn cs_with_string(_self: Id, _cmd: Sel, chars: Id) -> Id {
+    let s = rust_str_from_nsstring(chars).unwrap_or_default();
+    unsafe { alloc_with_backing(NSCHARACTERSET_CLASS.ptr(), Backing::Str(s)) }
+}
+extern "C" fn cs_inverted_set(this: Id, _cmd: Sel) -> Id {
+    let s = rust_str_from_nsstring(this).unwrap_or_default();
+    let inv = if let Some(rest) = s.strip_prefix(CS_INV_PREFIX) {
+        rest.to_string()
+    } else {
+        format!("{CS_INV_PREFIX}{s}")
+    };
+    unsafe { alloc_with_backing(NSCHARACTERSET_CLASS.ptr(), Backing::Str(inv)) }
+}
+extern "C" fn cs_mutable_copy(this: Id, _cmd: Sel) -> Id {
+    let s = rust_str_from_nsstring(this).unwrap_or_default();
+    unsafe { alloc_with_backing(NSCHARACTERSET_CLASS.ptr(), Backing::Str(s)) }
+}
+extern "C" fn cs_mutable_copy_zone(this: Id, cmd: Sel, _zone: *mut c_void) -> Id {
+    cs_mutable_copy(this, cmd)
+}
+extern "C" fn cs_add_chars(this: Id, _cmd: Sel, chars: Id) {
+    let add = rust_str_from_nsstring(chars).unwrap_or_default();
+    if let Some(Backing::Str(s)) = store().lock().unwrap().get_mut(&(this as usize)) {
+        s.push_str(&add);
+    }
+}
+extern "C" fn cs_remove_chars(this: Id, _cmd: Sel, chars: Id) {
+    let rem = rust_str_from_nsstring(chars).unwrap_or_default();
+    if let Some(Backing::Str(s)) = store().lock().unwrap().get_mut(&(this as usize)) {
+        *s = s.chars().filter(|c| !rem.contains(*c)).collect();
+    }
+}
+extern "C" fn cs_form_union(this: Id, _cmd: Sel, other: Id) {
+    let add = rust_str_from_nsstring(other).unwrap_or_default();
+    if let Some(Backing::Str(s)) = store().lock().unwrap().get_mut(&(this as usize)) {
+        for c in add.chars() {
+            if !s.contains(c) {
+                s.push(c);
+            }
+        }
+    }
+}
 extern "C" fn cs_char_is_member(this: Id, _cmd: Sel, ch: u16) -> bool {
     let s = rust_str_from_nsstring(this).unwrap_or_default();
-    char::from_u32(ch as u32).is_some_and(|c| s.contains(c))
+    let Some(c) = char::from_u32(ch as u32) else {
+        return false;
+    };
+    if let Some(rest) = s.strip_prefix(CS_INV_PREFIX) {
+        !rest.contains(c)
+    } else {
+        s.contains(c)
+    }
 }
 
 extern "C" fn locale_current(_self: Id, _cmd: Sel) -> Id {
@@ -4677,6 +5170,52 @@ mod tests {
             let uuid: Id = send0(NSUUID_CLASS.ptr() as Id, "UUID");
             let ustr: Id = send0(uuid, "UUIDString");
             assert!(rust_str_from_nsstring(ustr).unwrap().starts_with("50656172-"));
+
+            // Phase 5.2: initWithBytes:length:encoding:, varargs formatting, NSCharacterSet, NSURLSessionConfiguration, container paths
+            let alloc_str: Id = send0(NSSTRING_CLASS.ptr() as Id, "alloc");
+            let s_bytes: Id = send3(
+                alloc_str,
+                "initWithBytes:length:encoding:",
+                b"pear".as_ptr(),
+                4usize,
+                4usize,
+            );
+            assert_eq!(rust_str_from_nsstring(s_bytes).as_deref(), Some("pear"));
+            let utf16_bytes: [u8; 4] = [0x4f, 0x00, 0x4b, 0x00]; // "OK" UTF-16LE
+            let alloc_str2: Id = send0(NSSTRING_CLASS.ptr() as Id, "alloc");
+            let s_utf16: Id = send3(
+                alloc_str2,
+                "initWithBytes:length:encoding:",
+                utf16_bytes.as_ptr(),
+                4usize,
+                10usize,
+            );
+            assert_eq!(rust_str_from_nsstring(s_utf16).as_deref(), Some("OK"));
+
+            let fmt_slots: [u64; 3] = [c"gi".as_ptr() as u64, 7u64, joined as u64];
+            let alloc_fmt: Id = send0(NSSTRING_CLASS.ptr() as Id, "alloc");
+            let formatted: Id = send2(
+                alloc_fmt,
+                "initWithFormat:arguments:",
+                nsstring_from_rust("%s-%d-%@"),
+                fmt_slots.as_ptr() as *const c_void,
+            );
+            assert_eq!(rust_str_from_nsstring(formatted).as_deref(), Some("gi-7-hello/world"));
+
+            let digits: Id = send0(NSCHARACTERSET_CLASS.ptr() as Id, "decimalDigitCharacterSet");
+            let non_digits: Id = send0(digits, "invertedSet");
+            assert!(send1::<u16, bool>(digits, "characterIsMember:", b'5' as u16));
+            assert!(!send1::<u16, bool>(non_digits, "characterIsMember:", b'5' as u16));
+            assert!(send1::<u16, bool>(non_digits, "characterIsMember:", b'a' as u16));
+
+            let cfg: Id = send0(NSURLSESSIONCONFIGURATION_CLASS.ptr() as Id, "defaultSessionConfiguration");
+            let _: () = send1(cfg, "setAllowsCellularAccess:", 1usize);
+            assert!(send0::<bool>(cfg, "allowsCellularAccess"));
+
+            let sp_arr = ns_search_path_for_directories_in_domains(5, 1, true);
+            let lib_dir = cf_array_get_value_at_index(sp_arr, 0) as Id;
+            let lib_path = rust_str_from_nsstring(lib_dir).unwrap();
+            assert!(lib_path.ends_with("/Library") && std::path::Path::new(&lib_path).is_dir());
         }
     }
 

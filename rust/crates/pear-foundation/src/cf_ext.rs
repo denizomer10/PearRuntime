@@ -380,9 +380,10 @@ unsafe extern "C" fn cf_write_stream_write(stream: *mut c_void, buf: *const u8, 
 
 // ---- Foundation functions --------------------------------------------------
 
-unsafe extern "C" fn ns_log_v(fmt: Id, _args: *mut c_void) {
+unsafe extern "C" fn ns_log_v(fmt: Id, args: *mut c_void) {
     if let Some(s) = rust_str_from_nsstring(fmt) {
-        eprintln!("[NSLogv] {s}");
+        let formatted = super::format_nsstring_slots(&s, args as *const u64);
+        eprintln!("[NSLogv] {formatted}");
     }
 }
 

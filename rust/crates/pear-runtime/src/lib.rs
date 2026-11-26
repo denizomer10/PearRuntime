@@ -13,6 +13,7 @@ pub use pear_libobjc;
 pub use pear_macho;
 pub use pear_metal_vk;
 pub use pear_swift_rt;
+pub mod unwind;
 
 pub mod accelerate;
 pub mod frameworks;
@@ -96,6 +97,7 @@ guest_class!(UIWINDOWSCENE_CLASS, UIWINDOWSCENE_META);
 guest_class!(UITOUCH_CLASS, UITOUCH_META);
 guest_class!(UIEVENT_CLASS, UIEVENT_META);
 guest_class!(AVAUDIOSESSION_CLASS, AVAUDIOSESSION_META);
+guest_class!(AVAUDIOSESSIONROUTEDESCRIPTION_CLASS, AVAUDIOSESSIONROUTEDESCRIPTION_META);
 guest_class!(AVAUDIOPLAYER_CLASS, AVAUDIOPLAYER_META);
 guest_class!(AVPLAYER_CLASS, AVPLAYER_META);
 guest_class!(AVPLAYERITEM_CLASS, AVPLAYERITEM_META);
@@ -116,6 +118,20 @@ guest_class!(GCCONTROLLER_CLASS, GCCONTROLLER_META);
 extern "C" fn shared_app_stub(_self: Id, _cmd: Sel) -> Id {
     static APP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *APP.get_or_init(|| unsafe { alloc(UIAPPLICATION_CLASS.ptr()) } as usize) as Id
+}
+
+extern "C" fn app_begin_bg_task(_self: Id, _cmd: Sel, _handler: *const c_void) -> usize {
+    static NEXT_TASK: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+    NEXT_TASK.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+extern "C" fn app_begin_bg_task2(
+    self_obj: Id,
+    cmd: Sel,
+    _name: Id,
+    handler: *const c_void,
+) -> usize {
+    app_begin_bg_task(self_obj, cmd, handler)
 }
 
 extern "C" fn main_screen_stub(_self: Id, _cmd: Sel) -> Id {
@@ -696,6 +712,7 @@ extern "C" fn ui_application_main(
     } else {
         None
     };
+    eprintln!("[PearRuntime][boot] UIApplicationMain delegate={delegate_name:?}");
     #[cfg(target_os = "linux")]
     pear_host_linux::set_frame_tick(pump_display_links);
     pear_host::host().run(Box::new(move || {
@@ -709,17 +726,21 @@ extern "C" fn ui_application_main(
                     let f_init: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_init.imp);
                     let del = f_init(d_init.receiver, sel_init);
                     app_set_delegate(app, objc_rt::sel("setDelegate:"), del);
+                    eprintln!("[PearRuntime][boot] calling -[{name} application:didFinishLaunchingWithOptions:]");
                     let sel_did = objc_rt::sel("application:didFinishLaunchingWithOptions:");
                     let d_did = pear_libobjc::message::lookup_for_send(del, sel_did);
                     let f_did: extern "C" fn(Id, Sel, Id, Id) -> bool = std::mem::transmute(d_did.imp);
                     let _ = f_did(d_did.receiver, sel_did, app, std::ptr::null_mut());
                     let sel_active = objc_rt::sel("applicationDidBecomeActive:");
                     if pear_libobjc::runtime::lookup(cls, sel_active).is_some() {
+                        eprintln!("[PearRuntime][boot] calling -[{name} applicationDidBecomeActive:]");
                         let d_act = pear_libobjc::message::lookup_for_send(del, sel_active);
                         let f_act: extern "C" fn(Id, Sel, Id) = std::mem::transmute(d_act.imp);
                         f_act(d_act.receiver, sel_active, app);
                     }
                 }
+            } else {
+                eprintln!("[PearRuntime][boot] UIApplicationMain delegate class '{name}' not registered");
             }
         }
     }));
@@ -1066,6 +1087,9 @@ fn init_guest_frameworks() {
                 ("canOpenURL:", i(app_false1 as *const ())),
                 ("openURL:", i(app_false1 as *const ())),
                 ("isRegisteredForRemoteNotifications", i(app_false as *const ())),
+                ("beginBackgroundTaskWithExpirationHandler:", i(app_begin_bg_task as *const ())),
+                ("beginBackgroundTaskWithName:expirationHandler:", i(app_begin_bg_task2 as *const ())),
+                ("endBackgroundTask:", i(app_noop1 as *const ())),
             ],
             &[("sharedApplication", i(shared_app_stub as *const ()))],
         );
@@ -1105,6 +1129,7 @@ fn init_guest_frameworks() {
                 ("setBatteryMonitoringEnabled:", i(app_noop1 as *const ())),
                 ("beginGeneratingDeviceOrientationNotifications", i(noop_method as *const ())),
                 ("endGeneratingDeviceOrientationNotifications", i(noop_method as *const ())),
+                ("isGeneratingDeviceOrientationNotifications", i(app_false as *const ())),
             ],
             &[("currentDevice", i(current_device_stub as *const ()))],
         );
@@ -1158,6 +1183,9 @@ fn init_guest_frameworks() {
                 ("setClipsToBounds:", i(app_noop1 as *const ())),
                 ("setHidden:", i(app_noop1 as *const ())),
                 ("isHidden", i(app_false as *const ())),
+                ("setExclusiveTouch:", i(app_noop1 as *const ())),
+                ("setIsAccessibilityElement:", i(app_noop1 as *const ())),
+                ("setAccessibilityTraits:", i(app_noop1 as *const ())),
                 ("removeFromSuperview", i(uiview_remove_from_superview as *const ())),
                 ("touchesBegan:withEvent:", i(touches_noop as *const ())),
                 ("touchesMoved:withEvent:", i(touches_noop as *const ())),
@@ -1304,7 +1332,17 @@ fn init_guest_frameworks() {
                 ("contentsScale", i(uiview_scale as *const ())),
                 ("setContentsScale:", i(app_noop1 as *const ())),
                 ("setOpaque:", i(app_noop1 as *const ())),
+                ("setContentsGravity:", i(app_noop1 as *const ())),
                 ("setDrawableProperties:", i(app_noop1 as *const ())),
+                ("device", i(cametal_device as *const ())),
+                ("setDevice:", i(cametal_set_device as *const ())),
+                ("pixelFormat", i(cametal_pixel_format as *const ())),
+                ("setPixelFormat:", i(cametal_set_pixel_format as *const ())),
+                ("drawableSize", i(cametal_drawable_size as *const ())),
+                ("setDrawableSize:", i(cametal_set_drawable_size as *const ())),
+                ("framebufferOnly", i(cametal_framebuffer_only as *const ())),
+                ("setFramebufferOnly:", i(cametal_set_framebuffer_only as *const ())),
+                ("nextDrawable", i(cametal_next_drawable as *const ())),
             ],
             &[],
         );
@@ -1319,6 +1357,7 @@ fn init_guest_frameworks() {
                 ("contentsScale", i(uiview_scale as *const ())),
                 ("setContentsScale:", i(app_noop1 as *const ())),
                 ("setOpaque:", i(app_noop1 as *const ())),
+                ("setContentsGravity:", i(app_noop1 as *const ())),
                 ("device", i(cametal_device as *const ())),
                 ("setDevice:", i(cametal_set_device as *const ())),
                 ("pixelFormat", i(cametal_pixel_format as *const ())),
@@ -1461,6 +1500,17 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
             ],
         );
         objc_rt::register_builtin(
+            AVAUDIOSESSIONROUTEDESCRIPTION_CLASS.ptr(),
+            AVAUDIOSESSIONROUTEDESCRIPTION_META.ptr(),
+            "AVAudioSessionRouteDescription",
+            32,
+            &[
+                ("outputs", i(ret_empty_array as *const ())),
+                ("inputs", i(ret_empty_array as *const ())),
+            ],
+            &[],
+        );
+        objc_rt::register_builtin(
             AVAUDIOSESSION_CLASS.ptr(),
             AVAUDIOSESSION_META.ptr(),
             "AVAudioSession",
@@ -1473,7 +1523,7 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
                 ("setActive:withOptions:error:", i(noop4 as *const ())),
                 ("isOtherAudioPlaying", i(app_false as *const ())),
                 ("secondaryAudioShouldBeSilencedHint", i(app_false as *const ())),
-                ("currentRoute", i(ret_empty_array as *const ())),
+                ("currentRoute", i(avaudiosession_current_route as *const ())),
             ],
             &[("sharedInstance", i(ret_singleton as *const ()))],
         );
@@ -1682,8 +1732,8 @@ extern "C" {
     fn _exit(status: i32) -> !;
 }
 
-extern "C" fn pear_crash_handler(sig: i32) {
-    eprintln!("[PearRuntime][crash] caught signal {sig}");
+fn dump_guest_backtrace(reason: &str) {
+    eprintln!("[PearRuntime][crash] {reason}");
     let mut frames = [std::ptr::null_mut::<c_void>(); 32];
     let n = unsafe { backtrace(frames.as_mut_ptr(), 32) };
     if let Ok(guard) = LOADED_IMAGES.try_lock() {
@@ -1709,8 +1759,19 @@ extern "C" fn pear_crash_handler(sig: i32) {
     }
     unsafe {
         backtrace_symbols_fd(frames.as_ptr(), n, 2);
+    }
+}
+
+extern "C" fn pear_crash_handler(sig: i32) {
+    dump_guest_backtrace(&format!("caught signal {sig}"));
+    unsafe {
         _exit(128 + sig);
     }
+}
+
+extern "C" fn guest_abort() -> ! {
+    dump_guest_backtrace("guest called abort()");
+    std::process::abort()
 }
 
 pub fn install_crash_diagnostics() {
@@ -2403,8 +2464,177 @@ extern "C" fn pthread_mach_thread_np_impl(t: usize) -> u32 {
             .or_insert_with(|| NEXT_TID.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
     }
 }
-extern "C" fn sysctlbyname_impl(_n: *const c_char, _oldp: *mut c_void, _oldlenp: *mut usize, _newp: *const c_void, _newlen: usize) -> i32 { -1 }
-extern "C" fn task_info_impl(_task: u32, _flavor: u32, _info: *mut c_void, _count: *mut u32) -> i32 { -1 }
+extern "C" fn avaudiosession_current_route(_self: Id, _cmd: Sel) -> Id {
+    static ROUTE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *ROUTE.get_or_init(|| unsafe { alloc(AVAUDIOSESSIONROUTEDESCRIPTION_CLASS.ptr()) } as usize) as Id
+}
+
+unsafe fn write_sysctl_bytes(bytes: &[u8], oldp: *mut c_void, oldlenp: *mut usize) -> i32 {
+    if oldlenp.is_null() {
+        return -1;
+    }
+    if oldp.is_null() {
+        *oldlenp = bytes.len();
+        return 0;
+    }
+    let cap = *oldlenp;
+    *oldlenp = bytes.len();
+    if cap < bytes.len() {
+        let ep = tls_errno_ptr();
+        if !ep.is_null() {
+            *ep = 12; // ENOMEM
+        }
+        return -1;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), oldp as *mut u8, bytes.len());
+    0
+}
+
+extern "C" fn sysctlbyname_impl(
+    name: *const c_char,
+    oldp: *mut c_void,
+    oldlenp: *mut usize,
+    newp: *const c_void,
+    newlen: usize,
+) -> i32 {
+    if name.is_null() || oldlenp.is_null() {
+        return -1;
+    }
+    let key = unsafe { std::ffi::CStr::from_ptr(name) }.to_string_lossy();
+    let ncpu = std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(4);
+    unsafe {
+        match key.as_ref() {
+            "hw.machine" => write_sysctl_bytes(b"iPhone15,2\0", oldp, oldlenp),
+            "hw.model" => write_sysctl_bytes(b"D73AP\0", oldp, oldlenp),
+            "kern.ostype" => write_sysctl_bytes(b"Darwin\0", oldp, oldlenp),
+            "kern.osrelease" => write_sysctl_bytes(b"23.0.0\0", oldp, oldlenp),
+            "kern.osversion" => write_sysctl_bytes(b"21A329\0", oldp, oldlenp),
+            "kern.version" => write_sysctl_bytes(b"Darwin Kernel Version 23.0.0: ARM64\0", oldp, oldlenp),
+            "kern.hostname" => write_sysctl_bytes(b"iPhone\0", oldp, oldlenp),
+            "machdep.cpu.brand_string" => write_sysctl_bytes(b"Apple A16 Bionic\0", oldp, oldlenp),
+            "hw.cputype" => write_sysctl_bytes(&0x0100_000ci32.to_ne_bytes(), oldp, oldlenp),
+            "hw.cpusubtype" => write_sysctl_bytes(&0i32.to_ne_bytes(), oldp, oldlenp),
+            "hw.ncpu" | "hw.activecpu" | "hw.physicalcpu" | "hw.physicalcpu_max"
+            | "hw.logicalcpu" | "hw.logicalcpu_max" => {
+                write_sysctl_bytes(&ncpu.to_ne_bytes(), oldp, oldlenp)
+            }
+            "hw.pagesize" | "vm.pagesize" => {
+                let ps = VM_PAGE_SIZE_VAL.load(std::sync::atomic::Ordering::Relaxed) as u32;
+                write_sysctl_bytes(&ps.to_ne_bytes(), oldp, oldlenp)
+            }
+            "hw.byteorder" => write_sysctl_bytes(&1234u32.to_ne_bytes(), oldp, oldlenp),
+            "hw.memsize" => {
+                write_sysctl_bytes(&(6u64 * 1024 * 1024 * 1024).to_ne_bytes(), oldp, oldlenp)
+            }
+            "hw.usermem" => {
+                write_sysctl_bytes(&(4u64 * 1024 * 1024 * 1024).to_ne_bytes(), oldp, oldlenp)
+            }
+            "hw.tbfrequency" => {
+                if !oldp.is_null() && *oldlenp == 4 {
+                    write_sysctl_bytes(&24_000_000u32.to_ne_bytes(), oldp, oldlenp)
+                } else {
+                    write_sysctl_bytes(&24_000_000u64.to_ne_bytes(), oldp, oldlenp)
+                }
+            }
+            "kern.boottime" => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(1_700_000_000);
+                let tv = [now.saturating_sub(3600), 0i64];
+                let bytes = std::slice::from_raw_parts(tv.as_ptr() as *const u8, 16);
+                write_sysctl_bytes(bytes, oldp, oldlenp)
+            }
+            _ => {
+                #[cfg(target_os = "macos")]
+                if let Some(addr) = libc_dlsym("_sysctlbyname") {
+                    let f: extern "C" fn(
+                        *const c_char,
+                        *mut c_void,
+                        *mut usize,
+                        *const c_void,
+                        usize,
+                    ) -> i32 = std::mem::transmute(addr);
+                    return f(name, oldp, oldlenp, newp, newlen);
+                }
+                let _ = (newp, newlen);
+                -1
+            }
+        }
+    }
+}
+
+extern "C" fn sysctl_impl(
+    name: *const i32,
+    namelen: u32,
+    oldp: *mut c_void,
+    oldlenp: *mut usize,
+    newp: *const c_void,
+    newlen: usize,
+) -> i32 {
+    if name.is_null() || namelen < 2 || oldlenp.is_null() {
+        return -1;
+    }
+    let mib = unsafe { std::slice::from_raw_parts(name, namelen as usize) };
+    let mapped_name: Option<&std::ffi::CStr> = match (mib[0], mib[1]) {
+        (6, 1) => Some(c"hw.machine"),
+        (6, 2) => Some(c"hw.model"),
+        (6, 3) => Some(c"hw.ncpu"),
+        (6, 7) => Some(c"hw.pagesize"),
+        (6, 24) => Some(c"hw.memsize"),
+        (6, 25) => Some(c"hw.physicalcpu"),
+        (1, 1) => Some(c"kern.ostype"),
+        (1, 2) => Some(c"kern.osrelease"),
+        (1, 4) => Some(c"kern.version"),
+        (1, 10) => Some(c"kern.hostname"),
+        (1, 21) => Some(c"kern.boottime"),
+        (1, 65) => Some(c"kern.osversion"),
+        (1, 14) => {
+            // CTL_KERN / KERN_PROC: zero-fill kinfo_proc so P_TRACED == 0
+            unsafe {
+                if oldp.is_null() {
+                    *oldlenp = 648;
+                } else {
+                    let n = (*oldlenp).min(4096);
+                    std::ptr::write_bytes(oldp as *mut u8, 0, n);
+                }
+            }
+            return 0;
+        }
+        _ => None,
+    };
+    if let Some(cname) = mapped_name {
+        return sysctlbyname_impl(cname.as_ptr(), oldp, oldlenp, newp, newlen);
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(addr) = libc_dlsym("_sysctl") {
+        let f: extern "C" fn(*const i32, u32, *mut c_void, *mut usize, *const c_void, usize) -> i32 =
+            unsafe { std::mem::transmute(addr) };
+        return f(name, namelen, oldp, oldlenp, newp, newlen);
+    }
+    -1
+}
+
+extern "C" fn task_info_impl(task: u32, flavor: u32, info: *mut c_void, count: *mut u32) -> i32 {
+    #[cfg(target_os = "macos")]
+    if let Some(addr) = libc_dlsym("_task_info") {
+        let f: extern "C" fn(u32, u32, *mut c_void, *mut u32) -> i32 =
+            unsafe { std::mem::transmute(addr) };
+        return f(task, flavor, info, count);
+    }
+    let _ = (task, flavor);
+    if !info.is_null() && !count.is_null() {
+        unsafe {
+            let n = (*count as usize).min(256) * 4;
+            std::ptr::write_bytes(info as *mut u8, 0, n);
+        }
+        0
+    } else {
+        -1
+    }
+}
 extern "C" fn thread_policy_set_impl(_t: u32, _flavor: u32, _policy: *const c_void, _count: u32) -> i32 { 0 }
 
 #[repr(C)]
@@ -2445,11 +2675,13 @@ static LOADED_IMAGES: std::sync::Mutex<Vec<RegisteredImage>> = std::sync::Mutex:
 
 fn clear_loaded_images() {
     LOADED_IMAGES.lock().unwrap().clear();
+    unwind::clear_images();
     MAIN_IMAGE_HEADER.store(0, std::sync::atomic::Ordering::Release);
     MAIN_IMAGE_SLIDE.store(0, std::sync::atomic::Ordering::Release);
 }
 
 fn register_loaded_image(img: &pear_dyld::LoadedImage, fallback_name: &str) {
+    unwind::register_image(img);
     let label = img
         .path
         .as_deref()
@@ -3071,7 +3303,43 @@ extern "C" fn os_unfair_lock_unlock(lock: *mut std::sync::atomic::AtomicU32) {
     unsafe { &*lock }.store(0, std::sync::atomic::Ordering::Release);
 }
 
-static VM_PAGE_SIZE_VAL: usize = 4096;
+static VM_PAGE_SIZE_VAL: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(16384);
+
+#[cfg(not(target_os = "macos"))]
+extern "C" fn darwin_mmap_impl(
+    addr: *mut c_void,
+    len: usize,
+    prot: i32,
+    darwin_flags: i32,
+    fd: i32,
+    offset: i64,
+) -> *mut c_void {
+    extern "C" {
+        fn mmap(addr: *mut c_void, len: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut c_void;
+    }
+    let mut linux_flags = 0i32;
+    if (darwin_flags & 0x0001) != 0 { linux_flags |= 0x01; } // MAP_SHARED
+    if (darwin_flags & 0x0002) != 0 { linux_flags |= 0x02; } // MAP_PRIVATE
+    if (darwin_flags & 0x0010) != 0 { linux_flags |= 0x10; } // MAP_FIXED
+    if (darwin_flags & 0x1000) != 0 { linux_flags |= 0x20; } // MAP_ANON -> MAP_ANONYMOUS
+    if linux_flags == 0 {
+        linux_flags = 0x22; // MAP_PRIVATE | MAP_ANONYMOUS fallback
+    }
+    unsafe { mmap(addr, len, prot, linux_flags, fd, offset) }
+}
+
+#[cfg(not(target_os = "macos"))]
+extern "C" fn darwin_sysconf_impl(name: i32) -> isize {
+    extern "C" {
+        fn sysconf(name: i32) -> isize;
+    }
+    match name {
+        29 | 47 => VM_PAGE_SIZE_VAL.load(std::sync::atomic::Ordering::Relaxed) as isize, // Darwin _SC_PAGESIZE / _SC_PAGE_SIZE
+        57 | 58 => std::thread::available_parallelism().map(|n| n.get() as isize).unwrap_or(4), // Darwin _SC_NPROCESSORS_*
+        _ => unsafe { sysconf(name) },
+    }
+}
 
 #[repr(C)]
 struct DarwinMallocZone {
@@ -4253,11 +4521,6 @@ fn quartz_const(name: &str) -> usize {
     })
 }
 
-extern "C" fn unwind_resume_trap() -> ! {
-    eprintln!("[pear-runtime] _Unwind_Resume reached");
-    std::process::abort()
-}
-
 #[cfg(target_os = "linux")]
 struct DefaultGuestEvents;
 
@@ -4481,6 +4744,13 @@ impl pear_host::GuestEvents for DefaultGuestEvents {
 pub fn init() {
     static STDIO_INIT: Once = Once::new();
     STDIO_INIT.call_once(|| {
+        extern "C" {
+            fn getpagesize() -> i32;
+        }
+        let ps = unsafe { getpagesize() };
+        if ps >= 4096 {
+            VM_PAGE_SIZE_VAL.store(ps as usize, std::sync::atomic::Ordering::Release);
+        }
         for (dst, names) in [
             (&raw mut STDIN_STUB, &["___stdinp", "_stdin"][..]),
             (&raw mut STDOUT_STUB, &["___stdoutp", "_stdout"][..]),
@@ -4503,7 +4773,12 @@ pub fn init() {
     #[cfg(target_os = "linux")]
     {
         let _ = pear_host::install_events(Box::new(DefaultGuestEvents));
-        pear_host_linux::LinuxHost::install().initialize();
+        if std::env::var("PEAR_HEADLESS").as_deref() != Ok("1") {
+            pear_host_linux::LinuxHost::install().initialize();
+        }
+    }
+    if !pear_host::installed() {
+        pear_host::install(Box::new(pear_host::NullHost::default()));
     }
 }
 
@@ -4513,6 +4788,14 @@ fn libcxx_symbol(symbol: &str) -> Option<usize> {
         "__ZnwmSt11align_val_t" => Some(cxx_new_aligned as *const () as usize),
         "__ZdlPv" | "__ZdaPv" => Some(cxx_delete as *const () as usize),
         "__ZdlPvSt11align_val_t" => Some(cxx_delete_aligned as *const () as usize),
+        "___cxa_allocate_exception" => Some(unwind::cxa_allocate_exception as *const () as usize),
+        "___cxa_free_exception" => Some(unwind::cxa_free_exception as *const () as usize),
+        "___cxa_throw" => Some(unwind::cxa_throw as *const () as usize),
+        "___cxa_rethrow" => Some(unwind::cxa_rethrow as *const () as usize),
+        "___cxa_begin_catch" => Some(unwind::cxa_begin_catch as *const () as usize),
+        "___cxa_end_catch" => Some(unwind::cxa_end_catch as *const () as usize),
+        "___cxa_current_exception_type" => Some(unwind::cxa_current_exception_type as *const () as usize),
+        "___gxx_personality_v0" => Some(unwind::gxx_personality_v0 as *const () as usize),
         "___cxa_guard_acquire" => Some(cxa_guard_acquire as *const () as usize),
         "___cxa_guard_release" => Some(cxa_guard_release as *const () as usize),
         "___cxa_guard_abort" => Some(cxa_guard_abort as *const () as usize),
@@ -4683,7 +4966,14 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
         }
         Some(path) if path.contains("libc++") => libcxx_symbol(symbol),
         Some(path) if path.contains("libSystem") || path.contains("libdispatch") => match symbol {
-            "__Unwind_Resume" => Some(unwind_resume_trap as *const () as usize),
+            "__Unwind_RaiseException" => Some(unwind::unwind_raise_exception as *const () as usize),
+            "__Unwind_Resume" => Some(unwind::unwind_resume as *const () as usize),
+            "__Unwind_DeleteException" => Some(unwind::unwind_delete_exception as *const () as usize),
+            "__Unwind_GetIP" => Some(unwind::unwind_get_ip as *const () as usize),
+            "__Unwind_GetRegionStart" => Some(unwind::unwind_get_region_start as *const () as usize),
+            "__Unwind_GetLanguageSpecificData" => Some(unwind::unwind_get_lsda as *const () as usize),
+            "__Unwind_SetGR" => Some(unwind::unwind_set_gr as *const () as usize),
+            "__Unwind_SetIP" => Some(unwind::unwind_set_ip as *const () as usize),
             "___stack_chk_guard" => Some(&raw const STACK_CHK_GUARD as usize),
             "___stack_chk_fail" => Some(stack_chk_fail_trap as *const () as usize),
             "___error" => Some(tls_errno_ptr as *const () as usize),
@@ -4824,6 +5114,10 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             }
             "_thread_switch" => Some(status_ok_stub as *const () as usize),
             "_vm_page_size" => Some(&raw const VM_PAGE_SIZE_VAL as usize),
+            #[cfg(not(target_os = "macos"))]
+            "_mmap" => Some(darwin_mmap_impl as *const () as usize),
+            #[cfg(not(target_os = "macos"))]
+            "_sysconf" => Some(darwin_sysconf_impl as *const () as usize),
             "_malloc_default_zone" => Some(malloc_default_zone_impl as *const () as usize),
             "_malloc_create_zone" => Some(malloc_create_zone_impl as *const () as usize),
             "_malloc_set_zone_name" => Some(dispatch_noop_2 as *const () as usize),
@@ -4859,6 +5153,7 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_pthread_attr_destroy" => Some(darwin_pthread::attr_destroy as *const () as usize),
             "_pthread_attr_setdetachstate" => Some(darwin_pthread::attr_setdetachstate as *const () as usize),
             "_pthread_create" => Some(darwin_pthread::thread_create as *const () as usize),
+            "_sysctl" => Some(sysctl_impl as *const () as usize),
             "_sysctlbyname" => Some(sysctlbyname_impl as *const () as usize),
             "_task_info" => Some(task_info_impl as *const () as usize),
             "_thread_policy_set" => Some(thread_policy_set_impl as *const () as usize),
@@ -4880,7 +5175,7 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_strlen" => Some(strlen as *const () as usize),
             "_strcmp" => Some(strcmp as *const () as usize),
             "_getenv" => Some(getenv as *const () as usize),
-            "_abort" => Some(abort as *const () as usize),
+            "_abort" => Some(guest_abort as *const () as usize),
             "_vsnprintf" => Some(darwin_varargs::darwin_vsnprintf as *const () as usize),
             "_vsprintf" => Some(darwin_varargs::darwin_vsprintf as *const () as usize),
             "_vprintf" => Some(darwin_varargs::darwin_vprintf as *const () as usize),
@@ -5719,6 +6014,45 @@ mod tests {
             assert!(!buf.is_null());
             assert!(((*zone).size)(zone as *mut c_void, buf) >= 64);
             ((*zone).free)(zone as *mut c_void, buf);
+
+            // Phase 5.2: sysctlbyname, sysctl, AVAudioSession route description
+            let mut mlen = 0usize;
+            assert_eq!(sysctlbyname_impl(c"hw.machine".as_ptr(), std::ptr::null_mut(), &mut mlen, std::ptr::null(), 0), 0);
+            assert!(mlen >= 6);
+            let mut small = [0u8; 2];
+            let mut slen = 2usize;
+            assert_eq!(sysctlbyname_impl(c"hw.machine".as_ptr(), small.as_mut_ptr() as *mut c_void, &mut slen, std::ptr::null(), 0), -1);
+            assert_eq!(*tls_errno_ptr(), 12);
+            let mut mbuf = [0u8; 64];
+            let mut flen = mbuf.len();
+            assert_eq!(sysctlbyname_impl(c"hw.machine".as_ptr(), mbuf.as_mut_ptr() as *mut c_void, &mut flen, std::ptr::null(), 0), 0);
+            assert_eq!(std::ffi::CStr::from_ptr(mbuf.as_ptr() as *const c_char).to_str().unwrap(), "iPhone15,2");
+
+            let mut cpu_type = 0i32;
+            let mut cpu_len = std::mem::size_of::<i32>();
+            assert_eq!(sysctlbyname_impl(c"hw.cputype".as_ptr(), &mut cpu_type as *mut i32 as *mut c_void, &mut cpu_len, std::ptr::null(), 0), 0);
+            assert_eq!(cpu_type, 0x0100_000c);
+
+            let mib = [6i32, 1i32];
+            let mut kbuf = [0u8; 64];
+            let mut klen = kbuf.len();
+            assert_eq!(sysctl_impl(mib.as_ptr(), 2, kbuf.as_mut_ptr() as *mut c_void, &mut klen, std::ptr::null(), 0), 0);
+            assert_eq!(std::ffi::CStr::from_ptr(kbuf.as_ptr() as *const c_char).to_str().unwrap(), "iPhone15,2");
+
+            let audio_cls = objc_rt::class_named("AVAudioSession").unwrap() as Id;
+            let s_shared = objc_rt::sel("sharedInstance");
+            let d_sh = pear_libobjc::message::lookup_for_send(audio_cls, s_shared);
+            let f_sh: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_sh.imp);
+            let sess = f_sh(d_sh.receiver, s_shared);
+            let s_route = objc_rt::sel("currentRoute");
+            let d_rt = pear_libobjc::message::lookup_for_send(sess, s_route);
+            let f_rt: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_rt.imp);
+            let route = f_rt(d_rt.receiver, s_route);
+            let s_out = objc_rt::sel("outputs");
+            let d_out = pear_libobjc::message::lookup_for_send(route, s_out);
+            let f_out: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_out.imp);
+            let outs = f_out(d_out.receiver, s_out);
+            assert!(!outs.is_null());
         }
     }
 }

@@ -85,7 +85,8 @@ fn main() {
     let exe_path = resolve_executable(&args[0]);
     let raw_p = Path::new(&args[0]);
     if raw_p.is_dir() && args[0].ends_with(".app") {
-        env::set_var("PEAR_BUNDLE_PATH", raw_p);
+        let abs = fs::canonicalize(raw_p).unwrap_or_else(|_| raw_p.to_path_buf());
+        env::set_var("PEAR_BUNDLE_PATH", abs);
     }
     let plan_only = args.iter().any(|a| a == "--plan");
     let inspect_only = args.iter().any(|a| a == "--inspect-only");
