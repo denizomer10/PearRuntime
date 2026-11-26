@@ -1,0 +1,245 @@
+//! Clean-room Metal → Vulkan + `MTLB`/AIR → SPIR-V compatibility layer
+//! built on `pear-libobjc`, `pear-foundation`, `pear-graphics`, and `pear-host`.
+
+pub mod mtlb;
+pub mod objc_metal;
+pub mod spirv;
+pub mod vk;
+
+pub use objc_metal::{
+    command_buffer_counts, copy_all_devices, create_system_default_device, function_spirv, init,
+    next_drawable_for_layer, MTLClearColor, MTLOrigin, MTLRegion, MTLSize, MTLViewport,
+};
+
+/// Resolves Mach-O imports from `Metal.framework` (and Metal helper symbols).
+pub fn symbol(name: &str) -> Option<usize> {
+    init();
+    match name {
+        "_MTLCreateSystemDefaultDevice" => Some(create_system_default_device as *const () as usize),
+        "_MTLCopyAllDevices" => Some(copy_all_devices as *const () as usize),
+        "_OBJC_CLASS_$_MTLTextureDescriptor" => Some(objc_metal::MTLTEXTUREDESCRIPTOR_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_MTLRenderPipelineDescriptor" => {
+            Some(objc_metal::MTLRENDERPIPELINEDESCRIPTOR_CLASS.ptr() as usize)
+        }
+        "_OBJC_CLASS_$_MTLRenderPassDescriptor" => Some(objc_metal::MTLRENDERPASSDESCRIPTOR_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_MTLDepthStencilDescriptor" => Some(objc_metal::MTLDEPTHSTENCILDESCRIPTOR_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_MTLSamplerDescriptor" => Some(objc_metal::MTLSAMPLERDESCRIPTOR_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_MTLVertexDescriptor" => Some(objc_metal::MTLVERTEXDESCRIPTOR_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_MTLComputePipelineDescriptor" => {
+            Some(objc_metal::MTLCOMPUTEPIPELINEDESC_CLASS.ptr() as usize)
+        }
+        "_OBJC_CLASS_$_MTLHeapDescriptor" => Some(objc_metal::MTLHEAPDESCRIPTOR_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_MTLCompileOptions" => Some(objc_metal::MTLCOMPILEOPTIONS_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_MTLFunctionConstantValues" => Some(objc_metal::MTLFUNCTIONCONSTANTS_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_MTLCaptureManager" => Some(objc_metal::MTLCAPTUREMANAGER_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_MTLCaptureDescriptor" => Some(objc_metal::MTLCAPTUREDESCRIPTOR_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_MTLStencilDescriptor" => Some(objc_metal::MTLSTENCILDESCRIPTOR_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_MTLRenderPipelineColorAttachmentDescriptor" => {
+            Some(objc_metal::MTLPIPELINE_COLOR_ATTACH_CLASS.ptr() as usize)
+        }
+        "_OBJC_CLASS_$_MTLRenderPassColorAttachmentDescriptor" => {
+            Some(objc_metal::MTLRENDERPASSCOLORATTACH_CLASS.ptr() as usize)
+        }
+        "_OBJC_CLASS_$_MTLRenderPassDepthAttachmentDescriptor" => {
+            Some(objc_metal::MTLRENDERPASSDEPTHATTACH_CLASS.ptr() as usize)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pear_libobjc::abi::{Id, Sel};
+    use pear_libobjc::message::lookup_for_send;
+    use pear_libobjc::runtime as objc_rt;
+    use std::ffi::c_void;
+
+    unsafe fn send0<R>(obj: Id, name: &str) -> R {
+        let s = objc_rt::sel(name);
+        let d = lookup_for_send(obj, s);
+        let f: unsafe extern "C" fn(Id, Sel) -> R = std::mem::transmute(d.imp);
+        f(d.receiver, s)
+    }
+
+    unsafe fn send1<A1, R>(obj: Id, name: &str, a1: A1) -> R {
+        let s = objc_rt::sel(name);
+        let d = lookup_for_send(obj, s);
+        let f: unsafe extern "C" fn(Id, Sel, A1) -> R = std::mem::transmute(d.imp);
+        f(d.receiver, s, a1)
+    }
+
+    unsafe fn send2<A1, A2, R>(obj: Id, name: &str, a1: A1, a2: A2) -> R {
+        let s = objc_rt::sel(name);
+        let d = lookup_for_send(obj, s);
+        let f: unsafe extern "C" fn(Id, Sel, A1, A2) -> R = std::mem::transmute(d.imp);
+        f(d.receiver, s, a1, a2)
+    }
+
+    unsafe fn send3<A1, A2, A3, R>(obj: Id, name: &str, a1: A1, a2: A2, a3: A3) -> R {
+        let s = objc_rt::sel(name);
+        let d = lookup_for_send(obj, s);
+        let f: unsafe extern "C" fn(Id, Sel, A1, A2, A3) -> R = std::mem::transmute(d.imp);
+        f(d.receiver, s, a1, a2, a3)
+    }
+
+    unsafe fn send5<A1, A2, A3, A4, A5, R>(obj: Id, name: &str, a1: A1, a2: A2, a3: A3, a4: A4, a5: A5) -> R {
+        let s = objc_rt::sel(name);
+        let d = lookup_for_send(obj, s);
+        let f: unsafe extern "C" fn(Id, Sel, A1, A2, A3, A4, A5) -> R = std::mem::transmute(d.imp);
+        f(d.receiver, s, a1, a2, a3, a4, a5)
+    }
+
+    fn build_synthetic_mtlb(name: &str, stage: u8, bitcode: &[u8]) -> Vec<u8> {
+        let mut tlv = Vec::new();
+        // NAME
+        tlv.extend_from_slice(b"NAME");
+        tlv.extend_from_slice(&((name.len() + 1) as u16).to_le_bytes());
+        tlv.extend_from_slice(name.as_bytes());
+        tlv.push(0);
+        // TYPE
+        tlv.extend_from_slice(b"TYPE");
+        tlv.extend_from_slice(&1u16.to_le_bytes());
+        tlv.push(stage);
+        // HASH
+        tlv.extend_from_slice(b"HASH");
+        tlv.extend_from_slice(&32u16.to_le_bytes());
+        tlv.extend_from_slice(&[0x42u8; 32]);
+        // MDSZ
+        tlv.extend_from_slice(b"MDSZ");
+        tlv.extend_from_slice(&8u16.to_le_bytes());
+        tlv.extend_from_slice(&(bitcode.len() as u64).to_le_bytes());
+        // OFFT
+        tlv.extend_from_slice(b"OFFT");
+        tlv.extend_from_slice(&24u16.to_le_bytes());
+        tlv.extend_from_slice(&0u64.to_le_bytes());
+        tlv.extend_from_slice(&0u64.to_le_bytes());
+        tlv.extend_from_slice(&0u64.to_le_bytes());
+        // ENDT
+        tlv.extend_from_slice(b"ENDT");
+
+        let mut fl = Vec::new();
+        fl.extend_from_slice(&1u32.to_le_bytes()); // count = 1
+        fl.extend_from_slice(&(tlv.len() as u32).to_le_bytes()); // entry size
+        fl.extend_from_slice(&tlv);
+
+        let fl_off = 88u64;
+        let bitcode_off = fl_off + fl.len() as u64;
+        let total = bitcode_off + bitcode.len() as u64;
+
+        let mut out = vec![0u8; 88];
+        out[0..4].copy_from_slice(b"MTLB");
+        out[4..8].copy_from_slice(&[0x01, 0x00, 0x02, 0x00]); // v1.2 iOS
+        out[11] = 0x82;
+        out[16..24].copy_from_slice(&total.to_le_bytes());
+        out[24..32].copy_from_slice(&fl_off.to_le_bytes());
+        out[32..40].copy_from_slice(&(fl.len() as u64).to_le_bytes());
+        out[72..80].copy_from_slice(&bitcode_off.to_le_bytes());
+        out[80..88].copy_from_slice(&(bitcode.len() as u64).to_le_bytes());
+        out.extend_from_slice(&fl);
+        out.extend_from_slice(bitcode);
+        out
+    }
+
+    #[test]
+    fn mtlb_parser_extracts_functions_and_bitcode() {
+        let bc = [0x42, 0x43, 0xC0, 0xDE, 1, 2, 3, 4];
+        let raw = build_synthetic_mtlb("xlatMtlMain", 0, &bc);
+        let parsed = mtlb::parse_mtlb(&raw).unwrap();
+        assert_eq!(parsed.functions.len(), 1);
+        let f = &parsed.functions[0];
+        assert_eq!(f.name, "xlatMtlMain");
+        assert_eq!(f.stage, mtlb::ShaderStage::Vertex);
+        assert!(mtlb::is_llvm_bitcode(&f.bitcode));
+        assert_eq!(f.bitcode, bc);
+    }
+
+    #[test]
+    fn parses_real_genshin_mtlb_if_present() {
+        let p = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../build/host-apps/GenshinImpact.payload/Payload/GenshinImpact.app/Data/resources.assets"
+        );
+        let Ok(bytes) = std::fs::read(p) else { return };
+        let Some(pos) = bytes.windows(4).position(|w| w == b"MTLB") else { return };
+        let lib = mtlb::parse_mtlb(&bytes[pos..pos + 0x2000.min(bytes.len() - pos)]).unwrap();
+        assert!(!lib.functions.is_empty());
+        assert_eq!(lib.functions[0].name, "xlatMtlMain");
+        assert!(mtlb::is_llvm_bitcode(&lib.functions[0].bitcode));
+    }
+
+    #[test]
+    fn spirv_emitter_produces_valid_modules() {
+        let v = spirv::emit_fullscreen_vertex_spirv("vtxMain");
+        let f = spirv::emit_solid_fragment_spirv("fragMain", [1.0, 0.5, 0.25, 1.0]);
+        let c = spirv::emit_noop_compute_spirv("compMain");
+        assert!(spirv::validate_spirv_header(&v));
+        assert!(spirv::validate_spirv_header(&f));
+        assert!(spirv::validate_spirv_header(&c));
+    }
+
+    #[test]
+    fn objc_metal_end_to_end_pipeline() {
+        pear_libobjc::object::init_runtime();
+        pear_libobjc::blocks::init_blocks();
+        pear_foundation::init_foundation();
+        init();
+        unsafe {
+            let dev = create_system_default_device();
+            assert!(!dev.is_null());
+
+            let seed = [1u8, 2, 3, 4, 5, 6, 7, 8];
+            let src_buf: Id = send3(dev, "newBufferWithBytes:length:options:", seed.as_ptr(), seed.len(), 0usize);
+            let dst_buf: Id = send2(dev, "newBufferWithLength:options:", seed.len(), 0usize);
+            assert_eq!(send0::<usize>(src_buf, "length"), 8);
+
+            let cq: Id = send0(dev, "newCommandQueue");
+            let cb: Id = send0(cq, "commandBuffer");
+
+            let blit: Id = send0(cb, "blitCommandEncoder");
+            send5::<Id, usize, Id, usize, usize, ()>(
+                blit,
+                "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:",
+                src_buf,
+                0,
+                dst_buf,
+                0,
+                8,
+            );
+            send0::<()>(blit, "endEncoding");
+
+            let bc = [0x42, 0x43, 0xC0, 0xDE, 9, 8, 7, 6];
+            let mtlb_bytes = build_synthetic_mtlb("xlatMtlMain", 0, &bc);
+            let nsdata_cls = objc_rt::class_named("NSData").unwrap() as Id;
+            let nsdata: Id = send2(nsdata_cls, "dataWithBytes:length:", mtlb_bytes.as_ptr(), mtlb_bytes.len());
+            let mut err: Id = std::ptr::null_mut();
+            let lib: Id = send2(dev, "newLibraryWithData:error:", nsdata, &mut err as *mut Id);
+            let fn_name = pear_foundation::nsstring_from_rust("xlatMtlMain");
+            let fn_obj: Id = send1(lib, "newFunctionWithName:", fn_name);
+            assert!(!fn_obj.is_null());
+            assert!(spirv::validate_spirv_header(&function_spirv(fn_obj).unwrap()));
+
+            let pdesc_cls = objc_rt::class_named("MTLRenderPipelineDescriptor").unwrap() as Id;
+            let pdesc: Id = send0(send0(pdesc_cls, "alloc"), "init");
+            send1::<Id, ()>(pdesc, "setVertexFunction:", fn_obj);
+            let pso: Id = send2(dev, "newRenderPipelineStateWithDescriptor:error:", pdesc, &mut err as *mut Id);
+            assert!(!pso.is_null());
+
+            let pass_cls = objc_rt::class_named("MTLRenderPassDescriptor").unwrap() as Id;
+            let pass: Id = send0(pass_cls, "renderPassDescriptor");
+            let r_enc: Id = send1(cb, "renderCommandEncoderWithDescriptor:", pass);
+            send1::<Id, ()>(r_enc, "setRenderPipelineState:", pso);
+            send3::<usize, usize, usize, ()>(r_enc, "drawPrimitives:vertexStart:vertexCount:", 3, 0, 3);
+            send0::<()>(r_enc, "endEncoding");
+
+            send0::<()>(cb, "commit");
+            send0::<()>(cb, "waitUntilCompleted");
+            assert_eq!(send0::<usize>(cb, "status"), 4);
+            assert_eq!(command_buffer_counts(cb), Some((1, 0, 1)));
+
+            let dst_ptr = send0::<*const c_void>(dst_buf, "contents") as *const u8;
+            let copied = std::slice::from_raw_parts(dst_ptr, 8);
+            assert_eq!(copied, &seed);
+        }
+    }
+}

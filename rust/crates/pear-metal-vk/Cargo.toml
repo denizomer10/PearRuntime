@@ -1,0 +1,10 @@
+[package]
+name = "pear-metal-vk"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pear-libobjc = { path = "../pear-libobjc" }
+pear-foundation = { path = "../pear-foundation" }
+pear-graphics = { path = "../pear-graphics" }
+pear-host = { path = "../pear-host" }

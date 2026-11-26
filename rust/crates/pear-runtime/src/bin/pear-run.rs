@@ -261,12 +261,26 @@ fn main() {
                     println!("unrealized: {:?}", total_unrealized);
                 }
                 if list_missing || list_missing_summary {
+                    let truly_missing: std::collections::HashSet<&str> = set
+                        .images
+                        .iter()
+                        .flat_map(|img| img.missing.iter().map(String::as_str))
+                        .collect();
                     let m = missing.lock().unwrap();
-                    println!("missing symbols ({}):", m.len());
+                    let filtered: Vec<&String> = m
+                        .iter()
+                        .filter(|entry| {
+                            let mut parts = entry.splitn(2, " :: ");
+                            let lib = parts.next().unwrap_or("");
+                            let sym = parts.next().unwrap_or("");
+                            lib != "<self>" || truly_missing.contains(sym)
+                        })
+                        .collect();
+                    println!("missing symbols ({}):", filtered.len());
                     if list_missing_summary {
                         let mut by_lib: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
-                        for entry in m.iter() {
-                            let lib = entry.split(" :: ").next().unwrap_or(entry);
+                        for entry in &filtered {
+                            let lib = entry.split(" :: ").next().unwrap_or(entry.as_str());
                             let base = lib.rsplit('/').next().unwrap_or(lib);
                             *by_lib.entry(base).or_default() += 1;
                         }
@@ -277,7 +291,7 @@ fn main() {
                         }
                     }
                     if list_missing {
-                        for entry in m.iter().take(60) {
+                        for entry in filtered.iter().take(60) {
                             println!("  {entry}");
                         }
                     }

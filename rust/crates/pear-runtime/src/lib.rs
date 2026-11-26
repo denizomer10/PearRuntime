@@ -11,6 +11,7 @@ pub use pear_jit;
 pub use pear_legacy_host;
 pub use pear_libobjc;
 pub use pear_macho;
+pub use pear_metal_vk;
 
 #[cfg(target_os = "linux")]
 pub use pear_host_linux;
@@ -893,12 +894,106 @@ extern "C" fn ns_string_from_cgpoint(p: pear_graphics::CGPoint) -> Id {
     pear_foundation::nsstring_from_rust(&format!("{{{}, {}}}", p.x, p.y))
 }
 
+#[derive(Clone, Copy)]
+struct CaMetalLayerState {
+    device: usize,
+    pixel_format: usize,
+    drawable_size: pear_graphics::CGSize,
+    framebuffer_only: bool,
+}
+
+impl Default for CaMetalLayerState {
+    fn default() -> Self {
+        Self {
+            device: 0,
+            pixel_format: 80, // MTLPixelFormatBGRA8Unorm
+            drawable_size: pear_graphics::CGSize { width: 1280.0, height: 720.0 },
+            framebuffer_only: true,
+        }
+    }
+}
+
+static CAMETAL_LAYERS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<usize, CaMetalLayerState>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+extern "C" fn cametal_layer(_cls: Id, _cmd: Sel) -> Id {
+    unsafe { alloc(CAMETALLAYER_CLASS.ptr()) }
+}
+
+extern "C" fn cametal_device(self_obj: Id, _cmd: Sel) -> Id {
+    let map = CAMETAL_LAYERS.lock().unwrap();
+    let dev = map.get(&(self_obj as usize)).map(|s| s.device).unwrap_or(0);
+    if dev != 0 {
+        dev as Id
+    } else {
+        pear_metal_vk::create_system_default_device()
+    }
+}
+
+extern "C" fn cametal_set_device(self_obj: Id, _cmd: Sel, dev: Id) {
+    let mut map = CAMETAL_LAYERS.lock().unwrap();
+    map.entry(self_obj as usize).or_default().device = dev as usize;
+}
+
+extern "C" fn cametal_pixel_format(self_obj: Id, _cmd: Sel) -> usize {
+    CAMETAL_LAYERS
+        .lock()
+        .unwrap()
+        .get(&(self_obj as usize))
+        .map(|s| s.pixel_format)
+        .unwrap_or(80)
+}
+
+extern "C" fn cametal_set_pixel_format(self_obj: Id, _cmd: Sel, fmt: usize) {
+    let mut map = CAMETAL_LAYERS.lock().unwrap();
+    map.entry(self_obj as usize).or_default().pixel_format = fmt;
+}
+
+extern "C" fn cametal_drawable_size(self_obj: Id, _cmd: Sel) -> pear_graphics::CGSize {
+    CAMETAL_LAYERS
+        .lock()
+        .unwrap()
+        .get(&(self_obj as usize))
+        .map(|s| s.drawable_size)
+        .unwrap_or(pear_graphics::CGSize { width: 1280.0, height: 720.0 })
+}
+
+extern "C" fn cametal_set_drawable_size(self_obj: Id, _cmd: Sel, sz: pear_graphics::CGSize) {
+    let mut map = CAMETAL_LAYERS.lock().unwrap();
+    map.entry(self_obj as usize).or_default().drawable_size = sz;
+}
+
+extern "C" fn cametal_framebuffer_only(self_obj: Id, _cmd: Sel) -> bool {
+    CAMETAL_LAYERS
+        .lock()
+        .unwrap()
+        .get(&(self_obj as usize))
+        .map(|s| s.framebuffer_only)
+        .unwrap_or(true)
+}
+
+extern "C" fn cametal_set_framebuffer_only(self_obj: Id, _cmd: Sel, flag: bool) {
+    let mut map = CAMETAL_LAYERS.lock().unwrap();
+    map.entry(self_obj as usize).or_default().framebuffer_only = flag;
+}
+
+extern "C" fn cametal_next_drawable(self_obj: Id, _cmd: Sel) -> Id {
+    let state = CAMETAL_LAYERS
+        .lock()
+        .unwrap()
+        .get(&(self_obj as usize))
+        .copied()
+        .unwrap_or_default();
+    let w = (state.drawable_size.width.max(1.0)) as usize;
+    let h = (state.drawable_size.height.max(1.0)) as usize;
+    pear_metal_vk::next_drawable_for_layer(self_obj, w, h, state.pixel_format)
+}
+
 fn init_guest_frameworks() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         let i = |p: *const ()| p as Imp;
         for (cls, meta, name) in [
-            (&CAMETALLAYER_CLASS, &CAMETALLAYER_META, "CAMetalLayer"),
             (&CATRANSACTION_CLASS, &CATRANSACTION_META, "CATransaction"),
             (&UIIMAGE_CLASS, &UIIMAGE_META, "UIImage"),
             (&UILABEL_CLASS, &UILABEL_META, "UILabel"),
@@ -1207,6 +1302,29 @@ fn init_guest_frameworks() {
                 ("setDrawableProperties:", i(app_noop1 as *const ())),
             ],
             &[],
+        );
+        objc_rt::register_builtin(
+            CAMETALLAYER_CLASS.ptr(),
+            CAMETALLAYER_META.ptr(),
+            "CAMetalLayer",
+            32,
+            &[
+                ("bounds", i(uiview_bounds as *const ())),
+                ("frame", i(uiview_bounds as *const ())),
+                ("contentsScale", i(uiview_scale as *const ())),
+                ("setContentsScale:", i(app_noop1 as *const ())),
+                ("setOpaque:", i(app_noop1 as *const ())),
+                ("device", i(cametal_device as *const ())),
+                ("setDevice:", i(cametal_set_device as *const ())),
+                ("pixelFormat", i(cametal_pixel_format as *const ())),
+                ("setPixelFormat:", i(cametal_set_pixel_format as *const ())),
+                ("drawableSize", i(cametal_drawable_size as *const ())),
+                ("setDrawableSize:", i(cametal_set_drawable_size as *const ())),
+                ("framebufferOnly", i(cametal_framebuffer_only as *const ())),
+                ("setFramebufferOnly:", i(cametal_set_framebuffer_only as *const ())),
+                ("nextDrawable", i(cametal_next_drawable as *const ())),
+            ],
+            &[("layer", i(cametal_layer as *const ()))],
         );
         objc_rt::register_builtin(
             CADISPLAYLINK_CLASS.ptr(),
@@ -4176,6 +4294,7 @@ pub fn init() {
     pear_libobjc::blocks::init_blocks();
     pear_foundation::init_foundation();
     init_guest_frameworks();
+    pear_metal_vk::init();
     #[cfg(target_os = "linux")]
     {
         let _ = pear_host::install_events(Box::new(DefaultGuestEvents));
@@ -4660,7 +4779,7 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
         },
         Some(path) if path.contains("MetalKit") => match symbol {
             "_OBJC_CLASS_$_MTKView" => Some(MTKVIEW_CLASS.ptr() as usize),
-            _ => None,
+            _ => pear_metal_vk::symbol(symbol),
         },
         Some(path) if path.contains("libswiftCore") => swift_core_symbol(symbol).or_else(|| libc_dlsym(symbol)),
         Some(path) if path.contains("libz") => dlopen_dlsym(&[c"libz.so.1", c"libz.1.dylib"], symbol),
@@ -4675,10 +4794,7 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             }
             _ => None,
         },
-        Some(path) if path.contains("Metal") && !path.contains("MetalKit") => match symbol {
-            "_MTLCreateSystemDefaultDevice" | "_MTLCopyAllDevices" => Some(ptr_null_stub as *const () as usize),
-            _ => None,
-        },
+        Some(path) if path.contains("Metal") && !path.contains("MetalKit") => pear_metal_vk::symbol(symbol),
         Some(path) if path.contains("GameController") => match symbol {
             "_OBJC_CLASS_$_GCController" => Some(GCCONTROLLER_CLASS.ptr() as usize),
             "_GCControllerDidConnectNotification" => Some(framework_const("GCControllerDidConnectNotification")),
