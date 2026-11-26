@@ -1283,6 +1283,71 @@ fn array_object_enumerator(items: Vec<Id>) -> Id {
         f(d.receiver, s)
     }
 }
+#[repr(C)]
+struct NsFastEnumerationState {
+    state: usize,
+    items_ptr: *mut Id,
+    mutations_ptr: *mut usize,
+    extra: [usize; 5],
+}
+
+static mut COLLECTION_FAST_ENUM_MUTATION: usize = 0;
+
+unsafe fn fast_enum_fill(
+    items: &[usize],
+    state: *mut NsFastEnumerationState,
+    stackbuf: *mut Id,
+    len: usize,
+) -> usize {
+    if state.is_null() || stackbuf.is_null() || len == 0 {
+        return 0;
+    }
+    let pos = (*state).state;
+    if pos >= items.len() {
+        return 0;
+    }
+    let n = (items.len() - pos).min(len);
+    for idx in 0..n {
+        *stackbuf.add(idx) = items[pos + idx] as Id;
+    }
+    (*state).state = pos + n;
+    (*state).items_ptr = stackbuf;
+    (*state).mutations_ptr = &raw mut COLLECTION_FAST_ENUM_MUTATION;
+    n
+}
+
+extern "C" fn map_table_fast_enum(
+    this: Id,
+    _cmd: pear_libobjc::abi::Sel,
+    state: *mut NsFastEnumerationState,
+    stackbuf: *mut Id,
+    len: usize,
+) -> usize {
+    let items: Vec<usize> = MAP_TABLES
+        .lock()
+        .unwrap()
+        .get(&(this as usize))
+        .map(|e| e.by_ptr.keys().copied().collect())
+        .unwrap_or_default();
+    unsafe { fast_enum_fill(&items, state, stackbuf, len) }
+}
+
+extern "C" fn hash_table_fast_enum(
+    this: Id,
+    _cmd: pear_libobjc::abi::Sel,
+    state: *mut NsFastEnumerationState,
+    stackbuf: *mut Id,
+    len: usize,
+) -> usize {
+    let items: Vec<usize> = HASH_TABLES
+        .lock()
+        .unwrap()
+        .get(&(this as usize))
+        .map(|e| e.items.clone())
+        .unwrap_or_default();
+    unsafe { fast_enum_fill(&items, state, stackbuf, len) }
+}
+
 extern "C" fn map_table_obj_enum(this: Id, _cmd: pear_libobjc::abi::Sel) -> Id {
     let items: Vec<Id> = MAP_TABLES
         .lock()
@@ -1577,6 +1642,7 @@ pub fn register_foundation_collection_classes() {
                 ("dictionaryRepresentation", i(map_table_dict_rep as *const ())),
                 ("objectEnumerator", i(map_table_obj_enum as *const ())),
                 ("keyEnumerator", i(map_table_key_enum as *const ())),
+                ("countByEnumeratingWithState:objects:count:", i(map_table_fast_enum as *const ())),
                 ("dealloc", i(map_table_dealloc as *const ())),
             ],
             &[
@@ -1604,6 +1670,7 @@ pub fn register_foundation_collection_classes() {
                 ("removeAllObjects", i(hash_table_remove_all as *const ())),
                 ("count", i(hash_table_count as *const ())),
                 ("allObjects", i(hash_table_all as *const ())),
+                ("countByEnumeratingWithState:objects:count:", i(hash_table_fast_enum as *const ())),
                 ("dealloc", i(hash_table_dealloc as *const ())),
             ],
             &[

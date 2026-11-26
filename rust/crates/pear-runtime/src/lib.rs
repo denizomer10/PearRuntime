@@ -103,6 +103,7 @@ guest_class!(AVAUDIOSESSION_CLASS, AVAUDIOSESSION_META);
 guest_class!(AVAUDIOSESSIONROUTEDESCRIPTION_CLASS, AVAUDIOSESSIONROUTEDESCRIPTION_META);
 guest_class!(AVAUDIOPLAYER_CLASS, AVAUDIOPLAYER_META);
 guest_class!(AVPLAYER_CLASS, AVPLAYER_META);
+guest_class!(CMMOTIONMANAGER_CLASS, CMMOTIONMANAGER_META);
 guest_class!(AVPLAYERITEM_CLASS, AVPLAYERITEM_META);
 guest_class!(AVURLASSET_CLASS, AVURLASSET_META);
 guest_class!(AVASSETREADER_CLASS, AVASSETREADER_META);
@@ -361,6 +362,39 @@ extern "C" fn uiview_add_subview(self_obj: Id, _cmd: Sel, child: Id) {
     }
 }
 
+static HIDDEN_VIEWS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<usize>>,
+> = std::sync::LazyLock::new(Default::default);
+
+extern "C" fn uiview_set_hidden(self_obj: Id, _cmd: Sel, hidden: bool) {
+    if self_obj.is_null() {
+        return;
+    }
+    let mut g = HIDDEN_VIEWS.lock().unwrap();
+    if hidden {
+        g.insert(self_obj as usize);
+    } else {
+        g.remove(&(self_obj as usize));
+    }
+}
+
+extern "C" fn uiview_is_hidden(self_obj: Id, _cmd: Sel) -> bool {
+    !self_obj.is_null() && HIDDEN_VIEWS.lock().unwrap().contains(&(self_obj as usize))
+}
+
+extern "C" fn uiview_bring_subview_to_front(self_obj: Id, _cmd: Sel, child: Id) {
+    if self_obj.is_null() || child.is_null() {
+        return;
+    }
+    let mut g = VIEW_SUBVIEWS.lock().unwrap();
+    if let Some(list) = g.as_mut().and_then(|m| m.get_mut(&(self_obj as usize))) {
+        if let Some(pos) = list.iter().position(|&p| p == child as usize) {
+            let item = list.remove(pos);
+            list.push(item);
+        }
+    }
+}
+
 extern "C" fn uiview_remove_from_superview(self_obj: Id, _cmd: Sel) {
     if self_obj.is_null() {
         return;
@@ -421,6 +455,15 @@ extern "C" fn uiview_convert_point(
     _other: Id,
 ) -> pear_graphics::CGPoint {
     pt
+}
+
+extern "C" fn screen_convert_rect(
+    _self: Id,
+    _cmd: Sel,
+    rect: pear_graphics::CGRect,
+    _space: Id,
+) -> pear_graphics::CGRect {
+    rect
 }
 
 extern "C" fn uitouch_location_in_view(self_obj: Id, _cmd: Sel, _view: Id) -> pear_graphics::CGPoint {
@@ -863,6 +906,11 @@ extern "C" fn ui_application_main(
                             }
                             std::thread::sleep(std::time::Duration::from_millis(16));
                         }
+                        let (mtlb_libs, mtlb_fns, draws, computes, presents) =
+                            pear_metal_vk::render_stats();
+                        eprintln!(
+                            "[PearRuntime][metal] stats: libraries={mtlb_libs} functions={mtlb_fns} draws={draws} computes={computes} presents={presents}"
+                        );
                     }
                 }
             } else {
@@ -1316,6 +1364,7 @@ fn init_guest_frameworks() {
                 ("beginBackgroundTaskWithExpirationHandler:", i(app_begin_bg_task as *const ())),
                 ("beginBackgroundTaskWithName:expirationHandler:", i(app_begin_bg_task2 as *const ())),
                 ("endBackgroundTask:", i(app_noop1 as *const ())),
+                ("isIgnoringInteractionEvents", i(app_false as *const ())),
             ],
             &[("sharedApplication", i(shared_app_stub as *const ()))],
         );
@@ -1330,6 +1379,12 @@ fn init_guest_frameworks() {
                 ("bounds", i(screen_bounds as *const ())),
                 ("nativeBounds", i(screen_native_bounds as *const ())),
                 ("applicationFrame", i(screen_bounds as *const ())),
+                ("coordinateSpace", i(ui_ret_self as *const ())),
+                ("fixedCoordinateSpace", i(ui_ret_self as *const ())),
+                ("convertPoint:toCoordinateSpace:", i(uiview_convert_point as *const ())),
+                ("convertPoint:fromCoordinateSpace:", i(uiview_convert_point as *const ())),
+                ("convertRect:toCoordinateSpace:", i(screen_convert_rect as *const ())),
+                ("convertRect:fromCoordinateSpace:", i(screen_convert_rect as *const ())),
                 ("maximumFramesPerSecond", i(screen_max_fps as *const ())),
                 ("brightness", i(screen_brightness as *const ())),
                 ("preferredMode", i(screen_current_mode as *const ())),
@@ -1509,6 +1564,7 @@ fn init_guest_frameworks() {
                 ("preferredStatusBarStyle", i(app_state as *const ())),
                 ("setNeedsStatusBarAppearanceUpdate", i(noop_method as *const ())),
                 ("setNeedsUpdateOfScreenEdgesDeferringSystemGestures", i(noop_method as *const ())),
+                ("setNeedsUpdateOfSupportedInterfaceOrientations", i(noop_method as *const ())),
                 ("childViewControllers", i(ret_empty_array as *const ())),
                 ("parentViewController", i(uivc_nil as *const ())),
                 ("presentedViewController", i(uivc_nil as *const ())),
@@ -1677,9 +1733,13 @@ fn init_guest_frameworks() {
                 ("rootViewController", i(ui_window_root_vc as *const ())),
                 ("setRootViewController:", i(ui_window_set_root_vc as *const ())),
                 ("setBackgroundColor:", i(app_noop1 as *const ())),
+                ("setHidden:", i(uiview_set_hidden as *const ())),
+                ("isHidden", i(uiview_is_hidden as *const ())),
                 ("addSubview:", i(uiview_add_subview as *const ())),
+                ("bringSubviewToFront:", i(uiview_bring_subview_to_front as *const ())),
                 ("subviews", i(uiview_subviews as *const ())),
                 ("layoutSubviews", i(noop_method as *const ())),
+                ("layoutIfNeeded", i(noop_method as *const ())),
                 ("convertPoint:fromView:", i(uiview_convert_point as *const ())),
                 ("convertPoint:toView:", i(uiview_convert_point as *const ())),
                 ("touchesBegan:withEvent:", i(touches_noop as *const ())),
@@ -1727,6 +1787,21 @@ fn init_guest_frameworks() {
             ],
             &[],
         );
+        objc_rt::register_builtin(
+            CMMOTIONMANAGER_CLASS.ptr(),
+            CMMOTIONMANAGER_META.ptr(),
+            "CMMotionManager",
+            32,
+            &[
+                ("isGyroAvailable", i(app_false as *const ())),
+                ("isDeviceMotionAvailable", i(app_false as *const ())),
+                ("isAccelerometerAvailable", i(app_false as *const ())),
+            ],
+            &[],
+        );
+extern "C" fn ui_ret_self(self_obj: Id, _cmd: Sel) -> Id {
+    self_obj
+}
 extern "C" fn ret_self1(self_obj: Id, _cmd: Sel, _arg: Id) -> Id {
     self_obj
 }
@@ -2033,7 +2108,7 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
             "AVAssetImageGenerator", "AVCaptureDevice", "AVMutableAudioMix",
             "AVMutableAudioMixInputParameters", "AVPlayerLayer",
             "ASAuthorizationAppleIDCredential", "ASAuthorizationAppleIDProvider", "ASAuthorizationController",
-            "ATTrackingManager", "CMMotionManager", "AAAttribution",
+            "ATTrackingManager", "AAAttribution",
             "GCDualShockGamepad", "GCXboxGamepad", "UNLocationNotificationTrigger",
             "MTLFXSpatialScalerDescriptor", "MTLFXTemporalScalerDescriptor",
             "MXDiagnosticPayload", "MXMetricManager", "MXMetricPayload",
@@ -3658,6 +3733,94 @@ static DISPATCH_SEMAPHORES: std::sync::LazyLock<
 static DISPATCH_GROUPS: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<usize, GroupEntry>>,
 > = std::sync::LazyLock::new(Default::default);
+static DISPATCH_DATA_OBJECTS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<usize>>,
+> = std::sync::LazyLock::new(Default::default);
+static DISPATCH_DATA_DESTRUCTOR_FREE_SENTINEL: [usize; 4] = [0; 4];
+static DISPATCH_DATA_EMPTY_SENTINEL: [usize; 4] = [0; 4];
+
+fn register_dispatch_data(bytes: &[u8]) -> *mut c_void {
+    let data = pear_foundation::nsdata_from_bytes(bytes);
+    if !data.is_null() {
+        DISPATCH_DATA_OBJECTS.lock().unwrap().insert(data as usize);
+    }
+    data as *mut c_void
+}
+
+fn dispatch_data_to_bytes(data: *mut c_void) -> Vec<u8> {
+    if data.is_null() || (data as usize) == (&raw const DISPATCH_DATA_EMPTY_SENTINEL as usize) {
+        return Vec::new();
+    }
+    pear_foundation::rust_bytes_from_nsdata(data as Id).unwrap_or_default()
+}
+
+extern "C" fn dispatch_data_create_impl(
+    buffer: *const c_void,
+    size: usize,
+    _queue: *mut c_void,
+    destructor: *const c_void,
+) -> *mut c_void {
+    let bytes = if buffer.is_null() || size == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(buffer as *const u8, size) }
+    };
+    let out = register_dispatch_data(bytes);
+    if !buffer.is_null()
+        && (destructor as usize) == (&raw const DISPATCH_DATA_DESTRUCTOR_FREE_SENTINEL as usize)
+    {
+        unsafe { free(buffer as *mut c_void) };
+    }
+    out
+}
+
+extern "C" fn dispatch_data_get_size_impl(data: *mut c_void) -> usize {
+    dispatch_data_to_bytes(data).len()
+}
+
+extern "C" fn dispatch_data_create_map_impl(
+    data: *mut c_void,
+    buffer_ptr: *mut *const c_void,
+    size_ptr: *mut usize,
+) -> *mut c_void {
+    let bytes = dispatch_data_to_bytes(data);
+    let len = bytes.len();
+    let mapped = register_dispatch_data(&bytes);
+    let ptr = if len == 0 || mapped.is_null() {
+        std::ptr::null()
+    } else {
+        unsafe {
+            let sel_bytes = objc_rt::sel("bytes");
+            let d = pear_libobjc::message::lookup_for_send(mapped as Id, sel_bytes);
+            let f: extern "C" fn(Id, Sel) -> *const c_void = std::mem::transmute(d.imp);
+            f(d.receiver, sel_bytes)
+        }
+    };
+    if !buffer_ptr.is_null() {
+        unsafe { *buffer_ptr = ptr };
+    }
+    if !size_ptr.is_null() {
+        unsafe { *size_ptr = len };
+    }
+    mapped
+}
+
+extern "C" fn dispatch_data_create_concat_impl(d1: *mut c_void, d2: *mut c_void) -> *mut c_void {
+    let mut combined = dispatch_data_to_bytes(d1);
+    combined.extend_from_slice(&dispatch_data_to_bytes(d2));
+    register_dispatch_data(&combined)
+}
+
+extern "C" fn dispatch_data_create_subrange_impl(
+    data: *mut c_void,
+    offset: usize,
+    size: usize,
+) -> *mut c_void {
+    let bytes = dispatch_data_to_bytes(data);
+    let start = offset.min(bytes.len());
+    let end = offset.saturating_add(size).min(bytes.len());
+    register_dispatch_data(&bytes[start..end])
+}
 
 extern "C" fn dispatch_semaphore_dealloc(this: Id, _cmd: Sel) {
     DISPATCH_SEMAPHORES.lock().unwrap().remove(&(this as usize));
@@ -3677,11 +3840,13 @@ extern "C" fn dispatch_release_impl(obj: *mut c_void) {
     if addr == (&raw const DISPATCH_MAIN_Q as usize)
         || addr == (&raw const DISPATCH_QUEUE_ATTR_STUB as usize)
         || addr == (&raw const OS_LOG_STUB as usize)
+        || addr == (&raw const DISPATCH_DATA_EMPTY_SENTINEL as usize)
     {
         return;
     }
     if DISPATCH_SEMAPHORES.lock().unwrap().contains_key(&addr)
         || DISPATCH_GROUPS.lock().unwrap().contains_key(&addr)
+        || DISPATCH_DATA_OBJECTS.lock().unwrap().contains(&addr)
     {
         pear_libobjc::object::release(obj as Id);
     }
@@ -5655,6 +5820,19 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_dispatch_semaphore_signal" => Some(dispatch_semaphore_signal_impl as *const () as usize),
             "_dispatch_semaphore_wait" => Some(dispatch_semaphore_wait_impl as *const () as usize),
             "_dispatch_block_create" => Some(dispatch_block_create_impl as *const () as usize),
+            "_dispatch_data_create" => Some(dispatch_data_create_impl as *const () as usize),
+            "_dispatch_data_get_size" => Some(dispatch_data_get_size_impl as *const () as usize),
+            "_dispatch_data_create_map" => Some(dispatch_data_create_map_impl as *const () as usize),
+            "_dispatch_data_create_concat" => {
+                Some(dispatch_data_create_concat_impl as *const () as usize)
+            }
+            "_dispatch_data_create_subrange" => {
+                Some(dispatch_data_create_subrange_impl as *const () as usize)
+            }
+            "__dispatch_data_destructor_free" => {
+                Some(&raw const DISPATCH_DATA_DESTRUCTOR_FREE_SENTINEL as usize)
+            }
+            "__dispatch_data_empty" => Some(&raw const DISPATCH_DATA_EMPTY_SENTINEL as usize),
             "__os_log_default" => Some(&raw const OS_LOG_STUB as usize),
             "_os_log_create" => Some(os_log_create_impl as *const () as usize),
             "_os_log_type_enabled" => Some(os_log_type_enabled_impl as *const () as usize),
@@ -6916,6 +7094,155 @@ mod tests {
             let d_iws = pear_libobjc::message::lookup_for_send(win, s_iws);
             let f_iws: extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(d_iws.imp);
             assert_eq!(f_iws(d_iws.receiver, s_iws, scene), win);
+        }
+    }
+
+    #[test]
+    fn phase5_6_dispatch_data_fast_enum_and_uikit_selectors() {
+        init();
+        unsafe {
+            // 1. dispatch_data_* + free destructor + map/concat/subrange
+            let raw = malloc(8) as *mut u8;
+            assert!(!raw.is_null());
+            std::ptr::copy_nonoverlapping(b"MTLB\x01\x02\x03\x04".as_ptr(), raw, 8);
+            let dd = dispatch_data_create_impl(
+                raw as *const c_void,
+                8,
+                std::ptr::null_mut(),
+                (&raw const DISPATCH_DATA_DESTRUCTOR_FREE_SENTINEL) as *const c_void,
+            );
+            assert!(!dd.is_null());
+            assert_eq!(dispatch_data_get_size_impl(dd), 8);
+
+            let mut map_ptr: *const c_void = std::ptr::null();
+            let mut map_size: usize = 0;
+            let mapped = dispatch_data_create_map_impl(dd, &mut map_ptr, &mut map_size);
+            assert!(!mapped.is_null());
+            assert_eq!(map_size, 8);
+            assert_eq!(
+                std::slice::from_raw_parts(map_ptr as *const u8, map_size),
+                b"MTLB\x01\x02\x03\x04"
+            );
+
+            let extra = dispatch_data_create_impl(
+                b"TAIL".as_ptr() as *const c_void,
+                4,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            );
+            let cat = dispatch_data_create_concat_impl(dd, extra);
+            assert_eq!(dispatch_data_get_size_impl(cat), 12);
+            let sub = dispatch_data_create_subrange_impl(cat, 4, 8);
+            assert_eq!(dispatch_data_to_bytes(sub), b"\x01\x02\x03\x04TAIL");
+
+            // Also verify ObjC NSData selectors work on dispatch_data
+            let s_len = objc_rt::sel("length");
+            let d_len = pear_libobjc::message::lookup_for_send(dd as Id, s_len);
+            let f_len: extern "C" fn(Id, Sel) -> usize = std::mem::transmute(d_len.imp);
+            assert_eq!(f_len(d_len.receiver, s_len), 8);
+
+            assert_eq!(
+                dispatch_data_get_size_impl(
+                    (&raw const DISPATCH_DATA_EMPTY_SENTINEL) as *mut c_void
+                ),
+                0
+            );
+            dispatch_release_impl(sub);
+            dispatch_release_impl(cat);
+            dispatch_release_impl(extra);
+            dispatch_release_impl(mapped);
+            dispatch_release_impl(dd);
+
+            // 2. NSMapTable + NSHashTable countByEnumeratingWithState:objects:count:
+            #[repr(C)]
+            struct TestEnumState {
+                state: usize,
+                items_ptr: *mut Id,
+                mutations_ptr: *mut usize,
+                extra: [usize; 5],
+            }
+            let s_enum = objc_rt::sel("countByEnumeratingWithState:objects:count:");
+
+            let mt_cls = objc_rt::class_named("NSMapTable").unwrap() as Id;
+            let s_s2s = objc_rt::sel("strongToStrongObjectsMapTable");
+            let d_s2s = pear_libobjc::message::lookup_for_send(mt_cls, s_s2s);
+            let f_s2s: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_s2s.imp);
+            let mt = f_s2s(d_s2s.receiver, s_s2s);
+            let k1 = pear_foundation::nsstring_from_rust("k1");
+            let v1 = pear_foundation::nsstring_from_rust("v1");
+            let s_set = objc_rt::sel("setObject:forKey:");
+            let d_set = pear_libobjc::message::lookup_for_send(mt, s_set);
+            let f_set: extern "C" fn(Id, Sel, Id, Id) = std::mem::transmute(d_set.imp);
+            f_set(d_set.receiver, s_set, v1, k1);
+
+            let mut st = TestEnumState {
+                state: 0,
+                items_ptr: std::ptr::null_mut(),
+                mutations_ptr: std::ptr::null_mut(),
+                extra: [0; 5],
+            };
+            let mut stack: [Id; 4] = [std::ptr::null_mut(); 4];
+            let d_mfe = pear_libobjc::message::lookup_for_send(mt, s_enum);
+            let f_mfe: extern "C" fn(Id, Sel, *mut TestEnumState, *mut Id, usize) -> usize =
+                std::mem::transmute(d_mfe.imp);
+            assert_eq!(f_mfe(d_mfe.receiver, s_enum, &mut st, stack.as_mut_ptr(), 4), 1);
+            assert_eq!(stack[0], k1);
+            assert_eq!(f_mfe(d_mfe.receiver, s_enum, &mut st, stack.as_mut_ptr(), 4), 0);
+
+            let ht_cls = objc_rt::class_named("NSHashTable").unwrap() as Id;
+            let s_wht = objc_rt::sel("weakObjectsHashTable");
+            let d_wht = pear_libobjc::message::lookup_for_send(ht_cls, s_wht);
+            let f_wht: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_wht.imp);
+            let ht = f_wht(d_wht.receiver, s_wht);
+            let s_add = objc_rt::sel("addObject:");
+            let d_add = pear_libobjc::message::lookup_for_send(ht, s_add);
+            let f_add: extern "C" fn(Id, Sel, Id) = std::mem::transmute(d_add.imp);
+            f_add(d_add.receiver, s_add, v1);
+            let mut st2 = TestEnumState {
+                state: 0,
+                items_ptr: std::ptr::null_mut(),
+                mutations_ptr: std::ptr::null_mut(),
+                extra: [0; 5],
+            };
+            let d_hfe = pear_libobjc::message::lookup_for_send(ht, s_enum);
+            let f_hfe: extern "C" fn(Id, Sel, *mut TestEnumState, *mut Id, usize) -> usize =
+                std::mem::transmute(d_hfe.imp);
+            assert_eq!(f_hfe(d_hfe.receiver, s_enum, &mut st2, stack.as_mut_ptr(), 4), 1);
+            assert_eq!(stack[0], v1);
+            assert_eq!(f_hfe(d_hfe.receiver, s_enum, &mut st2, stack.as_mut_ptr(), 4), 0);
+
+            // 3. UIScreen / UIWindow / UIViewController / UIApplication / CMMotionManager
+            let scr = alloc(UISCREEN_CLASS.ptr());
+            let s_cs = objc_rt::sel("coordinateSpace");
+            let d_cs = pear_libobjc::message::lookup_for_send(scr, s_cs);
+            let f_cs: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_cs.imp);
+            assert_eq!(f_cs(d_cs.receiver, s_cs), scr);
+            let s_fcs = objc_rt::sel("fixedCoordinateSpace");
+            let d_fcs = pear_libobjc::message::lookup_for_send(scr, s_fcs);
+            let f_fcs: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_fcs.imp);
+            assert_eq!(f_fcs(d_fcs.receiver, s_fcs), scr);
+
+            let win = alloc(UIWINDOW_CLASS.ptr());
+            let s_sh = objc_rt::sel("setHidden:");
+            let d_sh = pear_libobjc::message::lookup_for_send(win, s_sh);
+            let f_sh: extern "C" fn(Id, Sel, bool) = std::mem::transmute(d_sh.imp);
+            f_sh(d_sh.receiver, s_sh, true);
+            let s_ih = objc_rt::sel("isHidden");
+            let d_ih = pear_libobjc::message::lookup_for_send(win, s_ih);
+            let f_ih: extern "C" fn(Id, Sel) -> bool = std::mem::transmute(d_ih.imp);
+            assert!(f_ih(d_ih.receiver, s_ih));
+
+            let cm = alloc(CMMOTIONMANAGER_CLASS.ptr());
+            for sel_name in [
+                "isGyroAvailable",
+                "isDeviceMotionAvailable",
+                "isAccelerometerAvailable",
+            ] {
+                let s = objc_rt::sel(sel_name);
+                let d = pear_libobjc::message::lookup_for_send(cm, s);
+                let f: extern "C" fn(Id, Sel) -> bool = std::mem::transmute(d.imp);
+                assert!(!f(d.receiver, s));
+            }
         }
     }
 }

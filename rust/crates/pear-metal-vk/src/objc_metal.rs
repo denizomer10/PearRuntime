@@ -11,6 +11,7 @@ use pear_libobjc::runtime as objc_rt;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, Once, OnceLock};
 
 #[repr(C)]
@@ -169,6 +170,24 @@ static PROPS_ID: OnceLock<Mutex<HashMap<(usize, usize), usize>>> = OnceLock::new
 static PROPS_USIZE: OnceLock<Mutex<HashMap<(usize, usize), usize>>> = OnceLock::new();
 static PROPS_SIZE: OnceLock<Mutex<HashMap<(usize, usize), MTLSize>>> = OnceLock::new();
 static PROPS_COLOR: OnceLock<Mutex<HashMap<(usize, usize), MTLClearColor>>> = OnceLock::new();
+static PROPS_F64: OnceLock<Mutex<HashMap<(usize, usize), f64>>> = OnceLock::new();
+
+static TOTAL_MTLB_LIBRARIES: AtomicUsize = AtomicUsize::new(0);
+static TOTAL_MTLB_FUNCTIONS: AtomicUsize = AtomicUsize::new(0);
+static TOTAL_DRAW_CALLS: AtomicUsize = AtomicUsize::new(0);
+static TOTAL_COMPUTE_DISPATCHES: AtomicUsize = AtomicUsize::new(0);
+static TOTAL_PRESENTS: AtomicUsize = AtomicUsize::new(0);
+
+/// Returns `(mtlb_libraries, mtlb_functions, draw_calls, compute_dispatches, presents)`.
+pub fn render_stats() -> (usize, usize, usize, usize, usize) {
+    (
+        TOTAL_MTLB_LIBRARIES.load(Ordering::Relaxed),
+        TOTAL_MTLB_FUNCTIONS.load(Ordering::Relaxed),
+        TOTAL_DRAW_CALLS.load(Ordering::Relaxed),
+        TOTAL_COMPUTE_DISPATCHES.load(Ordering::Relaxed),
+        TOTAL_PRESENTS.load(Ordering::Relaxed),
+    )
+}
 
 fn vk_context() -> Option<&'static VkContext> {
     VK_CTX.get_or_init(VkContext::try_create).as_ref()
@@ -212,6 +231,9 @@ fn props_size() -> &'static Mutex<HashMap<(usize, usize), MTLSize>> {
 }
 fn props_color() -> &'static Mutex<HashMap<(usize, usize), MTLClearColor>> {
     PROPS_COLOR.get_or_init(Default::default)
+}
+fn props_f64() -> &'static Mutex<HashMap<(usize, usize), f64>> {
+    PROPS_F64.get_or_init(Default::default)
 }
 
 unsafe fn send0<R>(obj: Id, name: &str) -> R {
@@ -262,9 +284,32 @@ fn getter_sel_for_setter(cmd: Sel) -> Option<usize> {
     Some(objc_rt::sel(&getter) as usize)
 }
 
+fn store_retained_slot<K: Eq + std::hash::Hash>(
+    map: &Mutex<HashMap<K, usize>>,
+    key: K,
+    val: Id,
+) {
+    if !val.is_null() {
+        pear_libobjc::object::retain(val);
+    }
+    let prev = {
+        let mut g = map.lock().unwrap();
+        if val.is_null() {
+            g.remove(&key)
+        } else {
+            g.insert(key, val as usize)
+        }
+    };
+    if let Some(old) = prev {
+        if old != 0 {
+            pear_libobjc::object::release(old as Id);
+        }
+    }
+}
+
 extern "C" fn prop_set_id(this: Id, cmd: Sel, val: Id) {
     if let Some(gk) = getter_sel_for_setter(cmd) {
-        props_id().lock().unwrap().insert((this as usize, gk), val as usize);
+        store_retained_slot(props_id(), (this as usize, gk), val);
     }
 }
 extern "C" fn prop_get_usize(this: Id, cmd: Sel) -> usize {
@@ -305,6 +350,26 @@ extern "C" fn prop_set_color(this: Id, cmd: Sel, val: MTLClearColor) {
     if let Some(gk) = getter_sel_for_setter(cmd) {
         props_color().lock().unwrap().insert((this as usize, gk), val);
     }
+}
+extern "C" fn prop_get_f64_default_one(this: Id, cmd: Sel) -> f64 {
+    props_f64()
+        .lock()
+        .unwrap()
+        .get(&(this as usize, cmd as usize))
+        .copied()
+        .unwrap_or(1.0)
+}
+extern "C" fn prop_set_f64(this: Id, cmd: Sel, val: f64) {
+    if let Some(gk) = getter_sel_for_setter(cmd) {
+        props_f64().lock().unwrap().insert((this as usize, gk), val);
+    }
+}
+extern "C" fn ds_is_alpha_to_coverage(this: Id, _cmd: Sel) -> usize {
+    let g = props_usize().lock().unwrap();
+    g.get(&(this as usize, objc_rt::sel("isAlphaToCoverageEnabled") as usize))
+        .or_else(|| g.get(&(this as usize, objc_rt::sel("alphaToCoverageEnabled") as usize)))
+        .copied()
+        .unwrap_or(0)
 }
 
 extern "C" fn mtl_ret_self(this: Id, _cmd: Sel) -> Id { this }
@@ -452,6 +517,7 @@ extern "C" fn dev_new_library_with_data(_this: Id, _cmd: Sel, data: Id, _err: *m
     let mut map = HashMap::new();
     let mut order = Vec::new();
     if let Ok(parsed) = mtlb::parse_mtlb(&raw) {
+        TOTAL_MTLB_LIBRARIES.fetch_add(1, Ordering::Relaxed);
         for f in parsed.functions {
             order.push(f.name.clone());
             map.insert(f.name.clone(), f);
@@ -620,6 +686,18 @@ extern "C" fn tex_replace_region(
         }
     }
 }
+extern "C" fn tex_replace_region_slice(
+    this: Id,
+    cmd: Sel,
+    region: MTLRegion,
+    level: usize,
+    _slice: usize,
+    bytes: *const u8,
+    bytes_per_row: usize,
+    _bytes_per_image: usize,
+) {
+    tex_replace_region(this, cmd, region, level, bytes, bytes_per_row);
+}
 
 extern "C" fn tex_get_bytes(
     this: Id,
@@ -670,6 +748,7 @@ extern "C" fn lib_function_names(this: Id, _cmd: Sel) -> Id {
 }
 
 fn instantiate_function(mtlb_fn: mtlb::MtlbFunction) -> Id {
+    TOTAL_MTLB_FUNCTIONS.fetch_add(1, Ordering::Relaxed);
     let spirv = spirv::compile_metal_function_to_spirv(&mtlb_fn);
     let vk_module = vk_context()
         .and_then(|ctx| ctx.create_shader_module(&spirv))
@@ -817,7 +896,18 @@ extern "C" fn cb_status(this: Id, _cmd: Sel) -> usize {
     cmd_buffers().lock().unwrap().get(&(this as usize)).map(|s| s.status).unwrap_or(4)
 }
 
+extern "C" fn cb_present_drawable(_this: Id, _cmd: Sel, _drawable: Id) {
+    TOTAL_PRESENTS.fetch_add(1, Ordering::Relaxed);
+}
+extern "C" fn drawable_present0(_this: Id, _cmd: Sel) {
+    TOTAL_PRESENTS.fetch_add(1, Ordering::Relaxed);
+}
+extern "C" fn drawable_present1(_this: Id, _cmd: Sel, _time: f64) {
+    TOTAL_PRESENTS.fetch_add(1, Ordering::Relaxed);
+}
+
 extern "C" fn enc_draw_primitives(this: Id, _cmd: Sel, _ptype: usize, _start: usize, _count: usize) {
+    TOTAL_DRAW_CALLS.fetch_add(1, Ordering::Relaxed);
     if let Some(&cb) = encoder_to_cb().lock().unwrap().get(&(this as usize)) {
         if let Some(st) = cmd_buffers().lock().unwrap().get_mut(&cb) {
             st.draw_calls += 1;
@@ -833,6 +923,7 @@ extern "C" fn enc_draw_indexed(
     _ibuf: Id,
     _ioff: usize,
 ) {
+    TOTAL_DRAW_CALLS.fetch_add(1, Ordering::Relaxed);
     if let Some(&cb) = encoder_to_cb().lock().unwrap().get(&(this as usize)) {
         if let Some(st) = cmd_buffers().lock().unwrap().get_mut(&cb) {
             st.draw_calls += 1;
@@ -840,6 +931,7 @@ extern "C" fn enc_draw_indexed(
     }
 }
 extern "C" fn comp_dispatch(this: Id, _cmd: Sel, _tgs: MTLSize, _tptg: MTLSize) {
+    TOTAL_COMPUTE_DISPATCHES.fetch_add(1, Ordering::Relaxed);
     if let Some(&cb) = encoder_to_cb().lock().unwrap().get(&(this as usize)) {
         if let Some(st) = cmd_buffers().lock().unwrap().get_mut(&cb) {
             st.compute_dispatches += 1;
@@ -891,6 +983,10 @@ fn subscript_for(arr: Id, idx: usize, elem_cls: &StaticClass) -> Id {
     obj
 }
 
+extern "C" fn subscript_set(this: Id, _cmd: Sel, obj: Id, idx: usize) {
+    store_retained_slot(subscript_slots(), (this as usize, idx), obj);
+}
+
 extern "C" fn color_attach_at(this: Id, _cmd: Sel, idx: usize) -> Id {
     subscript_for(this, idx, &MTLRENDERPASSCOLORATTACH_CLASS)
 }
@@ -904,25 +1000,31 @@ extern "C" fn vertex_layout_at(this: Id, _cmd: Sel, idx: usize) -> Id {
     subscript_for(this, idx, &MTLVERTEXLAYOUTDESC_CLASS)
 }
 
-extern "C" fn render_pass_color_attachments(this: Id, _cmd: Sel) -> Id {
-    let key = objc_rt::sel("colorAttachments") as usize;
+fn lazy_prop_alloc(this: Id, sel_name: &str, cls: &StaticClass) -> Id {
+    let key = objc_rt::sel(sel_name) as usize;
     let mut g = props_id().lock().unwrap();
     if let Some(&v) = g.get(&(this as usize, key)) {
         return v as Id;
     }
-    let arr = unsafe { alloc(MTLRENDERPASSCOLORARRAY_CLASS.ptr()) };
-    g.insert((this as usize, key), arr as usize);
-    arr
+    let obj = unsafe { alloc(cls.ptr()) };
+    g.insert((this as usize, key), obj as usize);
+    obj
+}
+
+extern "C" fn render_pass_color_attachments(this: Id, _cmd: Sel) -> Id {
+    lazy_prop_alloc(this, "colorAttachments", &MTLRENDERPASSCOLORARRAY_CLASS)
 }
 extern "C" fn render_pass_depth_attachment(this: Id, _cmd: Sel) -> Id {
-    let key = objc_rt::sel("depthAttachment") as usize;
-    let mut g = props_id().lock().unwrap();
-    if let Some(&v) = g.get(&(this as usize, key)) {
-        return v as Id;
-    }
-    let att = unsafe { alloc(MTLRENDERPASSDEPTHATTACH_CLASS.ptr()) };
-    g.insert((this as usize, key), att as usize);
-    att
+    lazy_prop_alloc(this, "depthAttachment", &MTLRENDERPASSDEPTHATTACH_CLASS)
+}
+extern "C" fn render_pass_stencil_attachment(this: Id, _cmd: Sel) -> Id {
+    lazy_prop_alloc(this, "stencilAttachment", &MTLRENDERPASSDEPTHATTACH_CLASS)
+}
+extern "C" fn ds_front_face_stencil(this: Id, _cmd: Sel) -> Id {
+    lazy_prop_alloc(this, "frontFaceStencil", &MTLSTENCILDESCRIPTOR_CLASS)
+}
+extern "C" fn ds_back_face_stencil(this: Id, _cmd: Sel) -> Id {
+    lazy_prop_alloc(this, "backFaceStencil", &MTLSTENCILDESCRIPTOR_CLASS)
 }
 extern "C" fn pipe_color_attachments(this: Id, _cmd: Sel) -> Id {
     let key = objc_rt::sel("colorAttachments") as usize;
@@ -1100,12 +1202,13 @@ pub fn register_classes() {
             32,
             &[
                 ("renderCommandEncoderWithDescriptor:", i(cb_render_encoder as *const ())),
+                ("parallelRenderCommandEncoderWithDescriptor:", i(cb_render_encoder as *const ())),
                 ("computeCommandEncoder", i(cb_compute_encoder as *const ())),
                 ("computeCommandEncoderWithDispatchType:", i(cb_compute_encoder_disp as *const ())),
                 ("blitCommandEncoder", i(cb_blit_encoder as *const ())),
                 ("addScheduledHandler:", i(cb_add_scheduled_handler as *const ())),
                 ("addCompletedHandler:", i(cb_add_completed_handler as *const ())),
-                ("presentDrawable:", i(mtl_noop1 as *const ())),
+                ("presentDrawable:", i(cb_present_drawable as *const ())),
                 ("enqueue", i(mtl_noop0 as *const ())),
                 ("commit", i(cb_commit as *const ())),
                 ("waitUntilScheduled", i(mtl_noop0 as *const ())),
@@ -1125,6 +1228,7 @@ pub fn register_classes() {
             32,
             &[
                 ("setRenderPipelineState:", i(mtl_noop1 as *const ())),
+                ("renderCommandEncoder", i(mtl_ret_self as *const ())),
                 ("setDepthStencilState:", i(mtl_noop1 as *const ())),
                 ("setStencilReferenceValue:", i(mtl_noop1 as *const ())),
                 ("setCullMode:", i(mtl_noop1 as *const ())),
@@ -1223,9 +1327,11 @@ pub fn register_classes() {
                 ("mipmapLevelCount", i(tex_mips as *const ())),
                 ("arrayLength", i(mtl_one as *const ())),
                 ("sampleCount", i(mtl_one as *const ())),
+                ("storageMode", i(mtl_zero as *const ())),
                 ("usage", i(tex_usage as *const ())),
                 ("newTextureViewWithPixelFormat:", i(tex_new_view as *const ())),
                 ("replaceRegion:mipmapLevel:withBytes:bytesPerRow:", i(tex_replace_region as *const ())),
+                ("replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:", i(tex_replace_region_slice as *const ())),
                 ("getBytes:bytesPerRow:fromRegion:mipmapLevel:", i(tex_get_bytes as *const ())),
                 ("label", i(prop_get_id as *const ())),
                 ("setLabel:", i(prop_set_id as *const ())),
@@ -1288,8 +1394,8 @@ pub fn register_classes() {
             32,
             &[
                 ("texture", i(drawable_texture as *const ())),
-                ("present", i(mtl_noop0 as *const ())),
-                ("presentAtTime:", i(mtl_noop1 as *const ())),
+                ("present", i(drawable_present0 as *const ())),
+                ("presentAtTime:", i(drawable_present1 as *const ())),
             ],
             &[],
         );
@@ -1347,6 +1453,11 @@ pub fn register_classes() {
                 ("setStencilAttachmentPixelFormat:", i(prop_set_usize as *const ())),
                 ("sampleCount", i(prop_get_usize as *const ())),
                 ("setSampleCount:", i(prop_set_usize as *const ())),
+                ("rasterSampleCount", i(prop_get_usize as *const ())),
+                ("setRasterSampleCount:", i(prop_set_usize as *const ())),
+                ("alphaToCoverageEnabled", i(prop_get_usize as *const ())),
+                ("isAlphaToCoverageEnabled", i(ds_is_alpha_to_coverage as *const ())),
+                ("setAlphaToCoverageEnabled:", i(prop_set_usize as *const ())),
                 ("reset", i(mtl_noop0 as *const ())),
             ],
             &[],
@@ -1360,7 +1471,12 @@ pub fn register_classes() {
             &[
                 ("colorAttachments", i(render_pass_color_attachments as *const ())),
                 ("depthAttachment", i(render_pass_depth_attachment as *const ())),
-                ("stencilAttachment", i(render_pass_depth_attachment as *const ())),
+                ("setDepthAttachment:", i(prop_set_id as *const ())),
+                ("stencilAttachment", i(render_pass_stencil_attachment as *const ())),
+                ("setStencilAttachment:", i(prop_set_id as *const ())),
+                ("visibilityResultBuffer", i(prop_get_id as *const ())),
+                ("setVisibilityResultBuffer:", i(prop_set_id as *const ())),
+                ("setSamplePositions:count:", i(mtl_noop2 as *const ())),
                 ("renderTargetWidth", i(prop_get_usize as *const ())),
                 ("setRenderTargetWidth:", i(prop_set_usize as *const ())),
                 ("renderTargetHeight", i(prop_get_usize as *const ())),
@@ -1376,7 +1492,7 @@ pub fn register_classes() {
             32,
             &[
                 ("objectAtIndexedSubscript:", i(color_attach_at as *const ())),
-                ("setObject:atIndexedSubscript:", i(mtl_noop2 as *const ())),
+                ("setObject:atIndexedSubscript:", i(subscript_set as *const ())),
             ],
             &[],
         );
@@ -1387,7 +1503,7 @@ pub fn register_classes() {
             32,
             &[
                 ("objectAtIndexedSubscript:", i(pipe_color_attach_at as *const ())),
-                ("setObject:atIndexedSubscript:", i(mtl_noop2 as *const ())),
+                ("setObject:atIndexedSubscript:", i(subscript_set as *const ())),
             ],
             &[],
         );
@@ -1399,6 +1515,14 @@ pub fn register_classes() {
             &[
                 ("texture", i(prop_get_id as *const ())),
                 ("setTexture:", i(prop_set_id as *const ())),
+                ("resolveTexture", i(prop_get_id as *const ())),
+                ("setResolveTexture:", i(prop_set_id as *const ())),
+                ("level", i(prop_get_usize as *const ())),
+                ("setLevel:", i(prop_set_usize as *const ())),
+                ("slice", i(prop_get_usize as *const ())),
+                ("setSlice:", i(prop_set_usize as *const ())),
+                ("depthPlane", i(prop_get_usize as *const ())),
+                ("setDepthPlane:", i(prop_set_usize as *const ())),
                 ("loadAction", i(prop_get_usize as *const ())),
                 ("setLoadAction:", i(prop_set_usize as *const ())),
                 ("storeAction", i(prop_get_usize as *const ())),
@@ -1416,10 +1540,18 @@ pub fn register_classes() {
             &[
                 ("texture", i(prop_get_id as *const ())),
                 ("setTexture:", i(prop_set_id as *const ())),
+                ("level", i(prop_get_usize as *const ())),
+                ("setLevel:", i(prop_set_usize as *const ())),
+                ("slice", i(prop_get_usize as *const ())),
+                ("setSlice:", i(prop_set_usize as *const ())),
+                ("depthPlane", i(prop_get_usize as *const ())),
+                ("setDepthPlane:", i(prop_set_usize as *const ())),
                 ("loadAction", i(prop_get_usize as *const ())),
                 ("setLoadAction:", i(prop_set_usize as *const ())),
                 ("storeAction", i(prop_get_usize as *const ())),
                 ("setStoreAction:", i(prop_set_usize as *const ())),
+                ("clearDepth", i(prop_get_f64_default_one as *const ())),
+                ("setClearDepth:", i(prop_set_f64 as *const ())),
             ],
             &[],
         );
@@ -1433,6 +1565,18 @@ pub fn register_classes() {
                 ("setPixelFormat:", i(prop_set_usize as *const ())),
                 ("isBlendingEnabled", i(prop_get_usize as *const ())),
                 ("setBlendingEnabled:", i(prop_set_usize as *const ())),
+                ("rgbBlendOperation", i(prop_get_usize as *const ())),
+                ("setRgbBlendOperation:", i(prop_set_usize as *const ())),
+                ("alphaBlendOperation", i(prop_get_usize as *const ())),
+                ("setAlphaBlendOperation:", i(prop_set_usize as *const ())),
+                ("sourceRGBBlendFactor", i(prop_get_usize as *const ())),
+                ("setSourceRGBBlendFactor:", i(prop_set_usize as *const ())),
+                ("sourceAlphaBlendFactor", i(prop_get_usize as *const ())),
+                ("setSourceAlphaBlendFactor:", i(prop_set_usize as *const ())),
+                ("destinationRGBBlendFactor", i(prop_get_usize as *const ())),
+                ("setDestinationRGBBlendFactor:", i(prop_set_usize as *const ())),
+                ("destinationAlphaBlendFactor", i(prop_get_usize as *const ())),
+                ("setDestinationAlphaBlendFactor:", i(prop_set_usize as *const ())),
                 ("writeMask", i(prop_get_usize as *const ())),
                 ("setWriteMask:", i(prop_set_usize as *const ())),
             ],
@@ -1456,7 +1600,10 @@ pub fn register_classes() {
             MTLVERTEXATTRARRAY_META.ptr(),
             "MTLVertexAttributeDescriptorArray",
             32,
-            &[("objectAtIndexedSubscript:", i(vertex_attr_at as *const ()))],
+            &[
+                ("objectAtIndexedSubscript:", i(vertex_attr_at as *const ())),
+                ("setObject:atIndexedSubscript:", i(subscript_set as *const ())),
+            ],
             &[],
         );
         objc_rt::register_builtin(
@@ -1464,7 +1611,10 @@ pub fn register_classes() {
             MTLVERTEXLAYOUTARRAY_META.ptr(),
             "MTLVertexBufferLayoutDescriptorArray",
             32,
-            &[("objectAtIndexedSubscript:", i(vertex_layout_at as *const ()))],
+            &[
+                ("objectAtIndexedSubscript:", i(vertex_layout_at as *const ())),
+                ("setObject:atIndexedSubscript:", i(subscript_set as *const ())),
+            ],
             &[],
         );
         objc_rt::register_builtin(
@@ -1508,8 +1658,12 @@ pub fn register_classes() {
                 ("setDepthCompareFunction:", i(prop_set_usize as *const ())),
                 ("isDepthWriteEnabled", i(prop_get_usize as *const ())),
                 ("setDepthWriteEnabled:", i(prop_set_usize as *const ())),
-                ("frontFaceStencil", i(mtl_ret_self as *const ())),
-                ("backFaceStencil", i(mtl_ret_self as *const ())),
+                ("frontFaceStencil", i(ds_front_face_stencil as *const ())),
+                ("setFrontFaceStencil:", i(prop_set_id as *const ())),
+                ("backFaceStencil", i(ds_back_face_stencil as *const ())),
+                ("setBackFaceStencil:", i(prop_set_id as *const ())),
+                ("label", i(prop_get_id as *const ())),
+                ("setLabel:", i(prop_set_id as *const ())),
             ],
             &[],
         );
@@ -1529,6 +1683,12 @@ pub fn register_classes() {
                 ("setSAddressMode:", i(prop_set_usize as *const ())),
                 ("tAddressMode", i(prop_get_usize as *const ())),
                 ("setTAddressMode:", i(prop_set_usize as *const ())),
+                ("rAddressMode", i(prop_get_usize as *const ())),
+                ("setRAddressMode:", i(prop_set_usize as *const ())),
+                ("maxAnisotropy", i(prop_get_usize as *const ())),
+                ("setMaxAnisotropy:", i(prop_set_usize as *const ())),
+                ("label", i(prop_get_id as *const ())),
+                ("setLabel:", i(prop_set_id as *const ())),
             ],
             &[],
         );
@@ -1598,7 +1758,20 @@ pub fn register_classes() {
             MTLSTENCILDESCRIPTOR_META.ptr(),
             "MTLStencilDescriptor",
             32,
-            &[("stencilCompareFunction", i(prop_get_usize as *const ())), ("setStencilCompareFunction:", i(prop_set_usize as *const ()))],
+            &[
+                ("stencilCompareFunction", i(prop_get_usize as *const ())),
+                ("setStencilCompareFunction:", i(prop_set_usize as *const ())),
+                ("stencilFailureOperation", i(prop_get_usize as *const ())),
+                ("setStencilFailureOperation:", i(prop_set_usize as *const ())),
+                ("depthFailureOperation", i(prop_get_usize as *const ())),
+                ("setDepthFailureOperation:", i(prop_set_usize as *const ())),
+                ("depthStencilPassOperation", i(prop_get_usize as *const ())),
+                ("setDepthStencilPassOperation:", i(prop_set_usize as *const ())),
+                ("readMask", i(prop_get_usize as *const ())),
+                ("setReadMask:", i(prop_set_usize as *const ())),
+                ("writeMask", i(prop_get_usize as *const ())),
+                ("setWriteMask:", i(prop_set_usize as *const ())),
+            ],
             &[],
         );
     });

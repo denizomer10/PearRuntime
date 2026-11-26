@@ -8,7 +8,8 @@ pub mod vk;
 
 pub use objc_metal::{
     command_buffer_counts, copy_all_devices, create_system_default_device, function_spirv, init,
-    next_drawable_for_layer, MTLClearColor, MTLOrigin, MTLRegion, MTLSize, MTLViewport,
+    next_drawable_for_layer, render_stats, MTLClearColor, MTLOrigin, MTLRegion, MTLSize,
+    MTLViewport,
 };
 
 /// Resolves Mach-O imports from `Metal.framework` (and Metal helper symbols).
@@ -240,6 +241,58 @@ mod tests {
             let dst_ptr = send0::<*const c_void>(dst_buf, "contents") as *const u8;
             let copied = std::slice::from_raw_parts(dst_ptr, 8);
             assert_eq!(copied, &seed);
+
+            // Render-pass & depth-stencil descriptor separation and accessors
+            assert_ne!(send0::<Id>(pass, "depthAttachment"), send0::<Id>(pass, "stencilAttachment"));
+            let depth_att: Id = send0(pass, "depthAttachment");
+            assert!((send0::<f64>(depth_att, "clearDepth") - 1.0).abs() < 1e-9);
+            send1::<f64, ()>(depth_att, "setClearDepth:", 0.25);
+            assert!((send0::<f64>(depth_att, "clearDepth") - 0.25).abs() < 1e-9);
+
+            send1::<usize, ()>(pdesc, "setRasterSampleCount:", 4);
+            assert_eq!(send0::<usize>(pdesc, "rasterSampleCount"), 4);
+            send1::<usize, ()>(pdesc, "setAlphaToCoverageEnabled:", 1);
+            assert_eq!(send0::<usize>(pdesc, "isAlphaToCoverageEnabled"), 1);
+
+            let ds_cls = objc_rt::class_named("MTLDepthStencilDescriptor").unwrap() as Id;
+            let ds: Id = send0(send0(ds_cls, "alloc"), "init");
+            let ff: Id = send0(ds, "frontFaceStencil");
+            let bf: Id = send0(ds, "backFaceStencil");
+            assert!(!ff.is_null() && !bf.is_null());
+            assert_ne!(ff, ds);
+            assert_ne!(ff, bf);
+            send1::<usize, ()>(ff, "setReadMask:", 0xff);
+            assert_eq!(send0::<usize>(ff, "readMask"), 0xff);
+
+            let (libs, fns, draws, computes, presents) = render_stats();
+            assert!(libs >= 1 && fns >= 1 && draws >= 1);
+            let _ = (computes, presents);
+
+            // ARC retain/release lifecycle on setObject:atIndexedSubscript: and setStencilAttachment:
+            let cdesc_cls = objc_rt::class_named("MTLRenderPassColorAttachmentDescriptor").unwrap() as Id;
+            let ca: Id = send0(send0(cdesc_cls, "alloc"), "init");
+            let tdesc_cls = objc_rt::class_named("MTLTextureDescriptor").unwrap() as Id;
+            let tdesc: Id = send0(send0(tdesc_cls, "alloc"), "init");
+            let tex: Id = send1(dev, "newTextureWithDescriptor:", tdesc);
+            send1::<Id, ()>(ca, "setTexture:", tex);
+            let color_atts: Id = send0(pass, "colorAttachments");
+            send2::<Id, usize, ()>(color_atts, "setObject:atIndexedSubscript:", ca, 0);
+            pear_libobjc::object::release(ca);
+            let ca_back: Id = send1(color_atts, "objectAtIndexedSubscript:", 0);
+            assert_eq!(ca_back, ca);
+            assert_eq!(send0::<Id>(ca_back, "texture"), tex);
+            send2::<Id, usize, ()>(color_atts, "setObject:atIndexedSubscript:", std::ptr::null_mut(), 0);
+            let ca_fresh: Id = send1(color_atts, "objectAtIndexedSubscript:", 0);
+            assert!(!ca_fresh.is_null());
+
+            let sdesc_cls = objc_rt::class_named("MTLRenderPassDepthAttachmentDescriptor").unwrap() as Id;
+            let sa: Id = send0(send0(sdesc_cls, "alloc"), "init");
+            send1::<Id, ()>(sa, "setTexture:", tex);
+            send1::<Id, ()>(pass, "setStencilAttachment:", sa);
+            pear_libobjc::object::release(sa);
+            let sa_back: Id = send0(pass, "stencilAttachment");
+            assert_eq!(sa_back, sa);
+            assert_eq!(send0::<Id>(sa_back, "texture"), tex);
         }
     }
 }
