@@ -1,0 +1,10 @@
+[package]
+name = "pear-swift-rt"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+pear-libobjc = { path = "../pear-libobjc" }
+pear-foundation = { path = "../pear-foundation" }
+pear-graphics = { path = "../pear-graphics" }

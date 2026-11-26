@@ -315,6 +315,16 @@ pub fn class_named(name: &str) -> Option<*const ClassT> {
     registry().read().unwrap().by_name.get(name).map(|&p| p as *const ClassT)
 }
 
+pub fn metaclass_named(name: &str) -> Option<*const ClassT> {
+    let cls = class_named(name)?;
+    let meta = unsafe { (*cls).isa };
+    if meta.is_null() {
+        None
+    } else {
+        Some(meta)
+    }
+}
+
 /// Registers a class and its metaclass with methods already known (the
 /// runtime's own root classes).
 pub fn register_builtin(
@@ -358,6 +368,9 @@ pub unsafe fn realize(cls: *const ClassT) -> bool {
         }
     }
     let r = ro(cls);
+    if r.is_null() || (*r).name.is_null() {
+        return false;
+    }
     let name = CStr::from_ptr((*r).name).to_string_lossy().into_owned();
     // Non-fragile ivars: if the superclass grew past where this class's
     // ivars start, slide them (and the offset variables code reads).
@@ -379,29 +392,31 @@ pub unsafe fn realize(cls: *const ClassT) -> bool {
     let make = |ptr: *const ClassT, meta: bool, size: usize| -> Arc<Class> {
         let r = ro(ptr);
         let c = Class::new(ptr, &name, meta, size, image_name.clone());
-        c.add(methods((*r).base_methods).into_iter().map(|m| MethodEntry::new(m.name, m.types, m.imp)));
-        let protos = protocols((*r).base_protocols);
-        for &p in &protos {
-            register_protocol(p);
-        }
-        *c.protocols.write().unwrap() = protos;
-        *c.properties.write().unwrap() = properties((*r).base_properties)
-            .into_iter()
-            .map(|(n, a)| &*Box::leak(Box::new(PropertyEntry { name: n, attributes: a })))
-            .collect();
-        if !meta {
-            *c.ivars.write().unwrap() = ivars((*r).ivars)
+        if !r.is_null() {
+            c.add(methods((*r).base_methods).into_iter().map(|m| MethodEntry::new(m.name, m.types, m.imp)));
+            let protos = protocols((*r).base_protocols);
+            for &p in &protos {
+                register_protocol(p);
+            }
+            *c.protocols.write().unwrap() = protos;
+            *c.properties.write().unwrap() = properties((*r).base_properties)
                 .into_iter()
-                .map(|iv| {
-                    &*Box::leak(Box::new(IvarEntry {
-                        name: (*iv).name,
-                        types: (*iv).kind,
-                        offset_var: (*iv).offset,
-                        offset: 0,
-                        size: (*iv).size,
-                    }))
-                })
+                .map(|(n, a)| &*Box::leak(Box::new(PropertyEntry { name: n, attributes: a })))
                 .collect();
+            if !meta {
+                *c.ivars.write().unwrap() = ivars((*r).ivars)
+                    .into_iter()
+                    .map(|iv| {
+                        &*Box::leak(Box::new(IvarEntry {
+                            name: (*iv).name,
+                            types: (*iv).kind,
+                            offset_var: (*iv).offset,
+                            offset: 0,
+                            size: (*iv).size,
+                        }))
+                    })
+                    .collect();
+            }
         }
         Arc::new(c)
     };

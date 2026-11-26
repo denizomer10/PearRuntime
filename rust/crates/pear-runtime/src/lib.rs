@@ -12,6 +12,7 @@ pub use pear_legacy_host;
 pub use pear_libobjc;
 pub use pear_macho;
 pub use pear_metal_vk;
+pub use pear_swift_rt;
 
 #[cfg(target_os = "linux")]
 pub use pear_host_linux;
@@ -1528,6 +1529,111 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
             ],
             &[],
         );
+
+        fn register_stub_class(name: &str, super_cls: *const ClassT, instance_size: usize) {
+            if objc_rt::class_named(name).is_some() {
+                return;
+            }
+            let sup = if super_cls.is_null() { NSOBJECT_CLASS.ptr() } else { super_cls };
+            let sup_meta = unsafe { (*sup).isa };
+            let meta = Box::leak(Box::new(ClassT {
+                isa: NSOBJECT_META.ptr(),
+                superclass: if sup_meta.is_null() { NSOBJECT_META.ptr() } else { sup_meta },
+                cache: &raw const EMPTY_CACHE as *const c_void,
+                vtable: std::ptr::null(),
+                bits: 0,
+            }));
+            let cls = Box::leak(Box::new(ClassT {
+                isa: meta,
+                superclass: sup,
+                cache: &raw const EMPTY_CACHE as *const c_void,
+                vtable: std::ptr::null(),
+                bits: 0,
+            }));
+            objc_rt::register_builtin(cls, meta, name, instance_size, &[], &[]);
+        }
+
+        let ns_obj = NSOBJECT_CLASS.ptr();
+        let ui_view = UIVIEW_CLASS.ptr();
+        let ui_scroll = UISCROLLVIEW_CLASS.ptr();
+        let ui_ctrl = UICONTROL_CLASS.ptr();
+        let ui_vc = UIVIEWCONTROLLER_CLASS.ptr();
+        let ui_gr = UIGESTURERECOGNIZER_CLASS.ptr();
+        let ca_layer = CALAYER_CLASS.ptr();
+
+        // Foundation / CFNetwork base classes
+        for name in [
+            "NSProxy", "NSOperation", "NSHTTPURLResponse", "NSURLResponse",
+            "NSURLCache", "NSCachedURLResponse", "NSURLProtocol", "NSURLConnection",
+            "NSURLCredential", "NSURLSessionTask", "NSHTTPCookie", "NSHTTPCookieStorage",
+            "NSNetService", "NSInputStream", "NSOutputStream", "NSInvocation",
+            "NSMethodSignature", "NSCache", "NSDateFormatter", "NSISO8601DateFormatter",
+            "NSByteCountFormatter", "NSDecimalNumberHandler", "NSFileHandle",
+            "NSHashTable", "NSMapTable", "NSPointerArray", "NSIndexSet",
+            "NSCountedSet", "NSAttributedString", "NSCharacterSet",
+            "NSKeyedArchiver", "NSLayoutConstraint", "NSLock", "NSRecursiveLock",
+            "NSMachPort", "NSNotification", "NSNotificationQueue", "NSProgress",
+            "NSPropertyListSerialization", "NSRegularExpression", "NSScanner",
+            "NSSortDescriptor", "NSTextCheckingResult", "NSURLComponents",
+            "NSURLQueryItem", "NSUserActivity", "NSValue", "NSExpression", "NSTimeZone",
+        ] {
+            register_stub_class(name, ns_obj, 32);
+        }
+        register_stub_class("NSBlockOperation", objc_rt::class_named("NSOperation").unwrap_or(ns_obj), 32);
+        register_stub_class("NSInvocationOperation", objc_rt::class_named("NSOperation").unwrap_or(ns_obj), 32);
+        register_stub_class("NSURLSessionDataTask", objc_rt::class_named("NSURLSessionTask").unwrap_or(ns_obj), 32);
+        register_stub_class("NSMutableIndexSet", objc_rt::class_named("NSIndexSet").unwrap_or(ns_obj), 32);
+        register_stub_class("NSMutableAttributedString", objc_rt::class_named("NSAttributedString").unwrap_or(ns_obj), 32);
+        register_stub_class("NSMutableCharacterSet", objc_rt::class_named("NSCharacterSet").unwrap_or(ns_obj), 32);
+        register_stub_class("NSMutableOrderedSet", objc_rt::class_named("NSSet").unwrap_or(ns_obj), 32);
+        register_stub_class("NSDecimalNumber", objc_rt::class_named("NSNumber").unwrap_or(ns_obj), 32);
+        register_stub_class("NSConstantIntegerNumber", objc_rt::class_named("NSNumber").unwrap_or(ns_obj), 32);
+
+        // UIKit / WebKit / QuartzCore base classes
+        for name in [
+            "UIImageView", "UICollectionViewCell", "UITableViewCell",
+            "UIActivityIndicatorView", "UIProgressView", "UIStackView",
+            "UIVisualEffectView", "UIToolbar", "WKWebView",
+        ] {
+            register_stub_class(name, ui_view, 64);
+        }
+        for name in ["UICollectionView", "UITableView"] {
+            register_stub_class(name, ui_scroll, 64);
+        }
+        for name in ["UIDatePicker", "UISwitch", "UIPickerView"] {
+            register_stub_class(name, ui_ctrl, 64);
+        }
+        for name in ["UIImagePickerController", "UIPageViewController", "UITabBarController"] {
+            register_stub_class(name, ui_vc, 32);
+        }
+        register_stub_class("UISwipeGestureRecognizer", ui_gr, 32);
+        for name in ["CAReplicatorLayer", "CAShapeLayer"] {
+            register_stub_class(name, ca_layer, 32);
+        }
+        for name in [
+            "CABasicAnimation", "CAKeyframeAnimation", "CAMediaTimingFunction",
+            "UICollectionViewFlowLayout", "UIActivity", "UIAlertAction",
+            "UIBarButtonItem", "UIBezierPath", "UIGraphicsImageRenderer",
+            "UIGraphicsImageRendererFormat", "UILocalNotification", "UIPopoverController",
+            "UISceneConfiguration", "UIUserNotificationSettings",
+            "NSLayoutManager", "NSMutableParagraphStyle", "NSTextAttachment",
+            "NSTextContainer", "NSTextStorage",
+            "WKWebViewConfiguration", "WKUserContentController", "WKUserScript",
+            "WKNavigationAction", "WKNavigationResponse", "WKWebsiteDataStore",
+            // UserNotifications, StoreKit, CoreImage, CoreTelephony, MediaPlayer, JSC, Safari, etc.
+            "UNUserNotificationCenter", "UNMutableNotificationContent", "UNNotificationRequest",
+            "UNNotificationSound", "UNNotificationAttachment",
+            "UNTimeIntervalNotificationTrigger", "UNCalendarNotificationTrigger", "UNPushNotificationTrigger",
+            "SKAdNetwork", "SKMutablePayment", "SKPaymentTransaction",
+            "SKProductSubscriptionPeriod", "SKReceiptRefreshRequest",
+            "CIColor", "CIContext", "CIFilter", "CIImage",
+            "CTCallCenter", "CTCarrier", "CTTelephonyNetworkInfo",
+            "MPMediaItemArtwork", "MPMoviePlayerController", "MPNowPlayingInfoCenter", "MPRemoteCommandCenter",
+            "JSContext", "JSValue", "SFSafariViewController", "ASIdentifierManager",
+            "ASWebAuthenticationSession", "GKLocalPlayer", "SLComposeViewController",
+        ] {
+            register_stub_class(name, ns_obj, 32);
+        }
     });
 }
 
@@ -2202,60 +2308,6 @@ extern "C" fn task_info_impl(_task: u32, _flavor: u32, _info: *mut c_void, _coun
 extern "C" fn thread_policy_set_impl(_t: u32, _flavor: u32, _policy: *const c_void, _count: u32) -> i32 { 0 }
 
 #[repr(C)]
-struct SwiftOsVersion {
-    major: isize,
-    minor: isize,
-    patch: isize,
-}
-
-extern "C" fn swift_stdlib_os_version() -> SwiftOsVersion {
-    SwiftOsVersion { major: 17, minor: 0, patch: 0 }
-}
-
-extern "C" fn swift_once_impl(pred: *mut usize, f: extern "C" fn(*mut c_void), ctx: *mut c_void) {
-    dispatch_once_f_impl(pred, ctx, f);
-}
-
-extern "C" fn swift_retain_impl(obj: Id) -> Id {
-    let addr = obj as usize;
-    if addr != 0 && (addr & 0x8000_0000_0000_0001) == 0 {
-        pear_libobjc::object::retain(obj)
-    } else {
-        obj
-    }
-}
-
-extern "C" fn swift_release_impl(obj: Id) {
-    let addr = obj as usize;
-    if addr != 0 && (addr & 0x8000_0000_0000_0001) == 0 {
-        pear_libobjc::object::release(obj);
-    }
-}
-
-extern "C" fn swift_identity_ptr(p: *const c_void) -> *const c_void { p }
-
-extern "C" fn swift_alloc_object_impl(meta: *const ClassT, size: usize, _align_mask: usize) -> Id {
-    if meta.is_null() {
-        return std::ptr::null_mut();
-    }
-    let sz = size.max(16);
-    unsafe {
-        let p = malloc(sz) as Id;
-        if !p.is_null() {
-            std::ptr::write_bytes(p as *mut u8, 0, sz);
-            *(p as *mut *const ClassT) = meta;
-        }
-        p
-    }
-}
-
-extern "C" fn swift_dealloc_object_impl(obj: Id, _sz: usize, _align_mask: usize) {
-    if !obj.is_null() {
-        unsafe { free(obj as *mut c_void) };
-    }
-}
-
-#[repr(C)]
 struct CMTime {
     value: i64,
     timescale: i32,
@@ -2271,28 +2323,6 @@ extern "C" fn cm_time_make(value: i64, timescale: i32) -> CMTime {
 
 extern "C" fn cm_time_get_seconds(t: CMTime) -> f64 {
     if t.timescale == 0 { 0.0 } else { t.value as f64 / t.timescale as f64 }
-}
-
-fn swift_core_symbol(symbol: &str) -> Option<usize> {
-    let f = |p: *const ()| Some(p as usize);
-    match symbol {
-        "_swift_retain"
-        | "_swift_bridgeObjectRetain"
-        | "_swift_unknownObjectRetain"
-        | "_swift_errorRetain" => f(swift_retain_impl as *const ()),
-        "_swift_release"
-        | "_swift_bridgeObjectRelease"
-        | "_swift_unknownObjectRelease"
-        | "_swift_errorRelease" => f(swift_release_impl as *const ()),
-        "_swift_once" => f(swift_once_impl as *const ()),
-        "_swift_allocObject" => f(swift_alloc_object_impl as *const ()),
-        "_swift_deallocObject" | "_swift_deallocClassInstance" => f(swift_dealloc_object_impl as *const ()),
-        "_swift_getObjCClassMetadata"
-        | "_swift_getObjCClassFromMetadata"
-        | "_swift_getInitializedObjCClass" => f(swift_identity_ptr as *const ()),
-        "__swift_stdlib_operatingSystemVersion" => f(swift_stdlib_os_version as *const ()),
-        _ => None,
-    }
 }
 
 extern "C" fn exp10_impl(x: f64) -> f64 { 10.0f64.powf(x) }
@@ -4293,6 +4323,7 @@ pub fn init() {
     pear_libobjc::object::init_runtime();
     pear_libobjc::blocks::init_blocks();
     pear_foundation::init_foundation();
+    pear_swift_rt::init();
     init_guest_frameworks();
     pear_metal_vk::init();
     #[cfg(target_os = "linux")]
@@ -4471,8 +4502,11 @@ fn libcxx_symbol(symbol: &str) -> Option<usize> {
 /// (libclosure + libc basics), `CoreFoundation`, and `Foundation` imports.
 pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
     init();
-    match library {
+    let resolved = match library {
         Some("/usr/lib/libobjc.A.dylib") => pear_libobjc::symbol(symbol),
+        Some(path) if path.contains("libswift") || path.contains("SwiftUI") => {
+            pear_swift_rt::symbol(Some(path), symbol).or_else(|| libc_dlsym(symbol))
+        }
         Some(path) if path.contains("libc++") => libcxx_symbol(symbol),
         Some(path) if path.contains("libSystem") || path.contains("libdispatch") => match symbol {
             "__Unwind_Resume" => Some(unwind_resume_trap as *const () as usize),
@@ -4781,7 +4815,6 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_OBJC_CLASS_$_MTKView" => Some(MTKVIEW_CLASS.ptr() as usize),
             _ => pear_metal_vk::symbol(symbol),
         },
-        Some(path) if path.contains("libswiftCore") => swift_core_symbol(symbol).or_else(|| libc_dlsym(symbol)),
         Some(path) if path.contains("libz") => dlopen_dlsym(&[c"libz.so.1", c"libz.1.dylib"], symbol),
         Some(path) if path.contains("libsqlite3") => dlopen_dlsym(&[c"libsqlite3.so.0", c"libsqlite3.dylib"], symbol),
         Some(path) if path.contains("libxml2") => dlopen_dlsym(&[c"libxml2.so.2", c"libxml2.2.dylib"], symbol),
@@ -4826,11 +4859,25 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
         None => pear_libobjc::symbol(symbol)
             .or_else(|| pear_foundation::symbol(symbol))
             .or_else(|| pear_graphics::symbol(symbol))
+            .or_else(|| pear_swift_rt::symbol(None, symbol))
             .or_else(|| libcxx_symbol(symbol))
             .or_else(|| resolve_symbol(Some("/usr/lib/libSystem.B.dylib"), symbol))
             .or_else(|| libc_dlsym(symbol)),
         _ => None,
+    };
+    if resolved.is_some() {
+        return resolved;
     }
+    if let Some(cls_name) = symbol.strip_prefix("_OBJC_CLASS_$_") {
+        if let Some(cls) = objc_rt::class_named(cls_name) {
+            return Some(cls as usize);
+        }
+    } else if let Some(meta_name) = symbol.strip_prefix("_OBJC_METACLASS_$_") {
+        if let Some(meta) = objc_rt::metaclass_named(meta_name) {
+            return Some(meta as usize);
+        }
+    }
+    None
 }
 
 /// Portable EGL + OpenGL ES 2.0 surface bridge (`libEGL.so.1` + `libGLESv2.so.2`)
@@ -5228,6 +5275,14 @@ mod tests {
         assert!(resolve_symbol(Some("/System/Library/Frameworks/UIKit.framework/UIKit"), "_OBJC_CLASS_$_UIScreen").is_some());
         assert!(resolve_symbol(Some("/usr/lib/swift/libswiftCore.dylib"), "_swift_once").is_some());
         assert!(resolve_symbol(Some("/usr/lib/swift/libswiftCore.dylib"), "_swift_bridgeObjectRetain").is_some());
+        assert!(resolve_symbol(Some("/usr/lib/swift/libswiftCore.dylib"), "_swift_allocObject").is_some());
+        assert!(resolve_symbol(Some("/usr/lib/swift/libswiftCore.dylib"), "_swift_dynamicCast").is_some());
+        assert!(resolve_symbol(Some("/usr/lib/swift/libswiftCore.dylib"), "_OBJC_CLASS_$__TtCs12_SwiftObject").is_some());
+        assert!(resolve_symbol(Some("/usr/lib/swift/libswiftCore.dylib"), "_OBJC_METACLASS_$__TtCs12_SwiftObject").is_some());
+        assert!(resolve_symbol(Some("/usr/lib/swift/libswiftFoundation.dylib"), "_$s10Foundation10URLRequestVMa").is_some());
+        assert!(resolve_symbol(Some("/usr/lib/swift/libswiftDispatch.dylib"), "_$s8Dispatch0A4TimeV3nowACyFZ").is_some());
+        assert!(resolve_symbol(Some("/System/Library/Frameworks/WebKit.framework/WebKit"), "_OBJC_CLASS_$_WKWebView").is_some());
+        assert!(resolve_symbol(Some("/System/Library/Frameworks/UIKit.framework/UIKit"), "_OBJC_METACLASS_$_UIView").is_some());
 
         unsafe {
             let app_cls = resolve_symbol(Some("/System/Library/Frameworks/UIKit.framework/UIKit"), "_OBJC_CLASS_$_UIApplication").unwrap() as Id;

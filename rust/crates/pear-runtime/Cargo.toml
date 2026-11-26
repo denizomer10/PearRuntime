@@ -12,6 +12,7 @@ pear-host = { path = "../pear-host" }
 pear-image = { path = "../pear-image" }
 pear-graphics = { path = "../pear-graphics" }
 pear-metal-vk = { path = "../pear-metal-vk" }
+pear-swift-rt = { path = "../pear-swift-rt" }
 pear-jit = { path = "../pear-jit" }
 pear-legacy-host = { path = "../pear-legacy-host" }
 
