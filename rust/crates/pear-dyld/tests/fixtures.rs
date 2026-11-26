@@ -119,3 +119,47 @@ fn reexported_symbol_resolves_through_resolver() {
     let ptr = image.symbol_with_resolver("_reexported_puts", Some(&res));
     assert_eq!(ptr.map(|p| p as usize), Some(0xDEAD_BEEF));
 }
+
+#[test]
+fn resolve_dylib_path_expands_rpath_executable_and_loader_tokens() {
+    let dir = std::env::temp_dir().join(format!("pear-dyld-rpath-test-{}", std::process::id()));
+    let fw_dir = dir.join("Frameworks/Demo.framework");
+    let helper_dir = dir.join("PlugIns");
+    std::fs::create_dir_all(&fw_dir).unwrap();
+    std::fs::create_dir_all(&helper_dir).unwrap();
+    let fw_bin = fw_dir.join("Demo");
+    let helper_bin = helper_dir.join("Helper.dylib");
+    std::fs::write(&fw_bin, b"demo").unwrap();
+    std::fs::write(&helper_bin, b"helper").unwrap();
+
+    let rpaths = vec!["@executable_path/Frameworks".to_string()];
+    assert_eq!(
+        pear_dyld::resolve_dylib_path("@rpath/Demo.framework/Demo", &dir, &dir, &rpaths),
+        Some(fw_bin)
+    );
+    assert_eq!(
+        pear_dyld::resolve_dylib_path("@loader_path/PlugIns/Helper.dylib", &dir, &dir, &rpaths),
+        Some(helper_bin)
+    );
+    assert_eq!(
+        pear_dyld::resolve_dylib_path("/System/Library/Frameworks/UIKit.framework/UIKit", &dir, &dir, &rpaths),
+        None
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn load_bundle_loads_main_executable_fixture() {
+    let fixture = std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../pear-runtime/fixtures/fixture-ios-app"
+    ));
+    if fixture.is_file() {
+        let empty = |_: Option<&str>, _: &str| None;
+        let set = pear_dyld::load_bundle(&fixture, &empty, Options { allow_missing: true }).unwrap();
+        assert_eq!(set.image_count(), 1);
+        assert_eq!(set.init_order, vec![0]);
+        assert!(set.main_image().path.is_some());
+    }
+}

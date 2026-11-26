@@ -280,4 +280,37 @@ mod tests {
         write_u32_le(&mut arm32, 4, CPU_TYPE_ARM);
         assert_eq!(detect_guest_arch(&arm32), Some(GuestArch::Arm32));
     }
+
+    #[test]
+    fn parses_lc_rpath_from_macho() {
+        let rpath = b"@executable_path/Frameworks\0";
+        let rpath_cmdsize = ((12 + rpath.len() + 7) & !7) as u32;
+        let seg_cmdsize = 72u32;
+        let sizeofcmds = seg_cmdsize + rpath_cmdsize;
+        let mut buf = vec![0u8; 32 + sizeofcmds as usize];
+        write_u32_le(&mut buf, 0, MH_MAGIC_64);
+        write_u32_le(&mut buf, 4, CPU_TYPE_ARM64);
+        write_u32_le(&mut buf, 12, image::MH_EXECUTE);
+        write_u32_le(&mut buf, 16, 2); // ncmds
+        write_u32_le(&mut buf, 20, sizeofcmds);
+
+        // LC_SEGMENT_64 ("__TEXT", 72 bytes)
+        write_u32_le(&mut buf, 32, 0x19);
+        write_u32_le(&mut buf, 36, seg_cmdsize);
+        buf[40..46].copy_from_slice(b"__TEXT");
+        buf[56..64].copy_from_slice(&0x1_0000_0000u64.to_le_bytes()); // vmaddr
+        buf[64..72].copy_from_slice(&0x4000u64.to_le_bytes()); // vmsize
+        let total_len = buf.len() as u64;
+        buf[80..88].copy_from_slice(&total_len.to_le_bytes()); // filesize
+
+        // LC_RPATH
+        let roff = 32 + seg_cmdsize as usize;
+        write_u32_le(&mut buf, roff, 0x8000_001c);
+        write_u32_le(&mut buf, roff + 4, rpath_cmdsize);
+        write_u32_le(&mut buf, roff + 8, 12); // path offset
+        buf[roff + 12..roff + 12 + rpath.len()].copy_from_slice(rpath);
+
+        let m = MachO::parse(&buf).unwrap();
+        assert_eq!(m.rpaths, vec!["@executable_path/Frameworks"]);
+    }
 }

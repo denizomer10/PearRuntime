@@ -121,9 +121,10 @@ fn main() {
         match pear_macho::MachO::parse(&bytes) {
             Ok(m) => {
                 println!(
-                    "Mach-O: segments={} dylibs={} exports={}",
+                    "Mach-O: segments={} dylibs={} rpaths={:?} exports={}",
                     m.segments.len(),
                     m.dylibs.len(),
+                    m.rpaths,
                     m.exports().map(|v| v.len()).unwrap_or(0),
                 );
                 return;
@@ -221,19 +222,42 @@ fn main() {
             }
             r
         };
-        match pear_dyld::load(&bytes, &resolver, opts) {
-            Ok(img) => {
-                let report = unsafe { pear_libobjc::register_image(&img) };
+        match pear_dyld::load_bundle(&exe_path, &resolver, opts) {
+            Ok(set) => {
+                let mut total_classes = 0usize;
+                let mut total_categories = 0usize;
+                let mut total_selectors = 0usize;
+                let mut total_unrealized = Vec::new();
+                for &idx in &set.init_order {
+                    let report = unsafe { pear_libobjc::register_image(&set.images[idx]) };
+                    total_classes += report.classes;
+                    total_categories += report.categories;
+                    total_selectors += report.selectors;
+                    total_unrealized.extend(report.unrealized);
+                }
+                let loaded_names: Vec<String> = set
+                    .images
+                    .iter()
+                    .map(|img| {
+                        img.path
+                            .as_deref()
+                            .and_then(|p| Path::new(p).file_name().and_then(|n| n.to_str()))
+                            .unwrap_or("<image>")
+                            .to_string()
+                    })
+                    .collect();
                 println!(
-                    "pearruntime --check-load: {} classes={} unrealized={} categories={} selectors={}",
+                    "pearruntime --check-load: {} images={} ({:?}) classes={} unrealized={} categories={} selectors={}",
                     exe_path.display(),
-                    report.classes,
-                    report.unrealized.len(),
-                    report.categories,
-                    report.selectors,
+                    set.image_count(),
+                    loaded_names,
+                    total_classes,
+                    total_unrealized.len(),
+                    total_categories,
+                    total_selectors,
                 );
-                if !report.unrealized.is_empty() {
-                    println!("unrealized: {:?}", report.unrealized);
+                if !total_unrealized.is_empty() {
+                    println!("unrealized: {:?}", total_unrealized);
                 }
                 if list_missing {
                     let m = missing.lock().unwrap();
@@ -251,19 +275,21 @@ fn main() {
         }
     }
 
-    match pear_runtime::load_and_boot(&bytes, opts) {
-        Ok((img, report)) => {
+    match pear_runtime::load_bundle_and_boot(&exe_path, opts) {
+        Ok((set, report)) => {
             if let Some(ref p) = plan {
                 println!("pearruntime: {}", p.summary());
             }
             println!(
-                "pearruntime: booted {} (classes={} categories={} selectors={})",
+                "pearruntime: booted {} (images={} classes={} categories={} selectors={})",
                 exe_path.display(),
+                set.image_count(),
                 report.classes,
                 report.categories,
                 report.selectors,
             );
-            if let Some(entry) = img.symbol("_main").or_else(|| img.entry()) {
+            let main_img = set.main_image();
+            if let Some(entry) = main_img.symbol("_main").or_else(|| main_img.entry()) {
                 let main_fn: extern "C" fn(i32, *const *const std::os::raw::c_char) -> i32 =
                     unsafe { std::mem::transmute(entry) };
                 let arg0 = std::ffi::CString::new(exe_path.to_string_lossy().as_bytes())
@@ -274,7 +300,7 @@ fn main() {
             }
         }
         Err(e) => {
-            eprintln!("pearruntime: load_and_boot failed: {e:?}");
+            eprintln!("pearruntime: load_bundle_and_boot failed: {e:?}");
             process::exit(1);
         }
     }

@@ -18,6 +18,7 @@ const LC_LOAD_DYLIB: u32 = 0x0c;
 const LC_ID_DYLIB: u32 = 0x0d;
 const LC_LOAD_WEAK_DYLIB: u32 = 0x8000_0018;
 const LC_REEXPORT_DYLIB: u32 = 0x8000_001f;
+const LC_RPATH: u32 = 0x8000_001c;
 const LC_LAZY_LOAD_DYLIB: u32 = 0x20;
 const LC_LOAD_UPWARD_DYLIB: u32 = 0x8000_0023;
 const LC_DYLD_INFO: u32 = 0x22;
@@ -194,6 +195,7 @@ pub struct MachO<'a> {
     pub segments: Vec<Segment>,
     pub sections: Vec<Section>,
     pub dylibs: Vec<Dylib>,
+    pub rpaths: Vec<String>,
     pub install_name: Option<String>,
     /// LC_MAIN entry, as an offset from the mach header.
     pub entry_offset: Option<u64>,
@@ -266,6 +268,7 @@ impl<'a> MachO<'a> {
             segments: Vec::new(),
             sections: Vec::new(),
             dylibs: Vec::new(),
+            rpaths: Vec::new(),
             install_name: None,
             entry_offset: None,
             dyld_info: None,
@@ -317,6 +320,7 @@ impl<'a> MachO<'a> {
                     m.dylibs.push(Dylib { path: c_str(lc, name_off)?, kind });
                 }
                 LC_ID_DYLIB => m.install_name = Some(c_str(lc, u32_at(lc, 8)? as usize)?),
+                LC_RPATH => m.rpaths.push(c_str(lc, u32_at(lc, 8)? as usize)?),
                 LC_MAIN => m.entry_offset = Some(u64_at(lc, 8)?),
                 LC_DYLD_INFO | LC_DYLD_INFO_ONLY => {
                     let mut v = [0u32; 10];

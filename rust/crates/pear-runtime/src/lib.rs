@@ -2170,8 +2170,58 @@ extern "C" fn cxa_atexit_noop(_f: *const c_void, _arg: *const c_void, _dso: *con
 static MAIN_IMAGE_HEADER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static MAIN_IMAGE_SLIDE: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
 
-extern "C" fn dyld_image_count_stub() -> u32 { 1 }
+struct RegisteredImage {
+    header: usize,
+    slide: isize,
+    name: Box<std::ffi::CStr>,
+}
+
+static LOADED_IMAGES: std::sync::Mutex<Vec<RegisteredImage>> = std::sync::Mutex::new(Vec::new());
+
+fn clear_loaded_images() {
+    LOADED_IMAGES.lock().unwrap().clear();
+    MAIN_IMAGE_HEADER.store(0, std::sync::atomic::Ordering::Release);
+    MAIN_IMAGE_SLIDE.store(0, std::sync::atomic::Ordering::Release);
+}
+
+fn register_loaded_image(img: &pear_dyld::LoadedImage, fallback_name: &str) {
+    let label = img
+        .path
+        .as_deref()
+        .or(img.install_name.as_deref())
+        .unwrap_or(fallback_name);
+    let cstr = std::ffi::CString::new(label)
+        .unwrap_or_else(|_| std::ffi::CString::new("PearGuest").unwrap())
+        .into_boxed_c_str();
+    let header = img.header() as usize;
+    let slide = img.slide() as isize;
+    let mut guard = LOADED_IMAGES.lock().unwrap();
+    if guard.is_empty() {
+        MAIN_IMAGE_HEADER.store(header, std::sync::atomic::Ordering::Release);
+        MAIN_IMAGE_SLIDE.store(slide, std::sync::atomic::Ordering::Release);
+    }
+    guard.push(RegisteredImage {
+        header,
+        slide,
+        name: cstr,
+    });
+}
+
+extern "C" fn dyld_image_count_stub() -> u32 {
+    let n = LOADED_IMAGES.lock().unwrap().len();
+    if n > 0 {
+        n as u32
+    } else if MAIN_IMAGE_HEADER.load(std::sync::atomic::Ordering::Acquire) != 0 {
+        1
+    } else {
+        0
+    }
+}
 extern "C" fn dyld_get_image_header_stub(idx: u32) -> *const c_void {
+    let guard = LOADED_IMAGES.lock().unwrap();
+    if let Some(entry) = guard.get(idx as usize) {
+        return entry.header as *const c_void;
+    }
     if idx == 0 {
         MAIN_IMAGE_HEADER.load(std::sync::atomic::Ordering::Acquire) as *const c_void
     } else {
@@ -2179,13 +2229,27 @@ extern "C" fn dyld_get_image_header_stub(idx: u32) -> *const c_void {
     }
 }
 extern "C" fn dyld_get_image_vmaddr_slide_stub(idx: u32) -> isize {
+    let guard = LOADED_IMAGES.lock().unwrap();
+    if let Some(entry) = guard.get(idx as usize) {
+        return entry.slide;
+    }
     if idx == 0 {
         MAIN_IMAGE_SLIDE.load(std::sync::atomic::Ordering::Acquire)
     } else {
         0
     }
 }
-extern "C" fn dyld_get_image_name_stub(_idx: u32) -> *const c_char { c"PearGuest".as_ptr() }
+extern "C" fn dyld_get_image_name_stub(idx: u32) -> *const c_char {
+    let guard = LOADED_IMAGES.lock().unwrap();
+    if let Some(entry) = guard.get(idx as usize) {
+        return entry.name.as_ptr();
+    }
+    if idx == 0 {
+        c"PearGuest".as_ptr()
+    } else {
+        std::ptr::null()
+    }
+}
 
 mod darwin_pthread {
     use std::collections::HashMap;
@@ -4149,8 +4213,7 @@ pub fn load_and_boot(
 ) -> Result<(pear_dyld::LoadedImage, pear_libobjc::ImageReport), pear_dyld::Error> {
     init();
     let image = pear_dyld::load(data, &resolve_symbol, options)?;
-    MAIN_IMAGE_HEADER.store(image.header() as usize, std::sync::atomic::Ordering::Release);
-    MAIN_IMAGE_SLIDE.store(image.slide() as isize, std::sync::atomic::Ordering::Release);
+    register_loaded_image(&image, "PearGuest");
     let report = unsafe { pear_libobjc::register_image(&image) };
     #[cfg(target_os = "linux")]
     stub_third_party_sdks();
@@ -4159,6 +4222,50 @@ pub fn load_and_boot(
         image.run_initializers();
     }
     Ok((image, report))
+}
+
+/// Maps a main executable together with its embedded `@rpath` / `@executable_path` /
+/// `@loader_path` dependencies, registers ObjC metadata in dependency-first order,
+/// calls `+load` methods, and runs initializers across the full [`pear_dyld::ImageSet`].
+pub fn load_bundle_and_boot(
+    executable_path: &std::path::Path,
+    options: pear_dyld::Options,
+) -> Result<(pear_dyld::ImageSet, pear_libobjc::ImageReport), pear_dyld::Error> {
+    init();
+    let set = pear_dyld::load_bundle(executable_path, &resolve_symbol, options)?;
+    clear_loaded_images();
+    let fallback_name = executable_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("PearGuest");
+    for img in &set.images {
+        register_loaded_image(img, fallback_name);
+    }
+
+    let mut total = pear_libobjc::ImageReport {
+        classes: 0,
+        unrealized: Vec::new(),
+        categories: 0,
+        selectors: 0,
+    };
+    for &idx in &set.init_order {
+        let report = unsafe { pear_libobjc::register_image(&set.images[idx]) };
+        total.classes += report.classes;
+        total.categories += report.categories;
+        total.selectors += report.selectors;
+        total.unrealized.extend(report.unrealized);
+    }
+
+    #[cfg(target_os = "linux")]
+    stub_third_party_sdks();
+
+    unsafe {
+        for &idx in &set.init_order {
+            pear_libobjc::call_load_methods(&set.images[idx]);
+        }
+        set.run_initializers();
+    }
+    Ok((set, total))
 }
 
 #[cfg(test)]
