@@ -13,8 +13,9 @@ use pear_objc::{
     nsnumber_f64, nsnumber_i64, nsstring, nsstring_to_string, objc_autorelease,
     objc_getAssociatedObject, objc_msgSend, objc_msgSendSuper, objc_release, objc_retain,
     objc_setAssociatedObject, replace_method as add_method, responds_to, sel, sel_getName,
-    CGPoint, CGRect, CGSize, Class, Id, Imp, Sel, UIEdgeInsets, NIL, OBJC_ASSOCIATION_RETAIN,
+    CGPoint, CGRect, CGSize, Class, Id, Imp, NSRange, Sel, UIEdgeInsets, NIL, OBJC_ASSOCIATION_RETAIN,
 };
+use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -50,6 +51,7 @@ extern "C" {
     fn PearUIKitRegisterWindow(window: Id);
     fn PearUIKitSetKeyWindow(window: Id);
     fn PearUIKitKeyWindow() -> Id;
+    fn PearUIKitFirstResponder() -> Id;
     fn PearUIKitScreenDidChange(point_size: CGSize, scale: f64);
 }
 
@@ -161,6 +163,7 @@ static HAS_NATIVE_SUBVIEWS: AtomicBool = AtomicBool::new(false);
 static VIEW_WINDOW_KEY: u8 = 0;
 static VIEW_VC_KEY: u8 = 0;
 static VIEW_BG_KEY: u8 = 0;
+static VIEW_TINT_KEY: u8 = 0;
 static VIEW_FLAGS_KEY: u8 = 0;
 
 #[repr(C)]
@@ -172,6 +175,7 @@ struct ViewFlags {
     user_interaction: bool,
     clears_context: bool,
     needs_layout: bool,
+    translates_autoresizing: bool,
 }
 
 impl Default for ViewFlags {
@@ -183,6 +187,7 @@ impl Default for ViewFlags {
             user_interaction: true,
             clears_context: true,
             needs_layout: false,
+            translates_autoresizing: true,
         }
     }
 }
@@ -397,7 +402,11 @@ unsafe extern "C" fn view_set_frame(self_obj: Id, _cmd: Sel, frame: CGRect) {
     msg1::<CGRect, ()>(l, "setFrame:", frame);
     msg0::<()>(ca, "commit");
     if old_b.size != msg0::<CGRect>(l, "bounds").size {
-        view_bounds_size_changed(self_obj, old_b.size);
+        if layout_controls_imp::is_solving_layout() {
+            msg0::<()>(self_obj, "setNeedsLayout");
+        } else {
+            view_bounds_size_changed(self_obj, old_b.size);
+        }
     }
     view_sync_native_tree(self_obj);
 }
@@ -672,6 +681,9 @@ unsafe extern "C" fn view_set_needs_layout(self_obj: Id, _cmd: Sel) {
 }
 
 unsafe extern "C" fn view_layout_if_needed(self_obj: Id, _cmd: Sel) {
+    if !layout_controls_imp::is_solving_layout() {
+        layout_controls_imp::solve_autolayout_subtree(self_obj);
+    }
     let mut f = get_view_flags(self_obj);
     if !f.needs_layout {
         return;
@@ -823,6 +835,60 @@ unsafe extern "C" fn view_set_bg(self_obj: Id, _cmd: Sel, color: Id) {
         };
         msg1::<*mut c_void, ()>(l, "setBackgroundColor:", cg);
     }
+}
+unsafe extern "C" fn view_tint_color(self_obj: Id, _cmd: Sel) -> Id {
+    let mut cur = self_obj;
+    while !cur.is_null() {
+        let c = assoc_get(cur, &VIEW_TINT_KEY);
+        if !c.is_null() {
+            return c;
+        }
+        cur = pear_objc::assoc_get_weak(cur, &VIEW_SUPERVIEW_KEY);
+    }
+    let f: unsafe extern "C" fn(Id, Sel, f64, f64, f64, f64) -> Id =
+        std::mem::transmute(objc_msgSend as *const c_void);
+    f(cls("UIColor") as Id, sel("colorWithRed:green:blue:alpha:"), 0.0, 0.478, 1.0, 1.0)
+}
+unsafe extern "C" fn view_set_tint_color(self_obj: Id, _cmd: Sel, color: Id) {
+    assoc_set(self_obj, &VIEW_TINT_KEY, color);
+    msg0::<()>(self_obj, "tintColorDidChange");
+}
+unsafe extern "C" fn view_translates_autoresizing(self_obj: Id, _cmd: Sel) -> bool {
+    get_view_flags(self_obj).translates_autoresizing
+}
+unsafe extern "C" fn view_set_translates_autoresizing(self_obj: Id, _cmd: Sel, b: bool) {
+    let mut f = get_view_flags(self_obj);
+    f.translates_autoresizing = b;
+    set_view_flags(self_obj, f);
+}
+unsafe extern "C" fn view_snapshot(self_obj: Id, _cmd: Sel, _after_updates: bool) -> Id {
+    let b: CGRect = msg0(self_obj, "bounds");
+    let snap: Id = msg1(msg0(cls("UIView"), "alloc"), "initWithFrame:", b);
+    if snap.is_null() {
+        return NIL;
+    }
+    let bg = msg0::<Id>(self_obj, "backgroundColor");
+    if !bg.is_null() {
+        msg1::<Id, ()>(snap, "setBackgroundColor:", bg);
+    }
+    msg1::<f64, ()>(snap, "setAlpha:", msg0::<f64>(self_obj, "alpha"));
+    let src_l = view_layer(self_obj);
+    let dst_l = view_layer(snap);
+    if !src_l.is_null() && !dst_l.is_null() {
+        let contents: Id = msg0(src_l, "contents");
+        if !contents.is_null() {
+            msg1::<Id, ()>(dst_l, "setContents:", contents);
+        }
+    }
+    objc_autorelease(snap)
+}
+unsafe extern "C" fn view_end_editing(self_obj: Id, _cmd: Sel, force: bool) -> bool {
+    let fr = PearUIKitFirstResponder();
+    if !fr.is_null() && is_kind_of(fr, "UIView") && msg1::<Id, bool>(fr, "isDescendantOfView:", self_obj) {
+        let resigned: bool = msg0(fr, "resignFirstResponder");
+        return resigned || force;
+    }
+    true
 }
 unsafe extern "C" fn view_zero_int(_self: Id, _cmd: Sel) -> isize {
     0
@@ -2737,6 +2803,10 @@ pub unsafe fn register_classes() {
         add_method(v, "setClipsToBounds:", view_set_clips as Imp, "v@:B");
         add_method(v, "backgroundColor", view_bg as Imp, "@@:");
         add_method(v, "setBackgroundColor:", view_set_bg as Imp, "v@:@");
+        add_method(v, "tintColor", view_tint_color as Imp, "@@:");
+        add_method(v, "setTintColor:", view_set_tint_color as Imp, "v@:@");
+        add_method(v, "tintColorDidChange", view_noop as Imp, "v@:");
+        add_method(v, "snapshotViewAfterScreenUpdates:", view_snapshot as Imp, "@@:B");
         add_method(v, "contentMode", view_zero_int as Imp, "q@:");
         add_method(v, "setContentMode:", view_noop_int as Imp, "v@:q");
         add_method(v, "safeAreaInsets", view_zero_insets as Imp, "{UIEdgeInsets=dddd}@:");
@@ -2746,8 +2816,8 @@ pub unsafe fn register_classes() {
         add_method(v, "setGestureRecognizers:", view_set_gestures as Imp, "v@:@");
         add_method(v, "addGestureRecognizer:", view_add_gesture as Imp, "v@:@");
         add_method(v, "removeGestureRecognizer:", view_remove_gesture as Imp, "v@:@");
-        add_method(v, "translatesAutoresizingMaskIntoConstraints", view_true as Imp, "B@:");
-        add_method(v, "setTranslatesAutoresizingMaskIntoConstraints:", view_noop_bool as Imp, "v@:B");
+        add_method(v, "translatesAutoresizingMaskIntoConstraints", view_translates_autoresizing as Imp, "B@:");
+        add_method(v, "setTranslatesAutoresizingMaskIntoConstraints:", view_set_translates_autoresizing as Imp, "v@:B");
         layout_controls_imp::register_view(v);
         add_method(v, "pointInside:withEvent:", view_point_inside as Imp, "B@:{CGPoint=dd}@");
         add_method(v, "hitTest:withEvent:", view_hit_test as Imp, "@@:{CGPoint=dd}@");
@@ -2763,7 +2833,7 @@ pub unsafe fn register_classes() {
         add_method(v, "setAccessibilityTraits:", view_noop_u64 as Imp, "v@:Q");
         add_method(v, "accessibilityElements", view_nil as Imp, "@@:");
         add_method(v, "setAccessibilityElements:", view_noop_id as Imp, "v@:@");
-        add_method(v, "endEditing:", view_true as Imp, "B@:B");
+        add_method(v, "endEditing:", view_end_editing as Imp, "B@:B");
     }
 
     let sv = cls("UIScrollView");
@@ -3158,12 +3228,17 @@ mod layout_controls_imp {
 
     // ---- UIView animations + constraints ----
     static G_ANIMATIONS_ENABLED: AtomicBool = AtomicBool::new(true);
+    static SOLVING_LAYOUT: AtomicBool = AtomicBool::new(false);
     static VIEW_CONSTRAINTS_KEY: u8 = 0;
 
-    unsafe extern "C" fn view_set_anim(_cls: Id, _c: Sel, enabled: bool) {
+    pub(crate) fn is_solving_layout() -> bool {
+        SOLVING_LAYOUT.load(Ordering::Acquire)
+    }
+
+    unsafe fn view_set_anim(_cls: Id, _c: Sel, enabled: bool) {
         G_ANIMATIONS_ENABLED.store(enabled, Ordering::Release);
     }
-    unsafe extern "C" fn view_are_anim(_cls: Id, _c: Sel) -> bool {
+    unsafe fn view_are_anim(_cls: Id, _c: Sel) -> bool {
         G_ANIMATIONS_ENABLED.load(Ordering::Acquire)
     }
     extern "C" fn finish_view_animation(context: *mut c_void) {
@@ -3206,6 +3281,17 @@ mod layout_controls_imp {
         if !msg1::<Id, bool>(arr, "containsObject:", c) {
             msg1::<Id, ()>(arr, "addObject:", c);
         }
+        if is_kind_of(c, "PearLayoutConstraint") {
+            let mut d: ConstraintData = get_pod(c, &PLC_DATA_KEY);
+            d.active = true;
+            set_pod(c, &PLC_DATA_KEY, d);
+            pear_objc::assoc_set_weak(c, &PLC_OWNER_KEY, self_obj);
+        }
+        msg0::<()>(self_obj, "setNeedsLayout");
+        let sv = msg0::<Id>(self_obj, "superview");
+        if !sv.is_null() {
+            msg0::<()>(sv, "setNeedsLayout");
+        }
     }
     unsafe extern "C" fn view_add_constraints(self_obj: Id, _c: Sel, cs: Id) {
         if cs.is_null() {
@@ -3221,6 +3307,15 @@ mod layout_controls_imp {
         }
         let arr = mut_array_for_key(self_obj, &VIEW_CONSTRAINTS_KEY);
         msg1::<Id, ()>(arr, "removeObjectIdenticalTo:", c);
+        if is_kind_of(c, "PearLayoutConstraint") {
+            let mut d: ConstraintData = get_pod(c, &PLC_DATA_KEY);
+            d.active = false;
+            set_pod(c, &PLC_DATA_KEY, d);
+            if pear_objc::assoc_get_weak(c, &PLC_OWNER_KEY) == self_obj {
+                pear_objc::assoc_set_weak(c, &PLC_OWNER_KEY, NIL);
+            }
+        }
+        msg0::<()>(self_obj, "setNeedsLayout");
     }
     unsafe extern "C" fn view_remove_constraints(self_obj: Id, _c: Sel, cs: Id) {
         if cs.is_null() {
@@ -3261,6 +3356,81 @@ mod layout_controls_imp {
         for name in ANCHOR_SELECTORS {
             add_method(v, name, view_anchor as Imp, "@@:");
         }
+        add_method(v, "safeAreaLayoutGuide", view_layout_guide as Imp, "@@:");
+        add_method(v, "layoutMarginsGuide", view_layout_guide as Imp, "@@:");
+        add_method(v, "keyboardLayoutGuide", view_layout_guide as Imp, "@@:");
+        add_method(v, "layoutGuideForLayoutRegion:", view_layout_guide_for_region as Imp, "@@:@");
+    }
+
+    static GUIDE_OWNER_KEY: u8 = 0;
+    static GUIDE_IDENT_KEY: u8 = 0;
+    static VIEW_SAFE_GUIDE_KEY: u8 = 0;
+
+    unsafe extern "C" fn region_factory(c: Id, _cmd: Sel, _adapt: isize) -> Id {
+        let obj = msg0::<Id>(c, "alloc");
+        let init = msg0::<Id>(obj, "init");
+        objc_autorelease(init)
+    }
+    unsafe extern "C" fn region_simple(c: Id, _cmd: Sel) -> Id {
+        region_factory(c, _cmd, 0)
+    }
+
+    unsafe extern "C" fn view_layout_guide(self_obj: Id, _cmd: Sel) -> Id {
+        if self_obj.is_null() {
+            return NIL;
+        }
+        let existing = assoc_get(self_obj, &VIEW_SAFE_GUIDE_KEY);
+        if !existing.is_null() {
+            return existing;
+        }
+        let g_cls = cls("UILayoutGuide");
+        if g_cls.is_null() {
+            return NIL;
+        }
+        let guide = msg0::<Id>(msg0(g_cls as Id, "alloc"), "init");
+        if !guide.is_null() {
+            objc_setAssociatedObject(
+                guide,
+                &GUIDE_OWNER_KEY as *const u8 as *const c_void,
+                self_obj,
+                0, // OBJC_ASSOCIATION_ASSIGN: avoid retain cycle with owning UIView
+            );
+            assoc_set(self_obj, &VIEW_SAFE_GUIDE_KEY, guide);
+            objc_release(guide);
+        }
+        guide
+    }
+    unsafe extern "C" fn view_layout_guide_for_region(self_obj: Id, _cmd: Sel, _region: Id) -> Id {
+        view_layout_guide(self_obj, _cmd)
+    }
+
+    unsafe extern "C" fn guide_owning_view(self_obj: Id, _cmd: Sel) -> Id {
+        assoc_get(self_obj, &GUIDE_OWNER_KEY)
+    }
+    unsafe extern "C" fn guide_set_owning_view(self_obj: Id, _cmd: Sel, view: Id) {
+        objc_setAssociatedObject(
+            self_obj,
+            &GUIDE_OWNER_KEY as *const u8 as *const c_void,
+            view,
+            0,
+        );
+    }
+    unsafe extern "C" fn guide_identifier(self_obj: Id, _cmd: Sel) -> Id {
+        assoc_get(self_obj, &GUIDE_IDENT_KEY)
+    }
+    unsafe extern "C" fn guide_set_identifier(self_obj: Id, _cmd: Sel, ident: Id) {
+        assoc_set(self_obj, &GUIDE_IDENT_KEY, ident);
+    }
+    unsafe extern "C" fn guide_layout_frame(self_obj: Id, _cmd: Sel) -> CGRect {
+        let owner = assoc_get(self_obj, &GUIDE_OWNER_KEY);
+        if !owner.is_null() {
+            super::view_bounds(owner, sel("bounds"))
+        } else {
+            CGRect {
+                origin: CGPoint { x: 0.0, y: 0.0 },
+                size: CGSize { width: 0.0, height: 0.0 },
+            }
+        }
     }
 
     // ---- PearLayoutConstraint + NSLayoutConstraint ----
@@ -3292,6 +3462,7 @@ mod layout_controls_imp {
     static PLC_DATA_KEY: u8 = 0;
     static PLC_FIRST_KEY: u8 = 0;
     static PLC_SECOND_KEY: u8 = 0;
+    static PLC_OWNER_KEY: u8 = 0;
     static PLC_IDENT_KEY: u8 = 0;
     static ORIG_WITH_ITEM: AtomicUsize = AtomicUsize::new(0);
     static ORIG_ACTIVATE: AtomicUsize = AtomicUsize::new(0);
@@ -3358,6 +3529,554 @@ mod layout_controls_imp {
         !obj.is_null() && (is_kind_of(obj, "UIView") || is_kind_of(obj, "UILayoutGuide"))
     }
 
+    unsafe fn resolve_layout_view(item: Id) -> Id {
+        if item.is_null() {
+            NIL
+        } else if is_kind_of(item, "UILayoutGuide") {
+            guide_owning_view(item, sel("owningView"))
+        } else if is_kind_of(item, "UIView") {
+            item
+        } else {
+            NIL
+        }
+    }
+
+    unsafe fn common_ancestor_view(v1: Id, v2: Id) -> Id {
+        if v1.is_null() {
+            return v2;
+        }
+        if v2.is_null() || v1 == v2 {
+            return v1;
+        }
+        let mut ancestors = Vec::new();
+        let mut cur = v1;
+        while !cur.is_null() {
+            ancestors.push(cur);
+            cur = msg0(cur, "superview");
+        }
+        cur = v2;
+        while !cur.is_null() {
+            if ancestors.contains(&cur) {
+                return cur;
+            }
+            cur = msg0(cur, "superview");
+        }
+        NIL
+    }
+
+    unsafe fn invalidate_constraint_layout(c: Id) {
+        let owner = pear_objc::assoc_get_weak(c, &PLC_OWNER_KEY);
+        if !owner.is_null() {
+            msg0::<()>(owner, "setNeedsLayout");
+        }
+        let v1 = resolve_layout_view(pear_objc::assoc_get_weak(c, &PLC_FIRST_KEY));
+        if !v1.is_null() {
+            msg0::<()>(v1, "setNeedsLayout");
+            let sv = msg0::<Id>(v1, "superview");
+            if !sv.is_null() {
+                msg0::<()>(sv, "setNeedsLayout");
+            }
+        }
+        let v2 = resolve_layout_view(pear_objc::assoc_get_weak(c, &PLC_SECOND_KEY));
+        if !v2.is_null() && v2 != v1 {
+            msg0::<()>(v2, "setNeedsLayout");
+            let sv = msg0::<Id>(v2, "superview");
+            if !sv.is_null() {
+                msg0::<()>(sv, "setNeedsLayout");
+            }
+        }
+    }
+
+    #[derive(Copy, Clone, PartialEq, Eq)]
+    enum NormAttr {
+        Left,
+        Right,
+        Top,
+        Bottom,
+        Width,
+        Height,
+        CenterX,
+        CenterY,
+    }
+
+    fn normalize_attr(attr: isize) -> Option<(NormAttr, f64)> {
+        match attr {
+            1 | 5 => Some((NormAttr::Left, 0.0)),
+            13 | 17 => Some((NormAttr::Left, 8.0)),
+            2 | 6 => Some((NormAttr::Right, 0.0)),
+            14 | 18 => Some((NormAttr::Right, -8.0)),
+            3 | 12 => Some((NormAttr::Top, 0.0)),
+            15 => Some((NormAttr::Top, 8.0)),
+            4 | 11 => Some((NormAttr::Bottom, 0.0)),
+            16 => Some((NormAttr::Bottom, -8.0)),
+            7 => Some((NormAttr::Width, 0.0)),
+            8 => Some((NormAttr::Height, 0.0)),
+            9 | 19 => Some((NormAttr::CenterX, 0.0)),
+            10 | 20 => Some((NormAttr::CenterY, 0.0)),
+            _ => None,
+        }
+    }
+
+    struct LayoutNode {
+        view: Id,
+        parent: Option<usize>,
+        children: Vec<usize>,
+        init_frame: CGRect,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        is_window: bool,
+        constrained: bool,
+        has_left: bool,
+        has_right: bool,
+        has_center_x: bool,
+        has_width: bool,
+        has_top: bool,
+        has_bottom: bool,
+        has_center_y: bool,
+        has_height: bool,
+        intrinsic_w: f64,
+        intrinsic_h: f64,
+        is_multiline_label: bool,
+    }
+
+    struct ResolvedConstraint {
+        idx1: usize,
+        attr1: NormAttr,
+        margin1: f64,
+        idx2: Option<usize>,
+        attr2: Option<NormAttr>,
+        margin2: f64,
+        relation: isize,
+        multiplier: f64,
+        constant: f64,
+        priority: f32,
+        seq: usize,
+    }
+
+    fn shift_subtree(nodes: &mut [LayoutNode], idx: usize, dx: f64, dy: f64) {
+        if dx == 0.0 && dy == 0.0 {
+            return;
+        }
+        let children = nodes[idx].children.clone();
+        for c in children {
+            nodes[c].x += dx;
+            nodes[c].y += dy;
+            shift_subtree(nodes, c, dx, dy);
+        }
+    }
+
+    fn read_node_attr(n: &LayoutNode, attr: NormAttr, margin: f64) -> f64 {
+        let base = match attr {
+            NormAttr::Left => n.x,
+            NormAttr::Right => n.x + n.w,
+            NormAttr::Top => n.y,
+            NormAttr::Bottom => n.y + n.h,
+            NormAttr::Width => n.w,
+            NormAttr::Height => n.h,
+            NormAttr::CenterX => n.x + n.w * 0.5,
+            NormAttr::CenterY => n.y + n.h * 0.5,
+        };
+        base + margin
+    }
+
+    fn apply_node_attr(nodes: &mut [LayoutNode], idx: usize, attr: NormAttr, margin: f64, raw_val: f64) {
+        let val = raw_val - margin;
+        if !val.is_finite() {
+            return;
+        }
+        let old_x = nodes[idx].x;
+        let old_y = nodes[idx].y;
+        match attr {
+            NormAttr::Width => {
+                nodes[idx].w = val.max(0.0);
+            }
+            NormAttr::Height => {
+                nodes[idx].h = val.max(0.0);
+            }
+            NormAttr::Left => {
+                if nodes[idx].has_right && !nodes[idx].has_width {
+                    let right = nodes[idx].x + nodes[idx].w;
+                    nodes[idx].x = val;
+                    nodes[idx].w = (right - val).max(0.0);
+                } else {
+                    nodes[idx].x = val;
+                }
+            }
+            NormAttr::Right => {
+                if nodes[idx].has_left && !nodes[idx].has_width {
+                    nodes[idx].w = (val - nodes[idx].x).max(0.0);
+                } else {
+                    nodes[idx].x = val - nodes[idx].w;
+                }
+            }
+            NormAttr::CenterX => {
+                nodes[idx].x = val - nodes[idx].w * 0.5;
+            }
+            NormAttr::Top => {
+                if nodes[idx].has_bottom && !nodes[idx].has_height {
+                    let bottom = nodes[idx].y + nodes[idx].h;
+                    nodes[idx].y = val;
+                    nodes[idx].h = (bottom - val).max(0.0);
+                } else {
+                    nodes[idx].y = val;
+                }
+            }
+            NormAttr::Bottom => {
+                if nodes[idx].has_top && !nodes[idx].has_height {
+                    nodes[idx].h = (val - nodes[idx].y).max(0.0);
+                } else {
+                    nodes[idx].y = val - nodes[idx].h;
+                }
+            }
+            NormAttr::CenterY => {
+                nodes[idx].y = val - nodes[idx].h * 0.5;
+            }
+        }
+        let dx = nodes[idx].x - old_x;
+        let dy = nodes[idx].y - old_y;
+        shift_subtree(nodes, idx, dx, dy);
+    }
+
+    fn is_ancestor(nodes: &[LayoutNode], maybe_anc: usize, mut cur: usize) -> bool {
+        while let Some(p) = nodes[cur].parent {
+            if p == maybe_anc {
+                return true;
+            }
+            cur = p;
+        }
+        false
+    }
+
+    unsafe fn subtree_has_constraints(v: Id) -> bool {
+        let cs = assoc_get(v, &VIEW_CONSTRAINTS_KEY);
+        if !cs.is_null() && nsarray_count(cs) > 0 {
+            return true;
+        }
+        let subs = assoc_get(v, &VIEW_SUBVIEWS_KEY);
+        if !subs.is_null() {
+            for i in 0..nsarray_count(subs) {
+                if subtree_has_constraints(nsarray_object_at(subs, i)) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub(crate) unsafe fn solve_autolayout_subtree(start_view: Id) {
+        if start_view.is_null() {
+            return;
+        }
+        let mut root = start_view;
+        loop {
+            let sv = msg0::<Id>(root, "superview");
+            if sv.is_null() || !get_view_flags(sv).needs_layout {
+                break;
+            }
+            root = sv;
+        }
+        if !subtree_has_constraints(root) {
+            return;
+        }
+        if SOLVING_LAYOUT
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        struct SolveGuard;
+        impl Drop for SolveGuard {
+            fn drop(&mut self) {
+                SOLVING_LAYOUT.store(false, Ordering::Release);
+            }
+        }
+        let _guard = SolveGuard;
+
+        let mut nodes: Vec<LayoutNode> = Vec::new();
+        let mut view_map: HashMap<usize, usize> = HashMap::new();
+
+        let root_frame: CGRect = msg0(root, "frame");
+        let root_bounds: CGRect = msg0(root, "bounds");
+        nodes.push(LayoutNode {
+            view: root,
+            parent: None,
+            children: Vec::new(),
+            init_frame: root_frame,
+            x: 0.0,
+            y: 0.0,
+            w: root_bounds.size.width,
+            h: root_bounds.size.height,
+            is_window: is_kind_of(root, "UIWindow"),
+            constrained: false,
+            has_left: false,
+            has_right: false,
+            has_center_x: false,
+            has_width: false,
+            has_top: false,
+            has_bottom: false,
+            has_center_y: false,
+            has_height: false,
+            intrinsic_w: -1.0,
+            intrinsic_h: -1.0,
+            is_multiline_label: false,
+        });
+        view_map.insert(root as usize, 0);
+
+        let mut head = 0;
+        while head < nodes.len() {
+            let parent_view = nodes[head].view;
+            let px = nodes[head].x;
+            let py = nodes[head].y;
+            let subs = assoc_get(parent_view, &VIEW_SUBVIEWS_KEY);
+            if !subs.is_null() {
+                for i in 0..nsarray_count(subs) {
+                    let sub = nsarray_object_at(subs, i);
+                    if sub.is_null() || view_map.contains_key(&(sub as usize)) {
+                        continue;
+                    }
+                    let f: CGRect = msg0(sub, "frame");
+                    let idx = nodes.len();
+                    nodes.push(LayoutNode {
+                        view: sub,
+                        parent: Some(head),
+                        children: Vec::new(),
+                        init_frame: f,
+                        x: px + f.origin.x,
+                        y: py + f.origin.y,
+                        w: f.size.width,
+                        h: f.size.height,
+                        is_window: is_kind_of(sub, "UIWindow"),
+                        constrained: false,
+                        has_left: false,
+                        has_right: false,
+                        has_center_x: false,
+                        has_width: false,
+                        has_top: false,
+                        has_bottom: false,
+                        has_center_y: false,
+                        has_height: false,
+                        intrinsic_w: -1.0,
+                        intrinsic_h: -1.0,
+                        is_multiline_label: is_kind_of(sub, "UILabel")
+                            && msg0::<isize>(sub, "numberOfLines") == 0,
+                    });
+                    nodes[head].children.push(idx);
+                    view_map.insert(sub as usize, idx);
+                }
+            }
+            head += 1;
+        }
+
+        let mut seen_constraints: HashMap<usize, ()> = HashMap::new();
+        let mut constraints: Vec<ResolvedConstraint> = Vec::new();
+        for idx in 0..nodes.len() {
+            let cs = assoc_get(nodes[idx].view, &VIEW_CONSTRAINTS_KEY);
+            if cs.is_null() {
+                continue;
+            }
+            for i in 0..nsarray_count(cs) {
+                let c = nsarray_object_at(cs, i);
+                if c.is_null()
+                    || !is_kind_of(c, "PearLayoutConstraint")
+                    || seen_constraints.insert(c as usize, ()).is_some()
+                {
+                    continue;
+                }
+                let d: ConstraintData = get_pod(c, &PLC_DATA_KEY);
+                if !d.active {
+                    continue;
+                }
+                let v1 = resolve_layout_view(pear_objc::assoc_get_weak(c, &PLC_FIRST_KEY));
+                let Some(&idx1) = view_map.get(&(v1 as usize)) else {
+                    continue;
+                };
+                let Some((attr1, margin1)) = normalize_attr(d.first_attr) else {
+                    continue;
+                };
+                let item2 = pear_objc::assoc_get_weak(c, &PLC_SECOND_KEY);
+                let (idx2, attr2, margin2) = if item2.is_null() || d.second_attr == 0 {
+                    (None, None, 0.0)
+                } else {
+                    let v2 = resolve_layout_view(item2);
+                    let Some(&i2) = view_map.get(&(v2 as usize)) else {
+                        continue;
+                    };
+                    let Some((a2, m2)) = normalize_attr(d.second_attr) else {
+                        continue;
+                    };
+                    (Some(i2), Some(a2), m2)
+                };
+                if d.multiplier == 0.0 && idx2.is_some() {
+                    continue;
+                }
+                let n1 = &mut nodes[idx1];
+                n1.constrained = true;
+                match attr1 {
+                    NormAttr::Left => n1.has_left = true,
+                    NormAttr::Right => n1.has_right = true,
+                    NormAttr::CenterX => n1.has_center_x = true,
+                    NormAttr::Width => n1.has_width = true,
+                    NormAttr::Top => n1.has_top = true,
+                    NormAttr::Bottom => n1.has_bottom = true,
+                    NormAttr::CenterY => n1.has_center_y = true,
+                    NormAttr::Height => n1.has_height = true,
+                }
+                let seq = constraints.len();
+                constraints.push(ResolvedConstraint {
+                    idx1,
+                    attr1,
+                    margin1,
+                    idx2,
+                    attr2,
+                    margin2,
+                    relation: d.relation,
+                    multiplier: d.multiplier,
+                    constant: d.constant,
+                    priority: d.priority,
+                    seq,
+                });
+            }
+        }
+
+        if constraints.is_empty() {
+            return;
+        }
+
+        // Seed intrinsic sizes for constrained views.
+        for n in &mut nodes {
+            if !n.constrained || n.is_window {
+                continue;
+            }
+            if responds_to(n.view, "intrinsicContentSize") {
+                let sz: CGSize = msg0(n.view, "intrinsicContentSize");
+                if sz.width.is_finite() && sz.width > 0.0 {
+                    n.intrinsic_w = sz.width;
+                    if !n.has_width && !(n.has_left && n.has_right) && n.w <= 0.01 {
+                        n.w = sz.width;
+                    }
+                }
+                if sz.height.is_finite() && sz.height > 0.0 {
+                    n.intrinsic_h = sz.height;
+                    if !n.has_height && !(n.has_top && n.has_bottom) && n.h <= 0.01 {
+                        n.h = sz.height;
+                    }
+                }
+            }
+        }
+
+        constraints.sort_by(|a, b| {
+            a.priority
+                .partial_cmp(&b.priority)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.seq.cmp(&b.seq))
+        });
+
+        for _ in 0..16 {
+            for c in &constraints {
+                let target = match (c.idx2, c.attr2) {
+                    (Some(i2), Some(a2)) => read_node_attr(&nodes[i2], a2, c.margin2) * c.multiplier + c.constant,
+                    _ => c.constant,
+                };
+                if !target.is_finite() {
+                    continue;
+                }
+                let cur = read_node_attr(&nodes[c.idx1], c.attr1, c.margin1);
+                let violated = match c.relation {
+                    -1 => cur > target + 0.01,
+                    1 => cur < target - 0.01,
+                    _ => (cur - target).abs() > 0.01,
+                };
+                if !violated {
+                    continue;
+                }
+
+                // If a child's bottom/right pins to an unconstrained wrapping parent's bottom/right,
+                // grow/size the wrapping parent instead of squashing the child.
+                if let (Some(i2), Some(a2)) = (c.idx2, c.attr2) {
+                    if is_ancestor(&nodes, i2, c.idx1) && !nodes[i2].is_window {
+                        if c.attr1 == NormAttr::Bottom
+                            && a2 == NormAttr::Bottom
+                            && !nodes[i2].has_height
+                            && !(nodes[i2].has_top && nodes[i2].has_bottom)
+                            && (nodes[c.idx1].has_top && (nodes[c.idx1].has_height || nodes[c.idx1].intrinsic_h > 0.0))
+                            && c.multiplier != 0.0
+                        {
+                            let desired_bottom2 = (cur - c.constant) / c.multiplier - c.margin2;
+                            if desired_bottom2.is_finite() {
+                                nodes[i2].h = (desired_bottom2 - nodes[i2].y).max(0.0);
+                            }
+                            continue;
+                        }
+                        if c.attr1 == NormAttr::Right
+                            && a2 == NormAttr::Right
+                            && !nodes[i2].has_width
+                            && !(nodes[i2].has_left && nodes[i2].has_right)
+                            && (nodes[c.idx1].has_left && (nodes[c.idx1].has_width || nodes[c.idx1].intrinsic_w > 0.0))
+                            && c.multiplier != 0.0
+                        {
+                            let desired_right2 = (cur - c.constant) / c.multiplier - c.margin2;
+                            if desired_right2.is_finite() {
+                                nodes[i2].w = (desired_right2 - nodes[i2].x).max(0.0);
+                            }
+                            continue;
+                        }
+                    }
+                }
+
+                apply_node_attr(&mut nodes, c.idx1, c.attr1, c.margin1, target);
+            }
+
+            // Re-evaluate multiline UILabel intrinsic heights after width settles.
+            for n in &mut nodes {
+                if n.is_multiline_label
+                    && n.constrained
+                    && !n.has_height
+                    && !(n.has_top && n.has_bottom)
+                    && n.w > 1.0
+                {
+                    let fit: CGSize = msg1(n.view, "sizeThatFits:", CGSize { width: n.w, height: 1.0e6 });
+                    if fit.height.is_finite() && fit.height > 0.0 {
+                        n.h = fit.height;
+                    }
+                }
+            }
+        }
+
+        for i in 0..nodes.len() {
+            if nodes[i].is_window || !nodes[i].constrained {
+                continue;
+            }
+            if i == 0 && !nodes[i].has_width && !nodes[i].has_height {
+                continue;
+            }
+            let (px, py) = match nodes[i].parent {
+                Some(p) => (nodes[p].x, nodes[p].y),
+                None => (nodes[i].x - nodes[i].init_frame.origin.x, nodes[i].y - nodes[i].init_frame.origin.y),
+            };
+            let nx = nodes[i].x - px;
+            let ny = nodes[i].y - py;
+            let nw = nodes[i].w;
+            let nh = nodes[i].h;
+            if !nx.is_finite() || !ny.is_finite() || !nw.is_finite() || !nh.is_finite() {
+                continue;
+            }
+            let f = nodes[i].init_frame;
+            if (nx - f.origin.x).abs() > 0.01
+                || (ny - f.origin.y).abs() > 0.01
+                || (nw - f.size.width).abs() > 0.01
+                || (nh - f.size.height).abs() > 0.01
+            {
+                let new_frame = CGRect {
+                    origin: CGPoint { x: nx, y: ny },
+                    size: CGSize { width: nw.max(0.0), height: nh.max(0.0) },
+                };
+                msg1::<CGRect, ()>(nodes[i].view, "setFrame:", new_frame);
+            }
+        }
+    }
+
     unsafe extern "C" fn plc_first(s: Id, _c: Sel) -> Id { pear_objc::assoc_get_weak(s, &PLC_FIRST_KEY) }
     unsafe extern "C" fn plc_second(s: Id, _c: Sel) -> Id { pear_objc::assoc_get_weak(s, &PLC_SECOND_KEY) }
     unsafe extern "C" fn plc_first_attr(s: Id, _c: Sel) -> isize { get_pod::<ConstraintData>(s, &PLC_DATA_KEY).first_attr }
@@ -3369,18 +4088,44 @@ mod layout_controls_imp {
         let mut d: ConstraintData = get_pod(s, &PLC_DATA_KEY);
         d.constant = v;
         set_pod(s, &PLC_DATA_KEY, d);
+        invalidate_constraint_layout(s);
     }
     unsafe extern "C" fn plc_priority(s: Id, _c: Sel) -> f32 { get_pod::<ConstraintData>(s, &PLC_DATA_KEY).priority }
     unsafe extern "C" fn plc_set_priority(s: Id, _c: Sel, v: f32) {
         let mut d: ConstraintData = get_pod(s, &PLC_DATA_KEY);
         d.priority = v;
         set_pod(s, &PLC_DATA_KEY, d);
+        invalidate_constraint_layout(s);
     }
     unsafe extern "C" fn plc_active(s: Id, _c: Sel) -> bool { get_pod::<ConstraintData>(s, &PLC_DATA_KEY).active }
     unsafe extern "C" fn plc_set_active(s: Id, _c: Sel, v: bool) {
         let mut d: ConstraintData = get_pod(s, &PLC_DATA_KEY);
-        d.active = v;
-        set_pod(s, &PLC_DATA_KEY, d);
+        if v {
+            d.active = true;
+            set_pod(s, &PLC_DATA_KEY, d);
+            let v1 = resolve_layout_view(pear_objc::assoc_get_weak(s, &PLC_FIRST_KEY));
+            let v2 = resolve_layout_view(pear_objc::assoc_get_weak(s, &PLC_SECOND_KEY));
+            let owner = common_ancestor_view(v1, v2);
+            if !owner.is_null() {
+                let old_owner = pear_objc::assoc_get_weak(s, &PLC_OWNER_KEY);
+                if !old_owner.is_null() && old_owner != owner {
+                    let old_arr = assoc_get(old_owner, &VIEW_CONSTRAINTS_KEY);
+                    if !old_arr.is_null() {
+                        msg1::<Id, ()>(old_arr, "removeObjectIdenticalTo:", s);
+                    }
+                }
+                view_add_constraint(owner, sel("addConstraint:"), s);
+            } else {
+                invalidate_constraint_layout(s);
+            }
+        } else {
+            d.active = false;
+            set_pod(s, &PLC_DATA_KEY, d);
+            let old_owner = pear_objc::assoc_get_weak(s, &PLC_OWNER_KEY);
+            if !old_owner.is_null() {
+                view_remove_constraint(old_owner, sel("removeConstraint:"), s);
+            }
+        }
     }
     unsafe extern "C" fn plc_auto_install(s: Id, cmd: Sel) {
         // Preserve the app's PureLayout category, including batched installs.
@@ -3618,20 +4363,29 @@ mod layout_controls_imp {
     unsafe extern "C" fn ctl_enabled(s: Id, _c: Sel) -> bool { get_pod::<ControlFlags>(s, &CTL_FLAGS_KEY).enabled }
     unsafe extern "C" fn ctl_set_enabled(s: Id, _c: Sel, v: bool) {
         let mut f: ControlFlags = get_pod(s, &CTL_FLAGS_KEY);
-        f.enabled = v;
-        set_pod(s, &CTL_FLAGS_KEY, f);
+        if f.enabled != v {
+            f.enabled = v;
+            set_pod(s, &CTL_FLAGS_KEY, f);
+            msg0::<()>(s, "setNeedsLayout");
+        }
     }
     unsafe extern "C" fn ctl_selected(s: Id, _c: Sel) -> bool { get_pod::<ControlFlags>(s, &CTL_FLAGS_KEY).selected }
     unsafe extern "C" fn ctl_set_selected(s: Id, _c: Sel, v: bool) {
         let mut f: ControlFlags = get_pod(s, &CTL_FLAGS_KEY);
-        f.selected = v;
-        set_pod(s, &CTL_FLAGS_KEY, f);
+        if f.selected != v {
+            f.selected = v;
+            set_pod(s, &CTL_FLAGS_KEY, f);
+            msg0::<()>(s, "setNeedsLayout");
+        }
     }
     unsafe extern "C" fn ctl_highlighted(s: Id, _c: Sel) -> bool { get_pod::<ControlFlags>(s, &CTL_FLAGS_KEY).highlighted }
     unsafe extern "C" fn ctl_set_highlighted(s: Id, _c: Sel, v: bool) {
         let mut f: ControlFlags = get_pod(s, &CTL_FLAGS_KEY);
-        f.highlighted = v;
-        set_pod(s, &CTL_FLAGS_KEY, f);
+        if f.highlighted != v {
+            f.highlighted = v;
+            set_pod(s, &CTL_FLAGS_KEY, f);
+            msg0::<()>(s, "setNeedsLayout");
+        }
     }
     unsafe extern "C" fn ctl_h_align(s: Id, _c: Sel) -> isize { get_pod::<ControlFlags>(s, &CTL_FLAGS_KEY).h_align }
     unsafe extern "C" fn ctl_set_h_align(s: Id, _c: Sel, v: isize) {
@@ -3649,25 +4403,178 @@ mod layout_controls_imp {
     static BUTTON_IMAGES_KEY: u8 = 0;
     static BUTTON_IMAGE_VIEW_KEY: u8 = 0;
     static BUTTON_IMAGE_INSETS_KEY: u8 = 0;
+    static BUTTON_TITLES_KEY: u8 = 0;
+    static BUTTON_ATTR_TITLES_KEY: u8 = 0;
+    static BUTTON_TITLE_COLORS_KEY: u8 = 0;
+    static BUTTON_BG_IMAGES_KEY: u8 = 0;
+    static BUTTON_TITLE_LABEL_KEY: u8 = 0;
+    static BUTTON_BG_IMAGE_VIEW_KEY: u8 = 0;
+    static BUTTON_TITLE_INSETS_KEY: u8 = 0;
+    static BUTTON_CONTENT_INSETS_KEY: u8 = 0;
+    static BUTTON_TYPE_KEY: u8 = 0;
+
+    unsafe fn state_dict_get(obj: Id, dict_key: &u8, state: usize) -> Id {
+        let dict = assoc_get(obj, dict_key);
+        if dict.is_null() {
+            return NIL;
+        }
+        msg1(dict, "objectForKey:", nsnumber_i64(state as i64))
+    }
+
+    unsafe fn state_dict_get_resolved(obj: Id, dict_key: &u8, state: usize) -> Id {
+        let v = state_dict_get(obj, dict_key, state);
+        if v.is_null() && state != 0 {
+            state_dict_get(obj, dict_key, 0)
+        } else {
+            v
+        }
+    }
+
+    unsafe fn state_dict_set(obj: Id, dict_key: &u8, val: Id, state: usize) {
+        let mut dict = assoc_get(obj, dict_key);
+        if dict.is_null() {
+            dict = msg0(cls("NSMutableDictionary"), "dictionary");
+            assoc_set(obj, dict_key, dict);
+        }
+        let key = nsnumber_i64(state as i64);
+        if val.is_null() {
+            msg1::<Id, ()>(dict, "removeObjectForKey:", key);
+        } else {
+            msg2::<Id, Id, ()>(dict, "setObject:forKey:", val, key);
+        }
+        msg0::<()>(obj, "setNeedsLayout");
+    }
+
+    unsafe fn button_current_state(s: Id) -> usize {
+        let flags: ControlFlags = get_pod(s, &CTL_FLAGS_KEY);
+        flags.highlighted as usize | ((!flags.enabled as usize) << 1) | ((flags.selected as usize) << 2)
+    }
+
+    unsafe extern "C" fn button_with_type(cls_obj: Id, _c: Sel, btype: isize) -> Id {
+        let btn: Id = msg1(msg0(cls_obj, "alloc"), "initWithFrame:", CGRect::default());
+        if !btn.is_null() {
+            pear_objc::assoc_set_i64(btn, &BUTTON_TYPE_KEY, btype as i64);
+            objc_autorelease(btn)
+        } else {
+            NIL
+        }
+    }
+
+    unsafe extern "C" fn button_type(s: Id, _c: Sel) -> isize {
+        pear_objc::assoc_i64(s, &BUTTON_TYPE_KEY, 0) as isize
+    }
 
     unsafe extern "C" fn button_image(s: Id, _c: Sel, state: usize) -> Id {
-        let images = assoc_get(s, &BUTTON_IMAGES_KEY);
-        msg1(images, "objectForKey:", nsnumber_i64(state as i64))
+        state_dict_get(s, &BUTTON_IMAGES_KEY, state)
     }
 
     unsafe extern "C" fn button_set_image(s: Id, _c: Sel, image: Id, state: usize) {
-        let mut images = assoc_get(s, &BUTTON_IMAGES_KEY);
-        if images.is_null() {
-            images = msg0(cls("NSMutableDictionary"), "dictionary");
-            assoc_set(s, &BUTTON_IMAGES_KEY, images);
+        state_dict_set(s, &BUTTON_IMAGES_KEY, image, state);
+    }
+
+    unsafe extern "C" fn button_current_image(s: Id, _c: Sel) -> Id {
+        state_dict_get_resolved(s, &BUTTON_IMAGES_KEY, button_current_state(s))
+    }
+
+    unsafe extern "C" fn button_bg_image(s: Id, _c: Sel, state: usize) -> Id {
+        state_dict_get(s, &BUTTON_BG_IMAGES_KEY, state)
+    }
+
+    unsafe extern "C" fn button_set_bg_image(s: Id, _c: Sel, image: Id, state: usize) {
+        state_dict_set(s, &BUTTON_BG_IMAGES_KEY, image, state);
+    }
+
+    unsafe extern "C" fn button_current_bg_image(s: Id, _c: Sel) -> Id {
+        state_dict_get_resolved(s, &BUTTON_BG_IMAGES_KEY, button_current_state(s))
+    }
+
+    unsafe extern "C" fn button_title(s: Id, _c: Sel, state: usize) -> Id {
+        state_dict_get(s, &BUTTON_TITLES_KEY, state)
+    }
+
+    unsafe extern "C" fn button_set_title(s: Id, _c: Sel, title: Id, state: usize) {
+        let copy = if title.is_null() { NIL } else { msg0::<Id>(title, "copy") };
+        state_dict_set(s, &BUTTON_TITLES_KEY, copy, state);
+        if !copy.is_null() {
+            objc_release(copy);
         }
-        let key = nsnumber_i64(state as i64);
-        if image.is_null() {
-            msg1::<Id, ()>(images, "removeObjectForKey:", key);
+        // Setting a plain title clears any attributed title for that state.
+        state_dict_set(s, &BUTTON_ATTR_TITLES_KEY, NIL, state);
+    }
+
+    unsafe extern "C" fn button_current_title(s: Id, _c: Sel) -> Id {
+        let state = button_current_state(s);
+        let t = state_dict_get_resolved(s, &BUTTON_TITLES_KEY, state);
+        if !t.is_null() {
+            return t;
+        }
+        let attr = state_dict_get_resolved(s, &BUTTON_ATTR_TITLES_KEY, state);
+        if attr.is_null() { NIL } else { msg0(attr, "string") }
+    }
+
+    unsafe extern "C" fn button_attr_title(s: Id, _c: Sel, state: usize) -> Id {
+        state_dict_get(s, &BUTTON_ATTR_TITLES_KEY, state)
+    }
+
+    unsafe extern "C" fn button_set_attr_title(s: Id, _c: Sel, attr: Id, state: usize) {
+        let copy = if attr.is_null() { NIL } else { msg0::<Id>(attr, "copy") };
+        state_dict_set(s, &BUTTON_ATTR_TITLES_KEY, copy, state);
+        if !copy.is_null() {
+            objc_release(copy);
+        }
+    }
+
+    unsafe extern "C" fn button_current_attr_title(s: Id, _c: Sel) -> Id {
+        state_dict_get_resolved(s, &BUTTON_ATTR_TITLES_KEY, button_current_state(s))
+    }
+
+    unsafe extern "C" fn button_title_color(s: Id, _c: Sel, state: usize) -> Id {
+        state_dict_get(s, &BUTTON_TITLE_COLORS_KEY, state)
+    }
+
+    unsafe extern "C" fn button_set_title_color(s: Id, _c: Sel, color: Id, state: usize) {
+        state_dict_set(s, &BUTTON_TITLE_COLORS_KEY, color, state);
+    }
+
+    unsafe extern "C" fn button_current_title_color(s: Id, _c: Sel) -> Id {
+        let c = state_dict_get_resolved(s, &BUTTON_TITLE_COLORS_KEY, button_current_state(s));
+        if !c.is_null() {
+            c
         } else {
-            msg2::<Id, Id, ()>(images, "setObject:forKey:", image, key);
+            msg0(cls("UIColor"), "blackColor")
         }
-        msg0::<()>(s, "setNeedsLayout");
+    }
+
+    unsafe fn button_ensure_image_view(s: Id) -> Id {
+        let mut view = assoc_get(s, &BUTTON_IMAGE_VIEW_KEY);
+        if view.is_null() {
+            view = msg0(cls("UIImageView"), "new");
+            msg1::<isize, ()>(view, "setContentMode:", 4); // center
+            msg1::<bool, ()>(view, "setUserInteractionEnabled:", false);
+            assoc_set(s, &BUTTON_IMAGE_VIEW_KEY, view);
+            msg1::<Id, ()>(s, "addSubview:", view);
+            objc_release(view);
+        }
+        view
+    }
+
+    unsafe extern "C" fn button_image_view(s: Id, _c: Sel) -> Id {
+        button_ensure_image_view(s)
+    }
+
+    unsafe extern "C" fn button_title_label(s: Id, _c: Sel) -> Id {
+        let mut lbl = assoc_get(s, &BUTTON_TITLE_LABEL_KEY);
+        if lbl.is_null() {
+            lbl = msg0(cls("UILabel"), "new");
+            msg1::<bool, ()>(lbl, "setUserInteractionEnabled:", false);
+            msg1::<isize, ()>(lbl, "setTextAlignment:", 1); // center
+            let black: Id = msg0(cls("UIColor"), "blackColor");
+            msg1::<Id, ()>(lbl, "setTextColor:", black);
+            assoc_set(s, &BUTTON_TITLE_LABEL_KEY, lbl);
+            msg1::<Id, ()>(s, "addSubview:", lbl);
+            objc_release(lbl);
+        }
+        lbl
     }
 
     unsafe extern "C" fn button_image_insets(s: Id, _c: Sel) -> UIEdgeInsets {
@@ -3679,33 +4586,189 @@ mod layout_controls_imp {
         msg0::<()>(s, "setNeedsLayout");
     }
 
+    unsafe extern "C" fn button_title_insets(s: Id, _c: Sel) -> UIEdgeInsets {
+        get_pod(s, &BUTTON_TITLE_INSETS_KEY)
+    }
+
+    unsafe extern "C" fn button_set_title_insets(s: Id, _c: Sel, insets: UIEdgeInsets) {
+        set_pod(s, &BUTTON_TITLE_INSETS_KEY, insets);
+        msg0::<()>(s, "setNeedsLayout");
+    }
+
+    unsafe extern "C" fn button_content_insets(s: Id, _c: Sel) -> UIEdgeInsets {
+        get_pod(s, &BUTTON_CONTENT_INSETS_KEY)
+    }
+
+    unsafe extern "C" fn button_set_content_insets(s: Id, _c: Sel, insets: UIEdgeInsets) {
+        set_pod(s, &BUTTON_CONTENT_INSETS_KEY, insets);
+        msg0::<()>(s, "setNeedsLayout");
+    }
+
+    unsafe fn button_sync_title_label(s: Id) -> (Id, bool) {
+        let state = button_current_state(s);
+        let attr_title = state_dict_get_resolved(s, &BUTTON_ATTR_TITLES_KEY, state);
+        let title = state_dict_get_resolved(s, &BUTTON_TITLES_KEY, state);
+        let has_title = (!attr_title.is_null() && msg0::<usize>(attr_title, "length") > 0)
+            || (!title.is_null() && msg0::<usize>(title, "length") > 0);
+        let existing_lbl = assoc_get(s, &BUTTON_TITLE_LABEL_KEY);
+        if !has_title && existing_lbl.is_null() {
+            return (NIL, false);
+        }
+        let lbl = button_title_label(s, sel("titleLabel"));
+        let color = state_dict_get_resolved(s, &BUTTON_TITLE_COLORS_KEY, state);
+        if !color.is_null() {
+            msg1::<Id, ()>(lbl, "setTextColor:", color);
+        } else {
+            let colors_dict = assoc_get(s, &BUTTON_TITLE_COLORS_KEY);
+            if !colors_dict.is_null() && msg0::<usize>(colors_dict, "count") > 0 {
+                let black: Id = msg0(cls("UIColor"), "blackColor");
+                msg1::<Id, ()>(lbl, "setTextColor:", black);
+            }
+        }
+        if !attr_title.is_null() {
+            msg1::<Id, ()>(lbl, "setAttributedText:", attr_title);
+        } else {
+            msg1::<Id, ()>(lbl, "setText:", title);
+        }
+        (lbl, has_title)
+    }
+
+    unsafe fn inset_rect(r: CGRect, i: UIEdgeInsets) -> CGRect {
+        CGRect {
+            origin: CGPoint { x: r.origin.x + i.left, y: r.origin.y + i.top },
+            size: CGSize {
+                width: (r.size.width - i.left - i.right).max(0.0),
+                height: (r.size.height - i.top - i.bottom).max(0.0),
+            },
+        }
+    }
+
+    unsafe extern "C" fn button_size_that_fits(s: Id, _c: Sel, fit: CGSize) -> CGSize {
+        let state = button_current_state(s);
+        let image = state_dict_get_resolved(s, &BUTTON_IMAGES_KEY, state);
+        let bg_image = state_dict_get_resolved(s, &BUTTON_BG_IMAGES_KEY, state);
+        let (lbl, has_title) = button_sync_title_label(s);
+        let img_sz: CGSize = if image.is_null() { CGSize::default() } else { msg0(image, "size") };
+        let bg_sz: CGSize = if bg_image.is_null() { CGSize::default() } else { msg0(bg_image, "size") };
+        let lbl_sz: CGSize = if has_title && !lbl.is_null() {
+            let max_w = if fit.width > 0.0 { fit.width } else { 1.0e6 };
+            msg1(lbl, "sizeThatFits:", CGSize { width: max_w, height: 1.0e6 })
+        } else {
+            CGSize::default()
+        };
+        let ci = button_content_insets(s, sel("contentEdgeInsets"));
+        let content_w = if !image.is_null() && has_title {
+            img_sz.width + lbl_sz.width
+        } else {
+            img_sz.width.max(lbl_sz.width)
+        };
+        let content_h = img_sz.height.max(lbl_sz.height);
+        let w = (content_w + ci.left + ci.right).max(bg_sz.width);
+        let h = (content_h + ci.top + ci.bottom).max(bg_sz.height);
+        CGSize { width: w, height: h }
+    }
+
+    unsafe extern "C" fn button_intrinsic_size(s: Id, c: Sel) -> CGSize {
+        button_size_that_fits(s, c, CGSize::default())
+    }
+
     unsafe extern "C" fn button_layout(s: Id, _c: Sel) {
-        let flags: ControlFlags = get_pod(s, &CTL_FLAGS_KEY);
-        let state = flags.highlighted as usize | ((!flags.enabled as usize) << 1) | ((flags.selected as usize) << 2);
-        let mut image = button_image(s, sel("imageForState:"), state);
-        if image.is_null() && state != 0 {
-            image = button_image(s, sel("imageForState:"), 0);
+        let state = button_current_state(s);
+        let bounds: CGRect = msg0(s, "bounds");
+
+        // 1. Background image view at the very back.
+        let bg_image = state_dict_get_resolved(s, &BUTTON_BG_IMAGES_KEY, state);
+        let mut bg_view = assoc_get(s, &BUTTON_BG_IMAGE_VIEW_KEY);
+        if !bg_image.is_null() {
+            if bg_view.is_null() {
+                bg_view = msg0(cls("UIImageView"), "new");
+                msg1::<isize, ()>(bg_view, "setContentMode:", 0); // scaleToFill
+                msg1::<bool, ()>(bg_view, "setUserInteractionEnabled:", false);
+                assoc_set(s, &BUTTON_BG_IMAGE_VIEW_KEY, bg_view);
+                msg2::<Id, isize, ()>(s, "insertSubview:atIndex:", bg_view, 0);
+                objc_release(bg_view);
+            }
+            msg1::<CGRect, ()>(bg_view, "setFrame:", bounds);
+            msg1::<Id, ()>(bg_view, "setImage:", bg_image);
+            msg1::<bool, ()>(bg_view, "setHidden:", false);
+        } else if !bg_view.is_null() {
+            msg1::<Id, ()>(bg_view, "setImage:", NIL);
+            msg1::<bool, ()>(bg_view, "setHidden:", true);
         }
-        let mut view = assoc_get(s, &BUTTON_IMAGE_VIEW_KEY);
-        if view.is_null() {
-            if image.is_null() { return; }
-            view = msg0(cls("UIImageView"), "new");
-            msg1::<isize, ()>(view, "setContentMode:", 4); // center
-            assoc_set(s, &BUTTON_IMAGE_VIEW_KEY, view);
-            msg1::<Id, ()>(s, "addSubview:", view);
-            objc_release(view);
+
+        // 2. Sync foreground image & title label.
+        let image = state_dict_get_resolved(s, &BUTTON_IMAGES_KEY, state);
+        let (lbl, has_title) = button_sync_title_label(s);
+        let ci = button_content_insets(s, sel("contentEdgeInsets"));
+        let ii = button_image_insets(s, sel("imageEdgeInsets"));
+        let ti = button_title_insets(s, sel("titleEdgeInsets"));
+        let content = inset_rect(bounds, ci);
+
+        if !image.is_null() && has_title && !lbl.is_null() {
+            let iv = button_ensure_image_view(s);
+            let img_sz: CGSize = msg0(image, "size");
+            let lbl_fit: CGSize = msg1(lbl, "sizeThatFits:", CGSize { width: content.size.width, height: content.size.height });
+            let total_w = (img_sz.width + lbl_fit.width).min(content.size.width);
+            let start_x = content.origin.x + ((content.size.width - total_w) * 0.5).max(0.0);
+            let img_w = img_sz.width.min(content.size.width);
+            let img_rect = inset_rect(
+                CGRect {
+                    origin: CGPoint { x: start_x, y: content.origin.y },
+                    size: CGSize { width: img_w, height: content.size.height },
+                },
+                ii,
+            );
+            let lbl_w = (total_w - img_w).max(0.0);
+            let lbl_rect = inset_rect(
+                CGRect {
+                    origin: CGPoint { x: start_x + img_w, y: content.origin.y },
+                    size: CGSize { width: lbl_w, height: content.size.height },
+                },
+                ti,
+            );
+            msg1::<CGRect, ()>(iv, "setFrame:", img_rect);
+            msg1::<Id, ()>(iv, "setImage:", image);
+            msg1::<bool, ()>(iv, "setHidden:", false);
+            msg1::<CGRect, ()>(lbl, "setFrame:", lbl_rect);
+            msg1::<bool, ()>(lbl, "setHidden:", false);
+        } else {
+            let existing_iv = assoc_get(s, &BUTTON_IMAGE_VIEW_KEY);
+            if !image.is_null() || !existing_iv.is_null() {
+                let iv = if !image.is_null() { button_ensure_image_view(s) } else { existing_iv };
+                if !iv.is_null() {
+                    msg1::<CGRect, ()>(iv, "setFrame:", inset_rect(content, ii));
+                    msg1::<Id, ()>(iv, "setImage:", image);
+                    msg1::<bool, ()>(iv, "setHidden:", image.is_null());
+                }
+            }
+            if !lbl.is_null() {
+                msg1::<CGRect, ()>(lbl, "setFrame:", inset_rect(content, ti));
+                msg1::<bool, ()>(lbl, "setHidden:", !has_title);
+            }
         }
-        let mut frame: CGRect = msg0(s, "bounds");
-        let insets = button_image_insets(s, sel("imageEdgeInsets"));
-        frame.origin.x += insets.left;
-        frame.origin.y += insets.top;
-        frame.size.width = (frame.size.width - insets.left - insets.right).max(0.0);
-        frame.size.height = (frame.size.height - insets.top - insets.bottom).max(0.0);
-        msg1::<CGRect, ()>(view, "setFrame:", frame);
-        msg1::<Id, ()>(view, "setImage:", image);
+    }
+
+    unsafe extern "C" fn button_touch_began(s: Id, _c: Sel, _touches: Id, _event: Id) {
+        if ctl_enabled(s, sel("isEnabled")) {
+            ctl_set_highlighted(s, sel("setHighlighted:"), true);
+        }
+    }
+
+    unsafe extern "C" fn button_touch_moved(s: Id, _c: Sel, touches: Id, event: Id) {
+        let touch: Id = msg0(touches, "anyObject");
+        if !touch.is_null() && ctl_enabled(s, sel("isEnabled")) {
+            let point: CGPoint = msg1(touch, "locationInView:", s);
+            let inside: bool = msg2(s, "pointInside:withEvent:", point, event);
+            ctl_set_highlighted(s, sel("setHighlighted:"), inside);
+        }
+    }
+
+    unsafe extern "C" fn button_touch_cancelled(s: Id, _c: Sel, _touches: Id, _event: Id) {
+        ctl_set_highlighted(s, sel("setHighlighted:"), false);
     }
 
     unsafe extern "C" fn button_touch_ended(s: Id, _c: Sel, touches: Id, event: Id) {
+        ctl_set_highlighted(s, sel("setHighlighted:"), false);
         let touch: Id = msg0(touches, "anyObject");
         if !touch.is_null() && ctl_enabled(s, sel("isEnabled")) {
             let point: CGPoint = msg1(touch, "locationInView:", s);
@@ -3721,6 +4784,8 @@ mod layout_controls_imp {
         align: isize,
         border: isize,
         clear_mode: isize,
+        right_view_mode: isize,
+        left_view_mode: isize,
         kb_type: isize,
         kb_app: isize,
         ret_key: isize,
@@ -3730,6 +4795,7 @@ mod layout_controls_imp {
         secure: bool,
         clears_begin: bool,
         adjusts_fit: bool,
+        editing: bool,
         min_font: f64,
     }
     impl Default for TextFieldState {
@@ -3738,6 +4804,8 @@ mod layout_controls_imp {
                 align: 0,
                 border: 0,
                 clear_mode: 0,
+                right_view_mode: 0,
+                left_view_mode: 0,
                 kb_type: 0,
                 kb_app: 0,
                 ret_key: 0,
@@ -3747,6 +4815,7 @@ mod layout_controls_imp {
                 secure: false,
                 clears_begin: false,
                 adjusts_fit: false,
+                editing: false,
                 min_font: 0.0,
             }
         }
@@ -3756,11 +4825,96 @@ mod layout_controls_imp {
     static TF_TEXT_KEY: u8 = 0;
     static TF_ATTR_TEXT_KEY: u8 = 0;
     static TF_PLACEHOLDER_KEY: u8 = 0;
+    static TF_ATTR_PLACEHOLDER_KEY: u8 = 0;
     static TF_FONT_KEY: u8 = 0;
     static TF_COLOR_KEY: u8 = 0;
     static TF_INPUT_ACC_KEY: u8 = 0;
     static TF_INPUT_VIEW_KEY: u8 = 0;
+    static TF_RIGHT_VIEW_KEY: u8 = 0;
+    static TF_LEFT_VIEW_KEY: u8 = 0;
+    static TF_DISPLAY_LABEL_KEY: u8 = 0;
+    static TF_CARET_VIEW_KEY: u8 = 0;
     static TF_STATE_KEY: u8 = 0;
+
+    unsafe fn tf_ensure_display_label(s: Id) -> Id {
+        let mut lbl = assoc_get(s, &TF_DISPLAY_LABEL_KEY);
+        if lbl.is_null() {
+            lbl = msg0(cls("UILabel"), "new");
+            msg1::<bool, ()>(lbl, "setUserInteractionEnabled:", false);
+            msg1::<isize, ()>(lbl, "setNumberOfLines:", 1);
+            assoc_set(s, &TF_DISPLAY_LABEL_KEY, lbl);
+            msg2::<Id, isize, ()>(s, "insertSubview:atIndex:", lbl, 0);
+            objc_release(lbl);
+        }
+        lbl
+    }
+
+    unsafe fn tf_sync_display(s: Id) {
+        let st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        let lbl = tf_ensure_display_label(s);
+        let font = assoc_get(s, &TF_FONT_KEY);
+        let eff_font = if !font.is_null() {
+            font
+        } else {
+            msg1::<f64, Id>(cls("UIFont") as Id, "systemFontOfSize:", 15.0)
+        };
+        msg1::<Id, ()>(lbl, "setFont:", eff_font);
+        msg1::<isize, ()>(lbl, "setTextAlignment:", st.align);
+
+        let text = assoc_get(s, &TF_TEXT_KEY);
+        let text_len = if text.is_null() { 0 } else { msg0::<usize>(text, "length") };
+        if text_len > 0 {
+            let color = assoc_get(s, &TF_COLOR_KEY);
+            let eff_color = if !color.is_null() { color } else { msg0(cls("UIColor"), "blackColor") };
+            msg1::<Id, ()>(lbl, "setTextColor:", eff_color);
+            if st.secure {
+                let dots = "•".repeat(text_len);
+                msg1::<Id, ()>(lbl, "setText:", nsstring(&dots));
+            } else {
+                let attr = assoc_get(s, &TF_ATTR_TEXT_KEY);
+                if !attr.is_null() && msg0::<usize>(attr, "length") > 0 {
+                    msg1::<Id, ()>(lbl, "setAttributedText:", attr);
+                } else {
+                    msg1::<Id, ()>(lbl, "setText:", text);
+                }
+            }
+        } else {
+            let placeholder_color: Id = msg2::<f64, f64, Id>(cls("UIColor"), "colorWithWhite:alpha:", 0.6, 1.0);
+            msg1::<Id, ()>(lbl, "setTextColor:", placeholder_color);
+            let attr_ph = assoc_get(s, &TF_ATTR_PLACEHOLDER_KEY);
+            if !attr_ph.is_null() && msg0::<usize>(attr_ph, "length") > 0 {
+                msg1::<Id, ()>(lbl, "setAttributedText:", attr_ph);
+            } else {
+                let ph = assoc_get(s, &TF_PLACEHOLDER_KEY);
+                msg1::<Id, ()>(lbl, "setText:", ph);
+            }
+        }
+
+        let mut caret = assoc_get(s, &TF_CARET_VIEW_KEY);
+        if st.editing {
+            if caret.is_null() {
+                caret = msg0(cls("UIView"), "new");
+                msg1::<bool, ()>(caret, "setUserInteractionEnabled:", false);
+                assoc_set(s, &TF_CARET_VIEW_KEY, caret);
+                msg1::<Id, ()>(s, "addSubview:", caret);
+                objc_release(caret);
+            }
+            let tint = view_tint_color(s, sel("tintColor"));
+            msg1::<Id, ()>(caret, "setBackgroundColor:", tint);
+            msg1::<bool, ()>(caret, "setHidden:", false);
+        } else if !caret.is_null() {
+            msg1::<bool, ()>(caret, "setHidden:", true);
+        }
+    }
+
+    unsafe fn tf_accessory_visible(mode: isize, editing: bool) -> bool {
+        match mode {
+            1 => editing,  // UITextFieldViewModeWhileEditing
+            2 => !editing, // UITextFieldViewModeUnlessEditing
+            3 => true,     // UITextFieldViewModeAlways
+            _ => false,    // UITextFieldViewModeNever
+        }
+    }
 
     unsafe extern "C" fn tf_del(s: Id, _c: Sel) -> Id { pear_objc::assoc_get_weak(s, &TF_DEL_KEY) }
     unsafe extern "C" fn tf_set_del(s: Id, _c: Sel, v: Id) { pear_objc::assoc_set_weak(s, &TF_DEL_KEY, v); }
@@ -3768,25 +4922,370 @@ mod layout_controls_imp {
         let t = assoc_get(s, &TF_TEXT_KEY);
         if t.is_null() { nsstring("") } else { t }
     }
-    unsafe extern "C" fn tf_set_text(s: Id, _c: Sel, v: Id) { set_copied(s, &TF_TEXT_KEY, v); }
+    unsafe extern "C" fn tf_set_text(s: Id, _c: Sel, v: Id) {
+        set_copied(s, &TF_TEXT_KEY, v);
+        assoc_set(s, &TF_ATTR_TEXT_KEY, NIL);
+        tf_sync_display(s);
+        msg0::<()>(s, "setNeedsLayout");
+    }
     unsafe extern "C" fn tf_attr_text(s: Id, _c: Sel) -> Id { assoc_get(s, &TF_ATTR_TEXT_KEY) }
-    unsafe extern "C" fn tf_set_attr_text(s: Id, _c: Sel, v: Id) { set_copied(s, &TF_ATTR_TEXT_KEY, v); }
+    unsafe extern "C" fn tf_set_attr_text(s: Id, _c: Sel, v: Id) {
+        set_copied(s, &TF_ATTR_TEXT_KEY, v);
+        let plain = if v.is_null() { NIL } else { msg0::<Id>(v, "string") };
+        set_copied(s, &TF_TEXT_KEY, plain);
+        tf_sync_display(s);
+        msg0::<()>(s, "setNeedsLayout");
+    }
     unsafe extern "C" fn tf_placeholder(s: Id, _c: Sel) -> Id { assoc_get(s, &TF_PLACEHOLDER_KEY) }
-    unsafe extern "C" fn tf_set_placeholder(s: Id, _c: Sel, v: Id) { set_copied(s, &TF_PLACEHOLDER_KEY, v); }
+    unsafe extern "C" fn tf_set_placeholder(s: Id, _c: Sel, v: Id) {
+        set_copied(s, &TF_PLACEHOLDER_KEY, v);
+        assoc_set(s, &TF_ATTR_PLACEHOLDER_KEY, NIL);
+        tf_sync_display(s);
+        msg0::<()>(s, "setNeedsLayout");
+    }
+    unsafe extern "C" fn tf_attr_placeholder(s: Id, _c: Sel) -> Id { assoc_get(s, &TF_ATTR_PLACEHOLDER_KEY) }
+    unsafe extern "C" fn tf_set_attr_placeholder(s: Id, _c: Sel, v: Id) {
+        set_copied(s, &TF_ATTR_PLACEHOLDER_KEY, v);
+        let plain = if v.is_null() { NIL } else { msg0::<Id>(v, "string") };
+        set_copied(s, &TF_PLACEHOLDER_KEY, plain);
+        tf_sync_display(s);
+        msg0::<()>(s, "setNeedsLayout");
+    }
     unsafe extern "C" fn tf_font(s: Id, _c: Sel) -> Id { assoc_get(s, &TF_FONT_KEY) }
-    unsafe extern "C" fn tf_set_font(s: Id, _c: Sel, v: Id) { assoc_set(s, &TF_FONT_KEY, v); }
+    unsafe extern "C" fn tf_set_font(s: Id, _c: Sel, v: Id) {
+        assoc_set(s, &TF_FONT_KEY, v);
+        tf_sync_display(s);
+        msg0::<()>(s, "setNeedsLayout");
+    }
     unsafe extern "C" fn tf_color(s: Id, _c: Sel) -> Id { assoc_get(s, &TF_COLOR_KEY) }
-    unsafe extern "C" fn tf_set_color(s: Id, _c: Sel, v: Id) { assoc_set(s, &TF_COLOR_KEY, v); }
+    unsafe extern "C" fn tf_set_color(s: Id, _c: Sel, v: Id) {
+        assoc_set(s, &TF_COLOR_KEY, v);
+        tf_sync_display(s);
+    }
     unsafe extern "C" fn tf_input_acc(s: Id, _c: Sel) -> Id { assoc_get(s, &TF_INPUT_ACC_KEY) }
     unsafe extern "C" fn tf_set_input_acc(s: Id, _c: Sel, v: Id) { assoc_set(s, &TF_INPUT_ACC_KEY, v); }
     unsafe extern "C" fn tf_input_view(s: Id, _c: Sel) -> Id { assoc_get(s, &TF_INPUT_VIEW_KEY) }
     unsafe extern "C" fn tf_set_input_view(s: Id, _c: Sel, v: Id) { assoc_set(s, &TF_INPUT_VIEW_KEY, v); }
+    unsafe extern "C" fn tf_right_view(s: Id, _c: Sel) -> Id { assoc_get(s, &TF_RIGHT_VIEW_KEY) }
+    unsafe extern "C" fn tf_set_right_view(s: Id, _c: Sel, v: Id) {
+        let old = assoc_get(s, &TF_RIGHT_VIEW_KEY);
+        if old == v {
+            return;
+        }
+        if !old.is_null() && msg0::<Id>(old, "superview") == s {
+            msg0::<()>(old, "removeFromSuperview");
+        }
+        assoc_set(s, &TF_RIGHT_VIEW_KEY, v);
+        if !v.is_null() && v != s {
+            msg1::<Id, ()>(s, "addSubview:", v);
+        }
+        msg0::<()>(s, "setNeedsLayout");
+    }
+    unsafe extern "C" fn tf_right_view_mode(s: Id, _c: Sel) -> isize { get_pod::<TextFieldState>(s, &TF_STATE_KEY).right_view_mode }
+    unsafe extern "C" fn tf_set_right_view_mode(s: Id, _c: Sel, v: isize) {
+        let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        st.right_view_mode = v;
+        set_pod(s, &TF_STATE_KEY, st);
+        msg0::<()>(s, "setNeedsLayout");
+    }
+    unsafe extern "C" fn tf_left_view(s: Id, _c: Sel) -> Id { assoc_get(s, &TF_LEFT_VIEW_KEY) }
+    unsafe extern "C" fn tf_set_left_view(s: Id, _c: Sel, v: Id) {
+        let old = assoc_get(s, &TF_LEFT_VIEW_KEY);
+        if old == v {
+            return;
+        }
+        if !old.is_null() && msg0::<Id>(old, "superview") == s {
+            msg0::<()>(old, "removeFromSuperview");
+        }
+        assoc_set(s, &TF_LEFT_VIEW_KEY, v);
+        if !v.is_null() && v != s {
+            msg1::<Id, ()>(s, "addSubview:", v);
+        }
+        msg0::<()>(s, "setNeedsLayout");
+    }
+    unsafe extern "C" fn tf_left_view_mode(s: Id, _c: Sel) -> isize { get_pod::<TextFieldState>(s, &TF_STATE_KEY).left_view_mode }
+    unsafe extern "C" fn tf_set_left_view_mode(s: Id, _c: Sel, v: isize) {
+        let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        st.left_view_mode = v;
+        set_pod(s, &TF_STATE_KEY, st);
+        msg0::<()>(s, "setNeedsLayout");
+    }
+    unsafe extern "C" fn tf_editing(s: Id, _c: Sel) -> bool { get_pod::<TextFieldState>(s, &TF_STATE_KEY).editing }
+
+    unsafe extern "C" fn tf_left_view_rect(s: Id, _c: Sel, bounds: CGRect) -> CGRect {
+        let lv = assoc_get(s, &TF_LEFT_VIEW_KEY);
+        if lv.is_null() {
+            return CGRect::default();
+        }
+        let mut sz = msg0::<CGRect>(lv, "frame").size;
+        if sz.width <= 0.0 || sz.height <= 0.0 {
+            let fit: CGSize = msg1(lv, "sizeThatFits:", bounds.size);
+            if sz.width <= 0.0 { sz.width = if fit.width > 0.0 { fit.width } else { bounds.size.height }; }
+            if sz.height <= 0.0 { sz.height = if fit.height > 0.0 { fit.height } else { bounds.size.height }; }
+        }
+        let h = sz.height.min(bounds.size.height);
+        CGRect {
+            origin: CGPoint { x: bounds.origin.x, y: bounds.origin.y + (bounds.size.height - h) * 0.5 },
+            size: CGSize { width: sz.width, height: h },
+        }
+    }
+
+    unsafe extern "C" fn tf_right_view_rect(s: Id, _c: Sel, bounds: CGRect) -> CGRect {
+        let rv = assoc_get(s, &TF_RIGHT_VIEW_KEY);
+        if rv.is_null() {
+            return CGRect::default();
+        }
+        let mut sz = msg0::<CGRect>(rv, "frame").size;
+        if sz.width <= 0.0 || sz.height <= 0.0 {
+            let fit: CGSize = msg1(rv, "sizeThatFits:", bounds.size);
+            if sz.width <= 0.0 { sz.width = if fit.width > 0.0 { fit.width } else { bounds.size.height }; }
+            if sz.height <= 0.0 { sz.height = if fit.height > 0.0 { fit.height } else { bounds.size.height }; }
+        }
+        let h = sz.height.min(bounds.size.height);
+        CGRect {
+            origin: CGPoint {
+                x: (bounds.origin.x + bounds.size.width - sz.width).max(bounds.origin.x),
+                y: bounds.origin.y + (bounds.size.height - h) * 0.5,
+            },
+            size: CGSize { width: sz.width, height: h },
+        }
+    }
+
+    unsafe extern "C" fn tf_text_rect(s: Id, _c: Sel, bounds: CGRect) -> CGRect {
+        let st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        let pad_x = if st.border != 0 { 8.0 } else { 0.0 };
+        let mut x1 = bounds.origin.x + pad_x;
+        let mut x2 = bounds.origin.x + bounds.size.width - pad_x;
+        let lv = assoc_get(s, &TF_LEFT_VIEW_KEY);
+        if !lv.is_null() && tf_accessory_visible(st.left_view_mode, st.editing) {
+            let lr: CGRect = msg1(s, "leftViewRectForBounds:", bounds);
+            x1 = x1.max(lr.origin.x + lr.size.width + 4.0);
+        }
+        let rv = assoc_get(s, &TF_RIGHT_VIEW_KEY);
+        if !rv.is_null() && tf_accessory_visible(st.right_view_mode, st.editing) {
+            let rr: CGRect = msg1(s, "rightViewRectForBounds:", bounds);
+            x2 = x2.min(rr.origin.x - 4.0);
+        }
+        CGRect {
+            origin: CGPoint { x: x1, y: bounds.origin.y },
+            size: CGSize { width: (x2 - x1).max(0.0), height: bounds.size.height },
+        }
+    }
+
+    unsafe extern "C" fn tf_size_that_fits(s: Id, _c: Sel, fit: CGSize) -> CGSize {
+        tf_sync_display(s);
+        let lbl = assoc_get(s, &TF_DISPLAY_LABEL_KEY);
+        let mut sz: CGSize = if lbl.is_null() {
+            CGSize { width: 100.0, height: 34.0 }
+        } else {
+            msg1(lbl, "sizeThatFits:", fit)
+        };
+        sz.height = sz.height.max(30.0);
+        if sz.width <= 0.0 {
+            sz.width = 100.0;
+        }
+        sz
+    }
+
+    unsafe extern "C" fn tf_intrinsic_size(s: Id, c: Sel) -> CGSize {
+        tf_size_that_fits(s, c, CGSize::default())
+    }
+
+    unsafe extern "C" fn tf_layout(s: Id, _c: Sel) {
+        let bounds: CGRect = msg0(s, "bounds");
+        let st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        tf_sync_display(s);
+
+        let lbl = assoc_get(s, &TF_DISPLAY_LABEL_KEY);
+        let text_rect: CGRect = if st.editing {
+            msg1(s, "editingRectForBounds:", bounds)
+        } else {
+            msg1(s, "textRectForBounds:", bounds)
+        };
+        if !lbl.is_null() {
+            msg1::<CGRect, ()>(lbl, "setFrame:", text_rect);
+        }
+
+        let lv = assoc_get(s, &TF_LEFT_VIEW_KEY);
+        if !lv.is_null() {
+            if msg0::<Id>(lv, "superview") != s {
+                msg1::<Id, ()>(s, "addSubview:", lv);
+            }
+            let vis = tf_accessory_visible(st.left_view_mode, st.editing);
+            msg1::<bool, ()>(lv, "setHidden:", !vis);
+            if vis {
+                let r: CGRect = msg1(s, "leftViewRectForBounds:", bounds);
+                msg1::<CGRect, ()>(lv, "setFrame:", r);
+                msg1::<Id, ()>(s, "bringSubviewToFront:", lv);
+            }
+        }
+        let rv = assoc_get(s, &TF_RIGHT_VIEW_KEY);
+        if !rv.is_null() {
+            if msg0::<Id>(rv, "superview") != s {
+                msg1::<Id, ()>(s, "addSubview:", rv);
+            }
+            let vis = tf_accessory_visible(st.right_view_mode, st.editing);
+            msg1::<bool, ()>(rv, "setHidden:", !vis);
+            if vis {
+                let r: CGRect = msg1(s, "rightViewRectForBounds:", bounds);
+                msg1::<CGRect, ()>(rv, "setFrame:", r);
+                msg1::<Id, ()>(s, "bringSubviewToFront:", rv);
+            }
+        }
+
+        let caret = assoc_get(s, &TF_CARET_VIEW_KEY);
+        if st.editing && !caret.is_null() && !lbl.is_null() {
+            let text = assoc_get(s, &TF_TEXT_KEY);
+            let mut text_w = 0.0f64;
+            if !text.is_null() && msg0::<usize>(text, "length") > 0 {
+                let fit: CGSize = msg1(lbl, "sizeThatFits:", CGSize { width: text_rect.size.width, height: text_rect.size.height });
+                text_w = fit.width.min(text_rect.size.width);
+            }
+            let caret_x = match st.align {
+                1 => text_rect.origin.x + (text_rect.size.width + text_w) * 0.5,
+                2 => text_rect.origin.x + text_rect.size.width - 1.5,
+                _ => text_rect.origin.x + text_w + 1.0,
+            };
+            let ch = (text_rect.size.height * 0.6).clamp(14.0, 24.0);
+            msg1::<CGRect, ()>(caret, "setFrame:", CGRect {
+                origin: CGPoint {
+                    x: caret_x.min(text_rect.origin.x + text_rect.size.width - 2.0).max(text_rect.origin.x),
+                    y: text_rect.origin.y + (text_rect.size.height - ch) * 0.5,
+                },
+                size: CGSize { width: 1.5, height: ch },
+            });
+            msg1::<Id, ()>(s, "bringSubviewToFront:", caret);
+        }
+    }
+
+    unsafe extern "C" fn tf_can_become_first(s: Id, _c: Sel) -> bool {
+        ctl_enabled(s, sel("isEnabled"))
+    }
+
+    unsafe extern "C" fn tf_become_first(s: Id, _c: Sel) -> bool {
+        let st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        if st.editing {
+            return true;
+        }
+        let d = pear_objc::assoc_get_weak(s, &TF_DEL_KEY);
+        if !d.is_null() && responds_to(d, "textFieldShouldBeginEditing:") && !msg1::<Id, bool>(d, "textFieldShouldBeginEditing:", s) {
+            return false;
+        }
+        if !super0::<bool>(s, "UITextField", "becomeFirstResponder") {
+            return false;
+        }
+        let mut st = get_pod::<TextFieldState>(s, &TF_STATE_KEY);
+        st.editing = true;
+        set_pod(s, &TF_STATE_KEY, st);
+        if st.clears_begin {
+            assoc_set(s, &TF_TEXT_KEY, NIL);
+            assoc_set(s, &TF_ATTR_TEXT_KEY, NIL);
+        }
+        tf_sync_display(s);
+        msg0::<()>(s, "setNeedsLayout");
+        if !d.is_null() && responds_to(d, "textFieldDidBeginEditing:") {
+            msg1::<Id, ()>(d, "textFieldDidBeginEditing:", s);
+        }
+        let nc: Id = msg0(cls("NSNotificationCenter"), "defaultCenter");
+        msg2::<Id, Id, ()>(nc, "postNotificationName:object:", nsstring("UITextFieldTextDidBeginEditingNotification"), s);
+        msg1::<usize, ()>(s, "sendActionsForControlEvents:", 1 << 16); // EditingDidBegin
+        true
+    }
+
+    unsafe extern "C" fn tf_resign_first(s: Id, _c: Sel) -> bool {
+        let st: TextFieldState = get_pod(s, &TF_STATE_KEY);
+        if !st.editing {
+            return super0(s, "UITextField", "resignFirstResponder");
+        }
+        let d = pear_objc::assoc_get_weak(s, &TF_DEL_KEY);
+        if !d.is_null() && responds_to(d, "textFieldShouldEndEditing:") && !msg1::<Id, bool>(d, "textFieldShouldEndEditing:", s) {
+            return false;
+        }
+        let _: bool = super0(s, "UITextField", "resignFirstResponder");
+        let mut st = get_pod::<TextFieldState>(s, &TF_STATE_KEY);
+        st.editing = false;
+        set_pod(s, &TF_STATE_KEY, st);
+        tf_sync_display(s);
+        msg0::<()>(s, "setNeedsLayout");
+        if !d.is_null() {
+            if responds_to(d, "textFieldDidEndEditing:reason:") {
+                msg2::<Id, isize, ()>(d, "textFieldDidEndEditing:reason:", s, 0);
+            } else if responds_to(d, "textFieldDidEndEditing:") {
+                msg1::<Id, ()>(d, "textFieldDidEndEditing:", s);
+            }
+        }
+        let nc: Id = msg0(cls("NSNotificationCenter"), "defaultCenter");
+        msg2::<Id, Id, ()>(nc, "postNotificationName:object:", nsstring("UITextFieldTextDidEndEditingNotification"), s);
+        msg1::<usize, ()>(s, "sendActionsForControlEvents:", 1 << 18); // EditingDidEnd
+        true
+    }
+
+    unsafe extern "C" fn tf_touch_ended(s: Id, _c: Sel, touches: Id, event: Id) {
+        let touch: Id = msg0(touches, "anyObject");
+        if !touch.is_null() && ctl_enabled(s, sel("isEnabled")) {
+            let point: CGPoint = msg1(touch, "locationInView:", s);
+            if msg2::<CGPoint, Id, bool>(s, "pointInside:withEvent:", point, event) {
+                let _: bool = msg0(s, "becomeFirstResponder");
+            }
+        }
+    }
+
+    unsafe extern "C" fn tf_has_text(s: Id, _c: Sel) -> bool {
+        let t = assoc_get(s, &TF_TEXT_KEY);
+        !t.is_null() && msg0::<usize>(t, "length") > 0
+    }
+
+    unsafe fn tf_replace_range(s: Id, range: NSRange, rep: Id) {
+        let cur = tf_text(s, sel("text"));
+        let d = pear_objc::assoc_get_weak(s, &TF_DEL_KEY);
+        if !d.is_null() && responds_to(d, "textField:shouldChangeCharactersInRange:replacementString:") {
+            if !msg3::<Id, NSRange, Id, bool>(d, "textField:shouldChangeCharactersInRange:replacementString:", s, range, rep) {
+                return;
+            }
+        }
+        let new_str: Id = msg2(cur, "stringByReplacingCharactersInRange:withString:", range, rep);
+        set_copied(s, &TF_TEXT_KEY, new_str);
+        assoc_set(s, &TF_ATTR_TEXT_KEY, NIL);
+        tf_sync_display(s);
+        msg0::<()>(s, "setNeedsLayout");
+        let nc: Id = msg0(cls("NSNotificationCenter"), "defaultCenter");
+        msg2::<Id, Id, ()>(nc, "postNotificationName:object:", nsstring("UITextFieldTextDidChangeNotification"), s);
+        msg1::<usize, ()>(s, "sendActionsForControlEvents:", 1 << 17); // EditingChanged
+    }
+
+    unsafe extern "C" fn tf_insert_text(s: Id, _c: Sel, text: Id) {
+        let ins = if text.is_null() { nsstring("") } else { text };
+        if let Some(rust_s) = nsstring_to_string(ins) {
+            if rust_s == "\n" || rust_s == "\r" {
+                let d = pear_objc::assoc_get_weak(s, &TF_DEL_KEY);
+                if !d.is_null() && responds_to(d, "textFieldShouldReturn:") {
+                    let _: bool = msg1(d, "textFieldShouldReturn:", s);
+                }
+                msg1::<usize, ()>(s, "sendActionsForControlEvents:", 1 << 19); // EditingDidEndOnExit
+                return;
+            }
+        }
+        let cur = tf_text(s, sel("text"));
+        let len: usize = msg0(cur, "length");
+        tf_replace_range(s, NSRange { location: len, length: 0 }, ins);
+    }
+
+    unsafe extern "C" fn tf_delete_backward(s: Id, _c: Sel) {
+        let cur = tf_text(s, sel("text"));
+        let len: usize = msg0(cur, "length");
+        if len == 0 {
+            return;
+        }
+        let range: NSRange = msg1(cur, "rangeOfComposedCharacterSequenceAtIndex:", len - 1);
+        tf_replace_range(s, range, nsstring(""));
+    }
 
     unsafe extern "C" fn tf_align(s: Id, _c: Sel) -> isize { get_pod::<TextFieldState>(s, &TF_STATE_KEY).align }
     unsafe extern "C" fn tf_set_align(s: Id, _c: Sel, v: isize) {
         let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
         st.align = v;
         set_pod(s, &TF_STATE_KEY, st);
+        tf_sync_display(s);
     }
     unsafe extern "C" fn tf_border(s: Id, _c: Sel) -> isize { get_pod::<TextFieldState>(s, &TF_STATE_KEY).border }
     unsafe extern "C" fn tf_set_border(s: Id, _c: Sel, v: isize) {
@@ -3841,6 +5340,7 @@ mod layout_controls_imp {
         let mut st: TextFieldState = get_pod(s, &TF_STATE_KEY);
         st.secure = v;
         set_pod(s, &TF_STATE_KEY, st);
+        tf_sync_display(s);
     }
     unsafe extern "C" fn tf_clears_begin(s: Id, _c: Sel) -> bool { get_pod::<TextFieldState>(s, &TF_STATE_KEY).clears_begin }
     unsafe extern "C" fn tf_set_clears_begin(s: Id, _c: Sel, v: bool) {
@@ -3905,6 +5405,24 @@ mod layout_controls_imp {
     unsafe extern "C" fn tb_set_tint(s: Id, _c: Sel, v: Id) { assoc_set(s, &TB_TINT_KEY, v); }
 
     pub unsafe fn register_classes() {
+        let lr = cls("UIViewLayoutRegion");
+        if !lr.is_null() {
+            add_class_method(lr, "marginsLayoutRegionWithCornerAdaptation:", region_factory as Imp, "@@:q");
+            add_class_method(lr, "safeAreaLayoutRegionWithCornerAdaptation:", region_factory as Imp, "@@:q");
+            add_class_method(lr, "marginsLayoutRegion", region_simple as Imp, "@@:");
+            add_class_method(lr, "safeAreaLayoutRegion", region_simple as Imp, "@@:");
+        }
+        let lg = cls("UILayoutGuide");
+        if !lg.is_null() {
+            add_method(lg, "owningView", guide_owning_view as Imp, "@@:");
+            add_method(lg, "setOwningView:", guide_set_owning_view as Imp, "v@:@");
+            add_method(lg, "identifier", guide_identifier as Imp, "@@:");
+            add_method(lg, "setIdentifier:", guide_set_identifier as Imp, "v@:@");
+            add_method(lg, "layoutFrame", guide_layout_frame as Imp, "{CGRect={CGPoint=dd}{CGSize=dd}}@:");
+            for name in ANCHOR_SELECTORS {
+                add_method(lg, name, view_anchor as Imp, "@@:");
+            }
+        }
         let anchor = cls("PearLayoutAnchor");
         for relation in ["EqualTo", "LessThanOrEqualTo", "GreaterThanOrEqualTo"] {
             for (suffix, implementation, types) in [
@@ -3983,11 +5501,37 @@ mod layout_controls_imp {
 
         let button = cls("UIButton");
         if !button.is_null() {
+            add_class_method(button, "buttonWithType:", button_with_type as Imp, "@@:q");
+            add_method(button, "buttonType", button_type as Imp, "q@:");
             add_method(button, "imageForState:", button_image as Imp, "@@:Q");
             add_method(button, "setImage:forState:", button_set_image as Imp, "v@:@Q");
+            add_method(button, "currentImage", button_current_image as Imp, "@@:");
+            add_method(button, "backgroundImageForState:", button_bg_image as Imp, "@@:Q");
+            add_method(button, "setBackgroundImage:forState:", button_set_bg_image as Imp, "v@:@Q");
+            add_method(button, "currentBackgroundImage", button_current_bg_image as Imp, "@@:");
+            add_method(button, "titleForState:", button_title as Imp, "@@:Q");
+            add_method(button, "setTitle:forState:", button_set_title as Imp, "v@:@Q");
+            add_method(button, "currentTitle", button_current_title as Imp, "@@:");
+            add_method(button, "attributedTitleForState:", button_attr_title as Imp, "@@:Q");
+            add_method(button, "setAttributedTitle:forState:", button_set_attr_title as Imp, "v@:@Q");
+            add_method(button, "currentAttributedTitle", button_current_attr_title as Imp, "@@:");
+            add_method(button, "titleColorForState:", button_title_color as Imp, "@@:Q");
+            add_method(button, "setTitleColor:forState:", button_set_title_color as Imp, "v@:@Q");
+            add_method(button, "currentTitleColor", button_current_title_color as Imp, "@@:");
+            add_method(button, "imageView", button_image_view as Imp, "@@:");
+            add_method(button, "titleLabel", button_title_label as Imp, "@@:");
             add_method(button, "imageEdgeInsets", button_image_insets as Imp, "{UIEdgeInsets=dddd}@:");
             add_method(button, "setImageEdgeInsets:", button_set_image_insets as Imp, "v@:{UIEdgeInsets=dddd}");
+            add_method(button, "titleEdgeInsets", button_title_insets as Imp, "{UIEdgeInsets=dddd}@:");
+            add_method(button, "setTitleEdgeInsets:", button_set_title_insets as Imp, "v@:{UIEdgeInsets=dddd}");
+            add_method(button, "contentEdgeInsets", button_content_insets as Imp, "{UIEdgeInsets=dddd}@:");
+            add_method(button, "setContentEdgeInsets:", button_set_content_insets as Imp, "v@:{UIEdgeInsets=dddd}");
+            add_method(button, "sizeThatFits:", button_size_that_fits as Imp, "{CGSize=dd}@:{CGSize=dd}");
+            add_method(button, "intrinsicContentSize", button_intrinsic_size as Imp, "{CGSize=dd}@:");
             add_method(button, "layoutSubviews", button_layout as Imp, "v@:");
+            add_method(button, "touchesBegan:withEvent:", button_touch_began as Imp, "v@:@@");
+            add_method(button, "touchesMoved:withEvent:", button_touch_moved as Imp, "v@:@@");
+            add_method(button, "touchesCancelled:withEvent:", button_touch_cancelled as Imp, "v@:@@");
             add_method(button, "touchesEnded:withEvent:", button_touch_ended as Imp, "v@:@@");
         }
 
@@ -4001,10 +5545,37 @@ mod layout_controls_imp {
             add_method(tf, "setAttributedText:", tf_set_attr_text as Imp, "v@:@");
             add_method(tf, "placeholder", tf_placeholder as Imp, "@@:");
             add_method(tf, "setPlaceholder:", tf_set_placeholder as Imp, "v@:@");
+            add_method(tf, "attributedPlaceholder", tf_attr_placeholder as Imp, "@@:");
+            add_method(tf, "setAttributedPlaceholder:", tf_set_attr_placeholder as Imp, "v@:@");
             add_method(tf, "font", tf_font as Imp, "@@:");
             add_method(tf, "setFont:", tf_set_font as Imp, "v@:@");
             add_method(tf, "textColor", tf_color as Imp, "@@:");
             add_method(tf, "setTextColor:", tf_set_color as Imp, "v@:@");
+            add_method(tf, "rightView", tf_right_view as Imp, "@@:");
+            add_method(tf, "setRightView:", tf_set_right_view as Imp, "v@:@");
+            add_method(tf, "rightViewMode", tf_right_view_mode as Imp, "q@:");
+            add_method(tf, "setRightViewMode:", tf_set_right_view_mode as Imp, "v@:q");
+            add_method(tf, "leftView", tf_left_view as Imp, "@@:");
+            add_method(tf, "setLeftView:", tf_set_left_view as Imp, "v@:@");
+            add_method(tf, "leftViewMode", tf_left_view_mode as Imp, "q@:");
+            add_method(tf, "setLeftViewMode:", tf_set_left_view_mode as Imp, "v@:q");
+            add_method(tf, "isEditing", tf_editing as Imp, "B@:");
+            add_method(tf, "editing", tf_editing as Imp, "B@:");
+            add_method(tf, "textRectForBounds:", tf_text_rect as Imp, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}");
+            add_method(tf, "editingRectForBounds:", tf_text_rect as Imp, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}");
+            add_method(tf, "placeholderRectForBounds:", tf_text_rect as Imp, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}");
+            add_method(tf, "leftViewRectForBounds:", tf_left_view_rect as Imp, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}");
+            add_method(tf, "rightViewRectForBounds:", tf_right_view_rect as Imp, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}");
+            add_method(tf, "sizeThatFits:", tf_size_that_fits as Imp, "{CGSize=dd}@:{CGSize=dd}");
+            add_method(tf, "intrinsicContentSize", tf_intrinsic_size as Imp, "{CGSize=dd}@:");
+            add_method(tf, "layoutSubviews", tf_layout as Imp, "v@:");
+            add_method(tf, "canBecomeFirstResponder", tf_can_become_first as Imp, "B@:");
+            add_method(tf, "becomeFirstResponder", tf_become_first as Imp, "B@:");
+            add_method(tf, "resignFirstResponder", tf_resign_first as Imp, "B@:");
+            add_method(tf, "touchesEnded:withEvent:", tf_touch_ended as Imp, "v@:@@");
+            add_method(tf, "hasText", tf_has_text as Imp, "B@:");
+            add_method(tf, "insertText:", tf_insert_text as Imp, "v@:@");
+            add_method(tf, "deleteBackward", tf_delete_backward as Imp, "v@:");
             add_method(tf, "textAlignment", tf_align as Imp, "q@:");
             add_method(tf, "setTextAlignment:", tf_set_align as Imp, "v@:q");
             add_method(tf, "borderStyle", tf_border as Imp, "q@:");

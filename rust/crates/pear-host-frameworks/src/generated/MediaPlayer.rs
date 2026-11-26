@@ -19,10 +19,13 @@ extern "C" {
 
 pear_objc::empty_class!(MPMoviePlayerController : &raw const super::NSObject_CLASS, &raw const super::NSObject_META);
 pear_objc::empty_class!(MPVolumeView : &raw const super::UIView_CLASS, &raw const super::UIView_META);
+pear_objc::nsstring_constant!(MPMovieMediaTypesAvailableNotification = "MPMovieMediaTypesAvailableNotification");
+pear_objc::nsstring_constant!(MPMovieNaturalSizeAvailableNotification = "MPMovieNaturalSizeAvailableNotification");
 pear_objc::nsstring_constant!(MPMoviePlayerDidExitFullscreenNotification = "MPMoviePlayerDidExitFullscreenNotification");
 pear_objc::nsstring_constant!(MPMoviePlayerLoadStateDidChangeNotification = "MPMoviePlayerLoadStateDidChangeNotification");
 pear_objc::nsstring_constant!(MPMoviePlayerPlaybackDidFinishNotification = "MPMoviePlayerPlaybackDidFinishNotification");
 pear_objc::nsstring_constant!(MPMoviePlayerPlaybackStateDidChangeNotification = "MPMoviePlayerPlaybackStateDidChangeNotification");
+pear_objc::nsstring_constant!(MPMovieSourceTypeAvailableNotification = "MPMovieSourceTypeAvailableNotification");
 pear_objc::nsstring_constant!(MPVolumeViewWirelessRoutesAvailableDidChangeNotification = "MPVolumeViewWirelessRoutesAvailableDidChangeNotification");
 
 /// Image initializer: every message to these classes reaches the

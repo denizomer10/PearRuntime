@@ -285,6 +285,8 @@ pear_objc::nsstring_constant!(UIImagePickerControllerImageURL = "UIImagePickerCo
 pear_objc::nsstring_constant!(UIImagePickerControllerMediaType = "UIImagePickerControllerMediaType");
 pear_objc::nsstring_constant!(UIImagePickerControllerMediaURL = "UIImagePickerControllerMediaURL");
 pear_objc::nsstring_constant!(UIImagePickerControllerOriginalImage = "UIImagePickerControllerOriginalImage");
+pear_objc::nsstring_constant!(UIImagePickerControllerPHAsset = "UIImagePickerControllerPHAsset");
+pear_objc::nsstring_constant!(UIImagePickerControllerReferenceURL = "UIImagePickerControllerReferenceURL");
 pear_objc::nsstring_constant!(UIKeyInputDownArrow = "UIKeyInputDownArrow");
 pear_objc::nsstring_constant!(UIKeyInputEscape = "UIKeyInputEscape");
 pear_objc::nsstring_constant!(UIKeyInputLeftArrow = "UIKeyInputLeftArrow");
@@ -303,10 +305,6 @@ pear_objc::nsstring_constant!(UINibExternalObjects = "UINibExternalObjects");
 pear_objc::nsstring_constant!(UIPasteboardNameGeneral = "UIPasteboardNameGeneral");
 pear_objc::nsstring_constant!(UIPasteboardOptionExpirationDate = "UIPasteboardOptionExpirationDate");
 pear_objc::nsstring_constant!(UIPasteboardOptionLocalOnly = "UIPasteboardOptionLocalOnly");
-pear_objc::nsstring_constant!(UISceneDidActivateNotification = "UISceneDidActivateNotification");
-pear_objc::nsstring_constant!(UISceneDidEnterBackgroundNotification = "UISceneDidEnterBackgroundNotification");
-pear_objc::nsstring_constant!(UISceneWillConnectNotification = "UISceneWillConnectNotification");
-pear_objc::nsstring_constant!(UISceneWillEnterForegroundNotification = "UISceneWillEnterForegroundNotification");
 pear_objc::nsstring_constant!(UIScreenBrightnessDidChangeNotification = "UIScreenBrightnessDidChangeNotification");
 pear_objc::nsstring_constant!(UIScreenCapturedDidChangeNotification = "UIScreenCapturedDidChangeNotification");
 pear_objc::nsstring_constant!(UIScreenDidConnectNotification = "UIScreenDidConnectNotification");
@@ -346,7 +344,37 @@ pub static UIWindowLevelStatusBar: f64 = 1000.0; // CGFloat/double
 std::arch::global_asm!(
     r#"
     .text
+    .p2align 2
+    .globl _UISaveVideoAtPathToSavedPhotosAlbum
+_UISaveVideoAtPathToSavedPhotosAlbum:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    mov x0, #2
+    mov x1, #0
+    adrp x2, Lpear_stub_name0@PAGE
+    add x2, x2, Lpear_stub_name0@PAGEOFF
+    mov x3, x30
+    bl _PearMissingReport
+    ldp x29, x30, [sp], #16
+    b _pear_missing_zero
+    .p2align 2
+    .globl _UIVideoAtPathIsCompatibleWithSavedPhotosAlbum
+_UIVideoAtPathIsCompatibleWithSavedPhotosAlbum:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    mov x0, #2
+    mov x1, #0
+    adrp x2, Lpear_stub_name1@PAGE
+    add x2, x2, Lpear_stub_name1@PAGEOFF
+    mov x3, x30
+    bl _PearMissingReport
+    ldp x29, x30, [sp], #16
+    b _pear_missing_zero
     .section __TEXT,__cstring,cstring_literals
+Lpear_stub_name0:
+    .asciz "UISaveVideoAtPathToSavedPhotosAlbum"
+Lpear_stub_name1:
+    .asciz "UIVideoAtPathIsCompatibleWithSavedPhotosAlbum"
     .text
 "#
 );

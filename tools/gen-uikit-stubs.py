@@ -36,7 +36,7 @@ STRING_TYPES = re.compile(r"\b(NSString|NSNotificationName|UIActivityType|NSAttr
                           r"UIApplicationOpenURLOptionsKey|UIApplicationLaunchOptionsKey|"
                           r"UIAccessibilityNotifications|NSString\s*\*|UI\w*Key|UI\w*Name|UI\w*Type|"
                           r"UI\w*Identifier|UIPasteboardName|UIFontTextStyle|UIFontDescriptor\w*|"
-                          r"UIContentSizeCategory|UIPasteboardOption|NSRunLoopMode)\b")
+                          r"UIContentSizeCategory|UIPasteboardOption|NSRunLoopMode|UISceneSessionRole)\b")
 
 
 # Window levels are documented ordering values (normal < status bar < alert).
@@ -120,10 +120,11 @@ def implemented():
     Rust crates linked into it), not counting this script's own output."""
     classes, symbols = set(), set()
     for f in glob.glob(os.path.join(ROOT, "rust/crates/*/src/**/*.rs"), recursive=True):
-        if os.path.abspath(f) == OUT:
+        if os.path.abspath(f) == OUT or "/pear-host-frameworks/src/generated/" in f:
             continue
         t = open(f).read()
         classes |= set(re.findall(r'#\[export_name = "OBJC_CLASS_\$_(\w+)"\]', t))
+        classes |= set(re.findall(r'pear_objc::empty_class!\((\w+)\s*:', t))
         symbols |= set(re.findall(r'#\[no_mangle\]\s+pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+(\w+)', t))
         symbols |= set(re.findall(r'#\[no_mangle\]\s+pub\s+static\s+(\w+)', t))
         symbols |= set(re.findall(r'nsstring_constant!\((\w+)\s*=', t))

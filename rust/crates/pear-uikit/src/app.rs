@@ -1931,6 +1931,9 @@ pub unsafe fn register_classes() {
         add_method(app, "sendAction:to:from:forEvent:", app_send_action as Imp, "B@::@@@");
         add_method(app, "beginReceivingRemoteControlEvents", app_noop as Imp, "v@:");
         add_method(app, "endReceivingRemoteControlEvents", app_noop as Imp, "v@:");
+        add_method(app, "isIgnoringInteractionEvents", app_false as Imp, "B@:");
+        add_method(app, "beginIgnoringInteractionEvents", app_noop as Imp, "v@:");
+        add_method(app, "endIgnoringInteractionEvents", app_noop as Imp, "v@:");
         add_method(app, "backgroundRefreshStatus", app_bg_refresh_status as Imp, "q@:");
     }
 
