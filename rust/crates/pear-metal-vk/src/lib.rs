@@ -1170,4 +1170,276 @@ mod tests {
             pear_libobjc::object::release(dev);
         }
     }
+
+    #[test]
+    fn phase5_16_texture_view_live_aliasing_and_scanline_rasterizer() {
+        let _g = PRESENT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        objc_metal::init();
+        unsafe {
+            let dev = objc_metal::create_system_default_device();
+            let cq: Id = send0(dev, "newCommandQueue");
+            let td_cls = objc_rt::class_named("MTLTextureDescriptor").unwrap() as Id;
+            let s_td = objc_rt::sel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
+            let d_td = lookup_for_send(td_cls, s_td);
+            let f_td: unsafe extern "C" fn(Id, Sel, usize, usize, usize, bool) -> Id =
+                std::mem::transmute(d_td.imp);
+
+            // 1. Live BGRA8Unorm <-> sRGB view aliasing
+            let parent_desc = f_td(d_td.receiver, s_td, 80, 8, 8, false);
+            let parent: Id = send1(dev, "newTextureWithDescriptor:", parent_desc);
+            let view: Id = send1(parent, "newTextureViewWithPixelFormat:", 81usize);
+            assert_ne!(view, parent);
+
+            // 4x4 non-uniform RGBA fragment texture -> exercises fixed-point scanline loop
+            let fdesc = f_td(d_td.receiver, s_td, 70, 4, 4, false);
+            let ftex: Id = send1(dev, "newTextureWithDescriptor:", fdesc);
+            let mut fpx = [0u8; 4 * 4 * 4];
+            for y in 0..4usize {
+                for x in 0..4usize {
+                    let off = (y * 4 + x) * 4;
+                    if x < 2 {
+                        fpx[off..off + 4].copy_from_slice(&[200, 100, 50, 128]);
+                    } else {
+                        fpx[off..off + 4].copy_from_slice(&[40, 220, 120, 255]);
+                    }
+                }
+            }
+            let s_rr = objc_rt::sel("replaceRegion:mipmapLevel:withBytes:bytesPerRow:");
+            let d_rr = lookup_for_send(ftex, s_rr);
+            let f_rr: unsafe extern "C" fn(Id, Sel, MTLRegion, usize, *const u8, usize) =
+                std::mem::transmute(d_rr.imp);
+            let rgn4 = MTLRegion {
+                origin: MTLOrigin { x: 0, y: 0, z: 0 },
+                size: MTLSize { width: 4, height: 4, depth: 1 },
+            };
+            f_rr(d_rr.receiver, s_rr, rgn4, 0, fpx.as_ptr(), 16);
+
+            let verts: [f32; 20] = [
+                -1.0, -1.0, 0.0, 0.0, 1.0,
+                 1.0, -1.0, 0.0, 1.0, 1.0,
+                 1.0,  1.0, 0.0, 1.0, 0.0,
+                -1.0,  1.0, 0.0, 0.0, 0.0,
+            ];
+            let mut vbytes = vec![0u8; verts.len() * 4];
+            for (i, &v) in verts.iter().enumerate() {
+                vbytes[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+            }
+            let vbuf: Id = send3(
+                dev,
+                "newBufferWithBytes:length:options:",
+                vbytes.as_ptr() as *const c_void,
+                vbytes.len(),
+                0usize,
+            );
+            let indices: [u16; 6] = [0, 1, 2, 0, 2, 3];
+            let ibuf: Id = send3(
+                dev,
+                "newBufferWithBytes:length:options:",
+                indices.as_ptr() as *const c_void,
+                indices.len() * 2,
+                0usize,
+            );
+
+            let vdesc_cls = objc_rt::class_named("MTLVertexDescriptor").unwrap() as Id;
+            let vdesc: Id = send0(vdesc_cls, "vertexDescriptor");
+            let attrs: Id = send0(vdesc, "attributes");
+            let a0: Id = send1(attrs, "objectAtIndexedSubscript:", 0usize);
+            send1::<usize, ()>(a0, "setFormat:", 30);
+            send1::<usize, ()>(a0, "setOffset:", 0);
+            send1::<usize, ()>(a0, "setBufferIndex:", 1);
+            let a1: Id = send1(attrs, "objectAtIndexedSubscript:", 1usize);
+            send1::<usize, ()>(a1, "setFormat:", 29);
+            send1::<usize, ()>(a1, "setOffset:", 12);
+            send1::<usize, ()>(a1, "setBufferIndex:", 1);
+            let layouts: Id = send0(vdesc, "layouts");
+            let l1: Id = send1(layouts, "objectAtIndexedSubscript:", 1usize);
+            send1::<usize, ()>(l1, "setStride:", 20);
+
+            let pd_cls = objc_rt::class_named("MTLRenderPipelineDescriptor").unwrap() as Id;
+            let pdesc: Id = send0(send0(pd_cls, "alloc"), "init");
+            send1::<Id, ()>(pdesc, "setVertexDescriptor:", vdesc);
+            let p_catts: Id = send0(pdesc, "colorAttachments");
+            let p_ca0: Id = send1(p_catts, "objectAtIndexedSubscript:", 0usize);
+            send1::<usize, ()>(p_ca0, "setBlendingEnabled:", 1);
+            let mut err: Id = std::ptr::null_mut();
+            let pso: Id = send2(dev, "newRenderPipelineStateWithDescriptor:error:", pdesc, &mut err);
+
+            let pass_cls = objc_rt::class_named("MTLRenderPassDescriptor").unwrap() as Id;
+            let pass: Id = send0(pass_cls, "renderPassDescriptor");
+            let catts: Id = send0(pass, "colorAttachments");
+            let ca0: Id = send1(catts, "objectAtIndexedSubscript:", 0usize);
+            send1::<Id, ()>(ca0, "setTexture:", view);
+            send1::<usize, ()>(ca0, "setLoadAction:", 2);
+            let s_cc = objc_rt::sel("setClearColor:");
+            let d_cc = lookup_for_send(ca0, s_cc);
+            let f_cc: unsafe extern "C" fn(Id, Sel, MTLClearColor) = std::mem::transmute(d_cc.imp);
+            f_cc(
+                d_cc.receiver,
+                s_cc,
+                MTLClearColor { red: 0.0, green: 0.0, blue: 0.4, alpha: 1.0 },
+            );
+
+            let cb: Id = send0(cq, "commandBuffer");
+            let renc: Id = send1(cb, "renderCommandEncoderWithDescriptor:", pass);
+            send1::<Id, ()>(renc, "setRenderPipelineState:", pso);
+            send3::<Id, usize, usize, ()>(renc, "setVertexBuffer:offset:atIndex:", vbuf, 0usize, 1usize);
+            send2::<Id, usize, ()>(renc, "setFragmentTexture:atIndex:", ftex, 0usize);
+            send5::<usize, usize, usize, Id, usize, ()>(
+                renc,
+                "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:",
+                3usize,
+                6usize,
+                0usize,
+                ibuf,
+                0usize,
+            );
+            send0::<()>(renc, "endEncoding");
+            send0::<()>(cb, "commit");
+
+            // Read back directly from parent (BGRA8Unorm -> byte order [B, G, R, A])
+            let s_gb = objc_rt::sel("getBytes:bytesPerRow:fromRegion:mipmapLevel:");
+            let rgn8 = MTLRegion {
+                origin: MTLOrigin { x: 0, y: 0, z: 0 },
+                size: MTLSize { width: 8, height: 8, depth: 1 },
+            };
+            let mut parent_out = [0u8; 8 * 8 * 4];
+            let d_gb = lookup_for_send(parent, s_gb);
+            let f_gb: unsafe extern "C" fn(Id, Sel, *mut u8, usize, MTLRegion, usize) =
+                std::mem::transmute(d_gb.imp);
+            f_gb(d_gb.receiver, s_gb, parent_out.as_mut_ptr(), 32, rgn8, 0);
+            // Left half samples [200,100,50,128] blended over clear [0,0,102,255] -> R=100, G=50, B=(50*128+102*127+127)/255=76 -> BGRA [76,50,100,255]
+            assert_eq!(&parent_out[0..4], &[76, 50, 100, 255]);
+            // Right half samples [40,220,120,255] opaque -> BGRA [120,220,40,255]
+            assert_eq!(&parent_out[6 * 4..7 * 4], &[120, 220, 40, 255]);
+
+            // Upload via replaceRegion on view and read back from parent
+            let view_patch: [u8; 4] = [9, 8, 7, 255];
+            let rgn1 = MTLRegion {
+                origin: MTLOrigin { x: 1, y: 1, z: 0 },
+                size: MTLSize { width: 1, height: 1, depth: 1 },
+            };
+            let d_rrv = lookup_for_send(view, s_rr);
+            let f_rrv: unsafe extern "C" fn(Id, Sel, MTLRegion, usize, *const u8, usize) =
+                std::mem::transmute(d_rrv.imp);
+            f_rrv(d_rrv.receiver, s_rr, rgn1, 0, view_patch.as_ptr(), 4);
+            let mut patch_rb = [0u8; 4];
+            f_gb(d_gb.receiver, s_gb, patch_rb.as_mut_ptr(), 4, rgn1, 0);
+            assert_eq!(patch_rb, view_patch);
+
+            // 2. Unprojected 3D & behind-camera rejection
+            let t4_desc = f_td(d_td.receiver, s_td, 70, 4, 4, false);
+            let t4: Id = send1(dev, "newTextureWithDescriptor:", t4_desc);
+            let sentinel = [11u8, 22, 33, 255];
+            let mut t4_init = [0u8; 4 * 4 * 4];
+            for ch in t4_init.chunks_exact_mut(4) {
+                ch.copy_from_slice(&sentinel);
+            }
+            let d_rr4 = lookup_for_send(t4, s_rr);
+            let f_rr4: unsafe extern "C" fn(Id, Sel, MTLRegion, usize, *const u8, usize) =
+                std::mem::transmute(d_rr4.imp);
+            f_rr4(d_rr4.receiver, s_rr, rgn4, 0, t4_init.as_ptr(), 16);
+
+            let huge_verts: [f32; 20] = [
+                -500.0, -500.0, 0.0, 0.0, 1.0,
+                 500.0, -500.0, 0.0, 1.0, 1.0,
+                 500.0,  500.0, 0.0, 1.0, 0.0,
+                -500.0,  500.0, 0.0, 0.0, 0.0,
+            ];
+            let mut hbytes = vec![0u8; huge_verts.len() * 4];
+            for (i, &v) in huge_verts.iter().enumerate() {
+                hbytes[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+            }
+            let hbuf: Id = send3(
+                dev,
+                "newBufferWithBytes:length:options:",
+                hbytes.as_ptr() as *const c_void,
+                hbytes.len(),
+                0usize,
+            );
+            let pass4: Id = send0(pass_cls, "renderPassDescriptor");
+            let catts4: Id = send0(pass4, "colorAttachments");
+            let ca4: Id = send1(catts4, "objectAtIndexedSubscript:", 0usize);
+            send1::<Id, ()>(ca4, "setTexture:", t4);
+            send1::<usize, ()>(ca4, "setLoadAction:", 1); // Load
+
+            let cb2: Id = send0(cq, "commandBuffer");
+            let renc2: Id = send1(cb2, "renderCommandEncoderWithDescriptor:", pass4);
+            send1::<Id, ()>(renc2, "setRenderPipelineState:", pso);
+            send3::<Id, usize, usize, ()>(renc2, "setVertexBuffer:offset:atIndex:", hbuf, 0usize, 1usize);
+            send5::<usize, usize, usize, Id, usize, ()>(
+                renc2,
+                "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:",
+                3usize,
+                6usize,
+                0usize,
+                ibuf,
+                0usize,
+            );
+            send0::<()>(renc2, "endEncoding");
+            send0::<()>(cb2, "commit");
+
+            // Behind camera matrix: w_out = -1.0 (row 3 / col 3 -> m[15] = -1.0)
+            let neg_w_mvp: [f32; 16] = [
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, -1.0,
+            ];
+            let mut mbytes = vec![0u8; 64];
+            for (i, &v) in neg_w_mvp.iter().enumerate() {
+                mbytes[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+            }
+            let cb3: Id = send0(cq, "commandBuffer");
+            let renc3: Id = send1(cb3, "renderCommandEncoderWithDescriptor:", pass4);
+            send1::<Id, ()>(renc3, "setRenderPipelineState:", pso);
+            let s_vb = objc_rt::sel("setVertexBytes:length:atIndex:");
+            let d_vb = lookup_for_send(renc3, s_vb);
+            let f_vb: unsafe extern "C" fn(Id, Sel, *const u8, usize, usize) =
+                std::mem::transmute(d_vb.imp);
+            f_vb(d_vb.receiver, s_vb, mbytes.as_ptr(), mbytes.len(), 0);
+            send3::<Id, usize, usize, ()>(renc3, "setVertexBuffer:offset:atIndex:", vbuf, 0usize, 1usize);
+            send5::<usize, usize, usize, Id, usize, ()>(
+                renc3,
+                "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:",
+                3usize,
+                6usize,
+                0usize,
+                ibuf,
+                0usize,
+            );
+            send0::<()>(renc3, "endEncoding");
+            send0::<()>(cb3, "commit");
+
+            let mut t4_rb = [0u8; 4 * 4 * 4];
+            let d_gb4 = lookup_for_send(t4, s_gb);
+            let f_gb4: unsafe extern "C" fn(Id, Sel, *mut u8, usize, MTLRegion, usize) =
+                std::mem::transmute(d_gb4.imp);
+            f_gb4(d_gb4.receiver, s_gb, t4_rb.as_mut_ptr(), 16, rgn4, 0);
+            assert_eq!(t4_rb, t4_init);
+
+            // 3. Self-sampling draw safety (same texture bound as target and fragmentTexture:0)
+            let cb4: Id = send0(cq, "commandBuffer");
+            let renc4: Id = send1(cb4, "renderCommandEncoderWithDescriptor:", pass4);
+            send1::<Id, ()>(renc4, "setRenderPipelineState:", pso);
+            send3::<Id, usize, usize, ()>(renc4, "setVertexBuffer:offset:atIndex:", vbuf, 0usize, 1usize);
+            send2::<Id, usize, ()>(renc4, "setFragmentTexture:atIndex:", t4, 0usize);
+            send5::<usize, usize, usize, Id, usize, ()>(
+                renc4,
+                "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:",
+                3usize,
+                6usize,
+                0usize,
+                ibuf,
+                0usize,
+            );
+            send0::<()>(renc4, "endEncoding");
+            send0::<()>(cb4, "commit");
+
+            pear_libobjc::object::release(t4);
+            pear_libobjc::object::release(ftex);
+            pear_libobjc::object::release(view);
+            pear_libobjc::object::release(parent);
+            pear_libobjc::object::release(dev);
+        }
+    }
 }

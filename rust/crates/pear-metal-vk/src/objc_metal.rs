@@ -14,7 +14,7 @@ use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, Once, OnceLock};
+use std::sync::{Arc, Mutex, Once, OnceLock, RwLock};
 
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
@@ -132,7 +132,7 @@ struct TextureState {
     texture_type: usize,
     mipmap_levels: usize,
     usage: usize,
-    pixels: Arc<Vec<u8>>,
+    pixels: Arc<RwLock<Vec<u8>>>,
     parent_tex: usize,
 }
 
@@ -497,7 +497,7 @@ fn default_device_singleton() -> Id {
 
 pub extern "C" fn create_system_default_device() -> Id {
     let dev = default_device_singleton();
-    unsafe { retain(dev); }
+    retain(dev);
     dev
 }
 
@@ -605,7 +605,7 @@ fn create_texture_object(
         texture_type,
         mipmap_levels,
         usage,
-        pixels: Arc::new(vec![0u8; byte_len]),
+        pixels: Arc::new(RwLock::new(vec![0u8; byte_len])),
         parent_tex: 0,
     });
     obj
@@ -903,7 +903,7 @@ fn make_texture_view(this: Id, pf: usize, tex_type: Option<usize>) -> Id {
             parent_tex: this as usize,
         }
     };
-    unsafe { retain(this); }
+    retain(this);
     let obj = unsafe { alloc(MTLTEXTURE_CLASS.ptr()) };
     textures().lock().unwrap().insert(obj as usize, state);
     obj
@@ -952,7 +952,7 @@ extern "C" fn tex_dealloc(this: Id, _cmd: Sel) {
     };
     tex_clear_color().lock().unwrap().remove(&(this as usize));
     if parent_tex != 0 {
-        unsafe { release(parent_tex as Id); }
+        release(parent_tex as Id);
     }
     unsafe { dispose(this); }
 }
@@ -990,12 +990,13 @@ fn upload_texture_region_bytes(tex_id: usize, region: MTLRegion, src: &[u8], byt
     if src.is_empty() || region.size.width == 0 || region.size.height == 0 {
         return;
     }
-    let mut g = textures().lock().unwrap();
-    let Some(t) = g.get_mut(&tex_id) else { return };
-    let tw = t.width;
-    let th = t.height;
-    let pf = t.pixel_format;
-    if t.pixels.is_empty() || region.origin.x >= tw || region.origin.y >= th {
+    let snap = {
+        let g = textures().lock().unwrap();
+        g.get(&tex_id)
+            .map(|t| (t.width, t.height, t.pixel_format, Arc::clone(&t.pixels)))
+    };
+    let Some((tw, th, pf, pixels_arc)) = snap else { return };
+    if region.origin.x >= tw || region.origin.y >= th {
         return;
     }
     let dst_row_stride = tw * 4;
@@ -1012,7 +1013,10 @@ fn upload_texture_region_bytes(tex_id: usize, region: MTLRegion, src: &[u8], byt
             bh,
         );
         let copy_bytes = copy_cols * 4;
-        let dst_pixels = Arc::make_mut(&mut t.pixels);
+        let mut dst_pixels = pixels_arc.write().unwrap();
+        if dst_pixels.is_empty() {
+            return;
+        }
         for row in 0..copy_rows {
             let dy = region.origin.y + row;
             let s_off = row * region.size.width * 4;
@@ -1033,7 +1037,10 @@ fn upload_texture_region_bytes(tex_id: usize, region: MTLRegion, src: &[u8], byt
     } else {
         region.size.width * bpp
     };
-    let dst_pixels = Arc::make_mut(&mut t.pixels);
+    let mut dst_pixels = pixels_arc.write().unwrap();
+    if dst_pixels.is_empty() {
+        return;
+    }
     for row in 0..copy_rows {
         let dy = region.origin.y + row;
         for col in 0..copy_cols {
@@ -1134,25 +1141,30 @@ extern "C" fn tex_get_bytes(
     if dst.is_null() || region.size.width == 0 || region.size.height == 0 {
         return;
     }
-    let g = textures().lock().unwrap();
-    let Some(t) = g.get(&(this as usize)) else { return };
+    let snap = {
+        let g = textures().lock().unwrap();
+        g.get(&(this as usize))
+            .map(|t| (t.width, t.height, Arc::clone(&t.pixels)))
+    };
+    let Some((tw, _th, pixels_arc)) = snap else { return };
+    let pixels = pixels_arc.read().unwrap();
     let bpp = 4usize;
     let dst_row_stride = if bytes_per_row > 0 { bytes_per_row } else { region.size.width * bpp };
-    let src_row_stride = t.width * bpp;
+    let src_row_stride = tw * bpp;
     for row in 0..region.size.height {
         let sy = region.origin.y + row;
-        if sy >= t.height {
+        if sy >= _th {
             break;
         }
-        let copy_cols = region.size.width.min(t.width.saturating_sub(region.origin.x));
+        let copy_cols = region.size.width.min(tw.saturating_sub(region.origin.x));
         let copy_bytes = copy_cols * bpp;
         let src_off = sy * src_row_stride + region.origin.x * bpp;
-        if src_off + copy_bytes > t.pixels.len() {
+        if src_off + copy_bytes > pixels.len() {
             break;
         }
         unsafe {
             std::ptr::copy_nonoverlapping(
-                t.pixels.as_ptr().add(src_off),
+                pixels.as_ptr().add(src_off),
                 dst.add(row * dst_row_stride),
                 copy_bytes,
             );
@@ -1275,11 +1287,16 @@ extern "C" fn cb_render_encoder(this: Id, _cmd: Sel, pass: Id) -> Id {
                         let b8 = (rgba_f[2] * 255.0).round() as u8;
                         let a8 = (rgba_f[3] * 255.0).round() as u8;
                         tex_clear_color().lock().unwrap().insert(tex as usize, rgba_f);
-                        if let Some(t) = textures().lock().unwrap().get_mut(&(tex as usize)) {
-                            let is_bgra = t.pixel_format == 80 || t.pixel_format == 81;
+                        let clear_snap = textures()
+                            .lock()
+                            .unwrap()
+                            .get(&(tex as usize))
+                            .map(|t| (t.pixel_format, Arc::clone(&t.pixels)));
+                        if let Some((pf, pixels_arc)) = clear_snap {
+                            let is_bgra = pf == 80 || pf == 81;
                             let px = if is_bgra { [b8, g8, r8, a8] } else { [r8, g8, b8, a8] };
-                            if t.pixels.len() >= 4 {
-                                let dst_px = Arc::make_mut(&mut t.pixels);
+                            let mut dst_px = pixels_arc.write().unwrap();
+                            if dst_px.len() >= 4 {
                                 for chunk in dst_px.chunks_exact_mut(4) {
                                     chunk.copy_from_slice(&px);
                                 }
@@ -1386,34 +1403,36 @@ fn present_drawable_common(drawable: Id) {
         .copied()
         .unwrap_or(0);
 
-    let snapshot = {
+    let snap = {
         let g = textures().lock().unwrap();
-        g.get(&tex).map(|t| {
-            let is_bgra = t.pixel_format == 80 || t.pixel_format == 81;
-            let expected = t.width * t.height * 4;
-            let copy_len = expected.min(t.pixels.len());
-            let (rgba, bgra) = if is_bgra {
-                let mut bgra = t.pixels[..copy_len].to_vec();
-                bgra.resize(expected, 0);
-                let mut rgba = vec![0u8; expected];
-                for (dst, src) in rgba.chunks_exact_mut(4).zip(bgra.chunks_exact(4)) {
-                    dst.copy_from_slice(&[src[2], src[1], src[0], src[3]]);
-                }
-                (rgba, bgra)
-            } else {
-                let mut rgba = t.pixels[..copy_len].to_vec();
-                rgba.resize(expected, 0);
-                let mut bgra = vec![0u8; expected];
-                for (dst, src) in bgra.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
-                    dst.copy_from_slice(&[src[2], src[1], src[0], src[3]]);
-                }
-                (rgba, bgra)
-            };
-            (t.width, t.height, rgba, bgra)
-        })
+        g.get(&tex)
+            .map(|t| (t.width, t.height, t.pixel_format, Arc::clone(&t.pixels)))
     };
-    let Some((w, h, rgba, bgra)) = snapshot else {
+    let Some((w, h, pf, pixels_arc)) = snap else {
         return;
+    };
+    let (rgba, bgra) = {
+        let pixels = pixels_arc.read().unwrap();
+        let is_bgra = pf == 80 || pf == 81;
+        let expected = w * h * 4;
+        let copy_len = expected.min(pixels.len());
+        if is_bgra {
+            let mut bgra = pixels[..copy_len].to_vec();
+            bgra.resize(expected, 0);
+            let mut rgba = vec![0u8; expected];
+            for (dst, src) in rgba.chunks_exact_mut(4).zip(bgra.chunks_exact(4)) {
+                dst.copy_from_slice(&[src[2], src[1], src[0], src[3]]);
+            }
+            (rgba, bgra)
+        } else {
+            let mut rgba = pixels[..copy_len].to_vec();
+            rgba.resize(expected, 0);
+            let mut bgra = vec![0u8; expected];
+            for (dst, src) in bgra.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
+                dst.copy_from_slice(&[src[2], src[1], src[0], src[3]]);
+            }
+            (rgba, bgra)
+        }
     };
 
     let clear_rgba = tex_clear_color()
@@ -1512,9 +1531,8 @@ fn read_uv_pair(fmt: usize, buf: &[u8], off: usize) -> (f32, f32) {
     }
 }
 
-fn sample_tex_rgba(tex: &(usize, usize, usize, Arc<Vec<u8>>), u: f32, v: f32) -> [f32; 4] {
-    let (w, h, pf, pixels) = tex;
-    if *w == 0 || *h == 0 || pixels.is_empty() {
+fn sample_tex_rgba(w: usize, h: usize, pf: usize, pixels: &[u8], u: f32, v: f32) -> [f32; 4] {
+    if w == 0 || h == 0 || pixels.is_empty() {
         return [1.0, 1.0, 1.0, 1.0];
     }
     let uf = if u.is_finite() {
@@ -1527,18 +1545,18 @@ fn sample_tex_rgba(tex: &(usize, usize, usize, Arc<Vec<u8>>), u: f32, v: f32) ->
     } else {
         0.0
     };
-    let tx = ((uf * (*w as f32)) as usize).min(*w - 1);
-    let ty = ((vf * (*h as f32)) as usize).min(*h - 1);
-    let is_bgra = *pf == 80 || *pf == 81;
-    let is_r8 = *pf == 10 || *pf == 11 || *pf == 12;
+    let tx = ((uf * (w as f32)) as usize).min(w - 1);
+    let ty = ((vf * (h as f32)) as usize).min(h - 1);
+    let is_bgra = pf == 80 || pf == 81;
+    let is_r8 = pf == 10 || pf == 11 || pf == 12;
     if is_r8 {
-        let idx = ty * *w + tx;
+        let idx = ty * w + tx;
         if let Some(&r) = pixels.get(idx) {
             return [r as f32 / 255.0, r as f32 / 255.0, r as f32 / 255.0, 1.0];
         }
         return [1.0, 1.0, 1.0, 1.0];
     }
-    let idx = (ty * *w + tx) * 4;
+    let idx = (ty * w + tx) * 4;
     let Some(c) = pixels.get(idx..idx + 4) else {
         return [1.0, 1.0, 1.0, 1.0];
     };
@@ -1593,7 +1611,7 @@ fn apply_mvp_to_ndc(m: &[f32; 16], x: f32, y: f32, z: f32) -> Option<(f32, f32)>
     let cx = m[0] * x + m[4] * y + m[8] * z + m[12];
     let cy = m[1] * x + m[5] * y + m[9] * z + m[13];
     let cw = m[3] * x + m[7] * y + m[11] * z + m[15];
-    if !cx.is_finite() || !cy.is_finite() || !cw.is_finite() || cw.abs() <= 1e-5 {
+    if !cx.is_finite() || !cy.is_finite() || !cw.is_finite() || cw <= 1e-5 {
         return None;
     }
     Some((cx / cw, cy / cw))
@@ -1622,19 +1640,56 @@ fn is_good_ndc_transform(m: &[f32; 16], verts: &[(f32, f32, f32)]) -> bool {
     (max_x - min_x) > 1e-3 && (max_y - min_y) > 1e-3
 }
 
+enum DrawTransform {
+    Matrix([f32; 16]),
+    RawNdc,
+    Reject,
+}
+
+fn is_behind_camera_transform(m: &[f32; 16], verts: &[(f32, f32, f32)]) -> bool {
+    if verts.is_empty() {
+        return false;
+    }
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for &(vx, vy, vz) in verts {
+        let cx = m[0] * vx + m[4] * vy + m[8] * vz + m[12];
+        let cy = m[1] * vx + m[5] * vy + m[9] * vz + m[13];
+        let cw = m[3] * vx + m[7] * vy + m[11] * vz + m[15];
+        if !cx.is_finite() || !cy.is_finite() || !cw.is_finite() || cw >= -1e-5 {
+            return false;
+        }
+        let nx = cx / cw;
+        let ny = cy / cw;
+        if nx.abs() > 2.5 || ny.abs() > 2.5 {
+            return false;
+        }
+        min_x = min_x.min(nx);
+        max_x = max_x.max(nx);
+        min_y = min_y.min(ny);
+        max_y = max_y.max(ny);
+    }
+    (max_x - min_x) > 1e-3 && (max_y - min_y) > 1e-3
+}
+
 fn resolve_draw_transform(
     vb_data: &HashMap<usize, &[u8]>,
     pos_buf_idx: usize,
     sample_verts: &[(f32, f32, f32)],
     tw: usize,
     th: usize,
-) -> Option<[f32; 16]> {
+) -> DrawTransform {
     if sample_verts.is_empty() {
-        return None;
+        return DrawTransform::Reject;
     }
-    let raw_in_ndc = sample_verts
+    let raw_in_ndc_tight = sample_verts
         .iter()
         .all(|&(x, y, _)| x.abs() <= 1.5 && y.abs() <= 1.5);
+    let raw_in_ndc_3d = sample_verts
+        .iter()
+        .all(|&(x, y, z)| x.abs() <= 2.5 && y.abs() <= 2.5 && z.abs() <= 2.5);
     let is_identity = |m: &[f32; 16]| {
         (m[0] - 1.0).abs() < 1e-4
             && (m[5] - 1.0).abs() < 1e-4
@@ -1644,36 +1699,67 @@ fn resolve_draw_transform(
     };
 
     if pos_buf_idx != 0 {
+        let mut fallback_id = None;
+        let mut saw_behind_camera = false;
         if let Some(buf0) = vb_data.get(&0) {
             if buf0.len() >= 64 {
-                let max_off = buf0.len().saturating_sub(64).min(256);
-                let mut fallback_id = None;
+                let max_off = buf0.len().saturating_sub(64).min(512);
                 for off in (0..=max_off).step_by(16) {
                     if let Some(m) = read_mat4(buf0, off) {
                         if is_good_ndc_transform(&m, sample_verts) {
-                            if !is_identity(&m) || raw_in_ndc {
-                                return Some(m);
+                            if !is_identity(&m) || raw_in_ndc_tight {
+                                return DrawTransform::Matrix(m);
                             }
                             if fallback_id.is_none() {
                                 fallback_id = Some(m);
                             }
+                        } else if is_behind_camera_transform(&m, sample_verts) {
+                            saw_behind_camera = true;
                         }
                     }
                 }
-                let max_pair = buf0.len().saturating_sub(128).min(192);
+                let max_pair = buf0.len().saturating_sub(128).min(384);
                 for off in (0..=max_pair).step_by(16) {
                     if let (Some(ma), Some(mb)) = (read_mat4(buf0, off), read_mat4(buf0, off + 64)) {
                         for cand in [mul_mat4(&ma, &mb), mul_mat4(&mb, &ma)] {
                             if is_good_ndc_transform(&cand, sample_verts) {
-                                return Some(cand);
+                                return DrawTransform::Matrix(cand);
                             }
                         }
                     }
                 }
-                if let Some(m) = fallback_id {
-                    return Some(m);
+            }
+        }
+        let mut other_idxs: Vec<usize> = vb_data
+            .keys()
+            .copied()
+            .filter(|&k| k != 0 && k != pos_buf_idx)
+            .collect();
+        other_idxs.sort_unstable();
+        for idx in other_idxs {
+            let buf = vb_data[&idx];
+            if !(64..=65536).contains(&buf.len()) {
+                continue;
+            }
+            let max_off = buf.len().saturating_sub(64).min(256);
+            for off in (0..=max_off).step_by(16) {
+                if let Some(m) = read_mat4(buf, off) {
+                    if is_good_ndc_transform(&m, sample_verts) {
+                        if !is_identity(&m) || raw_in_ndc_tight {
+                            return DrawTransform::Matrix(m);
+                        }
+                        if fallback_id.is_none() {
+                            fallback_id = Some(m);
+                        }
+                    }
                 }
             }
+        }
+        if let Some(m) = fallback_id {
+            return DrawTransform::Matrix(m);
+        }
+        if saw_behind_camera {
+            return DrawTransform::Reject;
         }
     }
 
@@ -1685,7 +1771,7 @@ fn resolve_draw_transform(
             .iter()
             .all(|&(x, y, _)| x >= -tw_f && x <= 2.0 * tw_f && y >= -th_f && y <= 2.0 * th_f);
         if has_large_xy && in_pixel_bounds {
-            return Some([
+            return DrawTransform::Matrix([
                 2.0 / tw_f, 0.0, 0.0, 0.0,
                 0.0, 2.0 / th_f, 0.0, 0.0,
                 0.0, 0.0, 1.0, 0.0,
@@ -1693,7 +1779,259 @@ fn resolve_draw_transform(
             ]);
         }
     }
-    None
+    if raw_in_ndc_3d {
+        DrawTransform::RawNdc
+    } else {
+        DrawTransform::Reject
+    }
+}
+
+#[inline]
+fn clip_edge_interval(val: f32, slope: f32, lo: &mut f32, hi: &mut f32) -> bool {
+    if slope > 1e-12 {
+        *lo = lo.max(-val / slope);
+    } else if slope < -1e-12 {
+        *hi = hi.min(-val / slope);
+    } else if val < 0.0 {
+        return false;
+    }
+    *lo <= *hi
+}
+
+#[inline]
+fn scanline_x_span(
+    w0_row: f32,
+    w1_row: f32,
+    dw0_dx: f32,
+    dw1_dx: f32,
+    dw2_dx: f32,
+    min_x: isize,
+    max_k: f32,
+) -> Option<(isize, isize, f32)> {
+    let mut lo = 0.0f32;
+    let mut hi = max_k;
+    let w2_row = 1.0 - w0_row - w1_row;
+    if !clip_edge_interval(w0_row, dw0_dx, &mut lo, &mut hi)
+        || !clip_edge_interval(w1_row, dw1_dx, &mut lo, &mut hi)
+        || !clip_edge_interval(w2_row, dw2_dx, &mut lo, &mut hi)
+    {
+        return None;
+    }
+    let k0 = lo.max(0.0).ceil() as isize;
+    let k1 = hi.min(max_k).floor() as isize;
+    if k0 > k1 {
+        return None;
+    }
+    Some((min_x + k0, min_x + k1, k0 as f32))
+}
+
+#[inline]
+fn mul_div255(x: u32) -> u32 {
+    ((x + 128) * 257) >> 16
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn rasterize_textured_span<const POT: bool, const BLEND: bool, const MODULATE: bool>(
+    dst_span: &mut [u8],
+    frag_bytes: &[u8],
+    fw: usize,
+    fh: usize,
+    sr_i: usize,
+    sb_i: usize,
+    dr_i: usize,
+    db_i: usize,
+    mut u_fp: i64,
+    mut v_fp: i64,
+    du_fp: i64,
+    dv_fp: i64,
+    cr: u32,
+    cg: u32,
+    cb: u32,
+    ca: u32,
+) {
+    let fw_mask = fw.saturating_sub(1);
+    let fh_mask = fh.saturating_sub(1);
+    let fw_fp = (fw as i64) << 16;
+    let fh_fp = (fh as i64) << 16;
+    if !POT {
+        if u_fp < 0 {
+            u_fp += fw_fp;
+        } else if u_fp >= fw_fp {
+            u_fp -= fw_fp;
+        }
+        if v_fp < 0 {
+            v_fp += fh_fp;
+        } else if v_fp >= fh_fp {
+            v_fp -= fh_fp;
+        }
+    }
+    for dst in dst_span.chunks_exact_mut(4) {
+        let (tx, ty) = if POT {
+            let tx = ((u_fp >> 16) as usize) & fw_mask;
+            let ty = ((v_fp >> 16) as usize) & fh_mask;
+            u_fp = u_fp.wrapping_add(du_fp);
+            v_fp = v_fp.wrapping_add(dv_fp);
+            (tx, ty)
+        } else {
+            let tx = ((u_fp >> 16).max(0) as usize).min(fw - 1);
+            let ty = ((v_fp >> 16).max(0) as usize).min(fh - 1);
+            u_fp += du_fp;
+            if u_fp >= fw_fp {
+                u_fp -= fw_fp;
+            } else if u_fp < 0 {
+                u_fp += fw_fp;
+            }
+            v_fp += dv_fp;
+            if v_fp >= fh_fp {
+                v_fp -= fh_fp;
+            } else if v_fp < 0 {
+                v_fp += fh_fp;
+            }
+            (tx, ty)
+        };
+        let off_s = (ty * fw + tx) * 4;
+        if !BLEND && !MODULATE && sr_i == dr_i {
+            dst.copy_from_slice(&frag_bytes[off_s..off_s + 4]);
+            continue;
+        }
+        let sp = &frag_bytes[off_s..off_s + 4];
+        let (mut sr, mut sg, mut sb, mut sa) = (
+            sp[sr_i] as u32,
+            sp[1] as u32,
+            sp[sb_i] as u32,
+            sp[3] as u32,
+        );
+        if MODULATE {
+            sr = mul_div255(sr * cr);
+            sg = mul_div255(sg * cg);
+            sb = mul_div255(sb * cb);
+            sa = mul_div255(sa * ca);
+        }
+        if BLEND {
+            if sa == 0 {
+                continue;
+            }
+            if sa < 255 {
+                let inv_a = 255 - sa;
+                let dr = dst[dr_i] as u32;
+                let dg = dst[1] as u32;
+                let db = dst[db_i] as u32;
+                let r = mul_div255(sr * sa + dr * inv_a) as u8;
+                let g = mul_div255(sg * sa + dg * inv_a) as u8;
+                let b = mul_div255(sb * sa + db * inv_a) as u8;
+                let oa = mul_div255(sa * 255 + (dst[3] as u32) * inv_a).min(255) as u8;
+                dst[dr_i] = r;
+                dst[1] = g;
+                dst[db_i] = b;
+                dst[3] = oa;
+            } else {
+                dst[dr_i] = sr as u8;
+                dst[1] = sg as u8;
+                dst[db_i] = sb as u8;
+                dst[3] = 255;
+            }
+        } else {
+            dst[dr_i] = sr as u8;
+            dst[1] = sg as u8;
+            dst[db_i] = sb as u8;
+            dst[3] = sa as u8;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn rasterize_r8_span<const POT: bool, const BLEND: bool>(
+    dst_span: &mut [u8],
+    frag_bytes: &[u8],
+    fw: usize,
+    fh: usize,
+    dr_i: usize,
+    db_i: usize,
+    mut u_fp: i64,
+    mut v_fp: i64,
+    du_fp: i64,
+    dv_fp: i64,
+    cr: u32,
+    cg: u32,
+    cb: u32,
+    ca: u32,
+) {
+    let fw_mask = fw.saturating_sub(1);
+    let fh_mask = fh.saturating_sub(1);
+    let fw_fp = (fw as i64) << 16;
+    let fh_fp = (fh as i64) << 16;
+    if !POT {
+        if u_fp < 0 {
+            u_fp += fw_fp;
+        } else if u_fp >= fw_fp {
+            u_fp -= fw_fp;
+        }
+        if v_fp < 0 {
+            v_fp += fh_fp;
+        } else if v_fp >= fh_fp {
+            v_fp -= fh_fp;
+        }
+    }
+    let mod_rgb = cr != 255 || cg != 255 || cb != 255;
+    for dst in dst_span.chunks_exact_mut(4) {
+        let (tx, ty) = if POT {
+            let tx = ((u_fp >> 16) as usize) & fw_mask;
+            let ty = ((v_fp >> 16) as usize) & fh_mask;
+            u_fp = u_fp.wrapping_add(du_fp);
+            v_fp = v_fp.wrapping_add(dv_fp);
+            (tx, ty)
+        } else {
+            let tx = ((u_fp >> 16).max(0) as usize).min(fw - 1);
+            let ty = ((v_fp >> 16).max(0) as usize).min(fh - 1);
+            u_fp += du_fp;
+            if u_fp >= fw_fp {
+                u_fp -= fw_fp;
+            } else if u_fp < 0 {
+                u_fp += fw_fp;
+            }
+            v_fp += dv_fp;
+            if v_fp >= fh_fp {
+                v_fp -= fh_fp;
+            } else if v_fp < 0 {
+                v_fp += fh_fp;
+            }
+            (tx, ty)
+        };
+        let rv = frag_bytes[ty * fw + tx] as u32;
+        let (sr, sg, sb) = if mod_rgb {
+            (mul_div255(rv * cr), mul_div255(rv * cg), mul_div255(rv * cb))
+        } else {
+            (rv, rv, rv)
+        };
+        let sa = ca;
+        if BLEND {
+            if sa == 0 {
+                continue;
+            }
+            if sa < 255 {
+                let inv_a = 255 - sa;
+                let dr = dst[dr_i] as u32;
+                let dg = dst[1] as u32;
+                let db = dst[db_i] as u32;
+                dst[dr_i] = mul_div255(sr * sa + dr * inv_a) as u8;
+                dst[1] = mul_div255(sg * sa + dg * inv_a) as u8;
+                dst[db_i] = mul_div255(sb * sa + db * inv_a) as u8;
+                dst[3] = mul_div255(sa * 255 + (dst[3] as u32) * inv_a).min(255) as u8;
+            } else {
+                dst[dr_i] = sr as u8;
+                dst[1] = sg as u8;
+                dst[db_i] = sb as u8;
+                dst[3] = 255;
+            }
+        } else {
+            dst[dr_i] = sr as u8;
+            dst[1] = sg as u8;
+            dst[db_i] = sb as u8;
+            dst[3] = sa as u8;
+        }
+    }
 }
 
 fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
@@ -1715,28 +2053,30 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
     }
 
     let frag_tex_id = st.fragment_textures.get(&0).copied().unwrap_or(0);
-    let (tw_hint, th_hint, frag_snap) = {
+    let (target_snap, frag_snap) = {
         let tg = textures().lock().unwrap();
-        let (twh, thh) = tg
+        let ts = tg
             .get(&st.color_tex)
-            .map(|t| (t.width, t.height))
-            .unwrap_or((0, 0));
+            .map(|t| (t.width, t.height, t.pixel_format, Arc::clone(&t.pixels)));
         let fs = if frag_tex_id != 0 {
             tg.get(&frag_tex_id)
                 .map(|t| (t.width, t.height, t.pixel_format, Arc::clone(&t.pixels)))
         } else {
             None
         };
-        (twh, thh, fs)
+        (ts, fs)
     };
-    if tw_hint == 0 || th_hint == 0 {
+    let Some((tw, th, target_pf, target_arc)) = target_snap else {
+        return;
+    };
+    if tw == 0 || th == 0 {
         return;
     }
     let vp_early = st.viewport.unwrap_or(MTLViewport {
         origin_x: 0.0,
         origin_y: 0.0,
-        width: tw_hint as f64,
-        height: th_hint as f64,
+        width: tw as f64,
+        height: th as f64,
         znear: 0.0,
         zfar: 1.0,
     });
@@ -1872,17 +2212,21 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
             }
         }
 
-        let active_mvp = resolve_draw_transform(&vb_data, pos_attr.buffer_idx, &sample_verts, tw_hint, th_hint);
+        let active_mvp = match resolve_draw_transform(&vb_data, pos_attr.buffer_idx, &sample_verts, tw, th) {
+            DrawTransform::Matrix(m) => Some(m),
+            DrawTransform::RawNdc => None,
+            DrawTransform::Reject => return,
+        };
 
         if metal_trace_enabled() && MTL_TRACE_COUNT.fetch_add(1, Ordering::Relaxed) < 12 {
-            let (fw, fh, fpf, fnz, tex_mid, tex_a_nz) = if let Some(ref ftex) = frag_snap {
-                let (w, h, pf, ref p) = *ftex;
+            let (fw, fh, fpf, fnz, tex_mid, tex_a_nz) = if let Some((w, h, pf, ref farc)) = frag_snap {
+                let p = farc.read().unwrap();
                 let nz = p.chunks_exact(4).take(4096).filter(|c| c != &[0, 0, 0, 0]).count();
-                let mid = sample_tex_rgba(ftex, 0.5, 0.5);
+                let mid = sample_tex_rgba(w, h, pf, &p, 0.5, 0.5);
                 let mut a_nz = 0usize;
                 for gy in 0..16 {
                     for gx in 0..16 {
-                        let s = sample_tex_rgba(ftex, (gx as f32 + 0.5) / 16.0, (gy as f32 + 0.5) / 16.0);
+                        let s = sample_tex_rgba(w, h, pf, &p, (gx as f32 + 0.5) / 16.0, (gy as f32 + 0.5) / 16.0);
                         if s[3] > 0.01 {
                             a_nz += 1;
                         }
@@ -1976,14 +2320,17 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
                 } else {
                     0.0
                 };
-                apply_mvp_to_ndc(m, x, y, z).unwrap_or((x, y))
+                apply_mvp_to_ndc(m, x, y, z)?
             } else {
                 let w = if pos_attr.format == 31 {
                     read_f32_le(p_buf, p_off + 12).unwrap_or(1.0)
                 } else {
                     1.0
                 };
-                let inv_w = if w.abs() > 1e-6 { 1.0 / w } else { 1.0 };
+                if w < -1e-6 {
+                    return None;
+                }
+                let inv_w = if w > 1e-6 { 1.0 / w } else { 1.0 };
                 (x * inv_w, y * inv_w)
             };
             let nx = nx_f as f64;
@@ -2027,6 +2374,10 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
             Some(Vtx { sx, sy, u, v, col })
         };
 
+        let max_ext_x = (tw as f32) * 8.0;
+        let max_ext_y = (th as f32) * 8.0;
+        let tw_f = tw as f32;
+        let th_f = th as f32;
         let tri_count = if ptype == 3 {
             (indices.len() / 3).min(4096)
         } else {
@@ -2042,6 +2393,22 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
                 (indices[t_idx], indices[t_idx + 2], indices[t_idx + 1])
             };
             if let (Some(v0), Some(v1), Some(v2)) = (load_vtx(i0), load_vtx(i1), load_vtx(i2)) {
+                if v0.sx.abs() > max_ext_x
+                    || v0.sy.abs() > max_ext_y
+                    || v1.sx.abs() > max_ext_x
+                    || v1.sy.abs() > max_ext_y
+                    || v2.sx.abs() > max_ext_x
+                    || v2.sy.abs() > max_ext_y
+                {
+                    continue;
+                }
+                let tri_min_x = v0.sx.min(v1.sx).min(v2.sx);
+                let tri_max_x = v0.sx.max(v1.sx).max(v2.sx);
+                let tri_min_y = v0.sy.min(v1.sy).min(v2.sy);
+                let tri_max_y = v0.sy.max(v1.sy).max(v2.sy);
+                if tri_max_x < 0.0 || tri_min_x > tw_f || tri_max_y < 0.0 || tri_min_y > th_f {
+                    continue;
+                }
                 let area = (v1.sx - v0.sx) * (v2.sy - v0.sy) - (v1.sy - v0.sy) * (v2.sx - v0.sx);
                 if area.abs() >= 1e-4 {
                     out_tris.push([v0, v1, v2]);
@@ -2054,35 +2421,67 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
         return;
     }
 
-    let tex_uniform: Option<[f32; 4]> = match frag_snap {
-        None => Some([1.0, 1.0, 1.0, 1.0]),
-        Some(ref ftex) if ftex.0 > 0 && ftex.1 > 0 && ftex.0 <= 4 && ftex.1 <= 4 => {
-            let first = sample_tex_rgba(ftex, 0.0, 0.0);
-            let px_count = ftex.0 * ftex.1;
-            let is_r8 = ftex.2 == 10 || ftex.2 == 11 || ftex.2 == 12;
-            let all_eq = if is_r8 {
-                ftex.3.get(..px_count).map_or(false, |s| s.iter().all(|&b| b == s[0]))
-            } else {
-                ftex.3
-                    .get(..px_count * 4)
-                    .map_or(false, |s| s.chunks_exact(4).all(|c| c == &s[..4]))
-            };
-            if all_eq { Some(first) } else { None }
-        }
-        _ => None,
-    };
+    let mut frag_owned: Option<Vec<u8>> = None;
+    let mut frag_guard: Option<std::sync::RwLockReadGuard<'_, Vec<u8>>> = None;
 
-    let mut tg = textures().lock().unwrap();
-    let Some(target) = tg.get_mut(&st.color_tex) else {
-        return;
+    let (fw, fh, fpf, mut dst_guard) = if let Some((fw, fh, fpf, ref farc)) = frag_snap {
+        let dg = if Arc::ptr_eq(farc, &target_arc) {
+            frag_owned = Some(farc.read().unwrap().clone());
+            target_arc.write().unwrap()
+        } else if (Arc::as_ptr(farc) as usize) < (Arc::as_ptr(&target_arc) as usize) {
+            frag_guard = Some(farc.read().unwrap());
+            target_arc.write().unwrap()
+        } else {
+            let dg = target_arc.write().unwrap();
+            frag_guard = Some(farc.read().unwrap());
+            dg
+        };
+        (fw, fh, fpf, dg)
+    } else {
+        (0, 0, 0, target_arc.write().unwrap())
     };
-    let tw = target.width;
-    let th = target.height;
-    if tw == 0 || th == 0 || target.pixels.len() < tw * th * 4 {
+    let src_slice: Option<&[u8]> = frag_owned
+        .as_deref()
+        .or_else(|| frag_guard.as_deref().map(Vec::as_slice));
+    let dst_pixels: &mut Vec<u8> = &mut dst_guard;
+    if dst_pixels.len() < tw * th * 4 {
         return;
     }
-    let target_is_bgra = target.pixel_format == 80 || target.pixel_format == 81;
-    let dst_pixels = Arc::make_mut(&mut target.pixels);
+    let target_is_bgra = target_pf == 80 || target_pf == 81;
+    let (dr_i, db_i) = if target_is_bgra { (2usize, 0usize) } else { (0usize, 2usize) };
+
+    let frag_is_bgra = fpf == 80 || fpf == 81;
+    let (sr_i, sb_i) = if frag_is_bgra { (2usize, 0usize) } else { (0usize, 2usize) };
+    let frag_is_r8 = fpf == 10 || fpf == 11 || fpf == 12;
+    let src_valid = matches!(src_slice, Some(s) if fw > 0 && fh > 0 && s.len() >= if frag_is_r8 { fw * fh } else { fw * fh * 4 });
+    let frag_bytes: &[u8] = if src_valid { src_slice.unwrap() } else { &[] };
+
+    let tex_uniform: Option<[f32; 4]> = if !src_valid {
+        Some([1.0, 1.0, 1.0, 1.0])
+    } else if fw <= 4 && fh <= 4 {
+        let first = sample_tex_rgba(fw, fh, fpf, frag_bytes, 0.0, 0.0);
+        let px_count = fw * fh;
+        let all_eq = if frag_is_r8 {
+            frag_bytes.get(..px_count).map_or(false, |s| s.iter().all(|&b| b == s[0]))
+        } else {
+            frag_bytes
+                .get(..px_count * 4)
+                .map_or(false, |s| s.chunks_exact(4).all(|c| c == &s[..4]))
+        };
+        if all_eq { Some(first) } else { None }
+    } else {
+        None
+    };
+
+    let fw_f = fw.max(1) as f32;
+    let fh_f = fh.max(1) as f32;
+    let fw_pot = fw.is_power_of_two() && fw > 0;
+    let fh_pot = fh.is_power_of_two() && fh > 0;
+    let both_pot = fw_pot && fh_pot;
+    let fw_mask = fw.saturating_sub(1);
+    let fh_mask = fh.saturating_sub(1);
+    let fw_fp = (fw.max(1) as i64) << 16;
+    let fh_fp = (fh.max(1) as i64) << 16;
 
     for [v0, v1, v2] in tris {
         let area = (v1.sx - v0.sx) * (v2.sy - v0.sy) - (v1.sy - v0.sy) * (v2.sx - v0.sx);
@@ -2094,11 +2493,13 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
         if min_x > max_x || min_y > max_y {
             continue;
         }
+        let max_k = (max_x - min_x) as f32;
 
         let dw0_dx = -(v2.sy - v1.sy) * inv_area;
         let dw0_dy = (v2.sx - v1.sx) * inv_area;
         let dw1_dx = -(v0.sy - v2.sy) * inv_area;
         let dw1_dy = (v0.sx - v2.sx) * inv_area;
+        let dw2_dx = -(dw0_dx + dw1_dx);
         let start_cx = min_x as f32 + 0.5;
         let start_cy = min_y as f32 + 0.5;
         let mut w0_row =
@@ -2124,101 +2525,257 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
                 let do_blend = pso.blend_enabled && sa < 255;
                 let inv_a = 255 - sa;
                 for py in min_y..=max_y {
-                    let mut w0 = w0_row;
-                    let mut w1 = w1_row;
-                    let row_off = (py as usize) * tw;
-                    for px in min_x..=max_x {
-                        let w2 = 1.0 - w0 - w1;
-                        if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
-                            let off = (row_off + (px as usize)) * 4;
-                            let dst = &mut dst_pixels[off..off + 4];
-                            if !do_blend {
-                                dst.copy_from_slice(&solid_px);
-                            } else {
-                                let (dr, dg, db) = if target_is_bgra {
-                                    (dst[2] as u32, dst[1] as u32, dst[0] as u32)
-                                } else {
-                                    (dst[0] as u32, dst[1] as u32, dst[2] as u32)
-                                };
-                                let r = ((sr * sa + dr * inv_a + 127) / 255) as u8;
-                                let g = ((sg * sa + dg * inv_a + 127) / 255) as u8;
-                                let b = ((sb * sa + db * inv_a + 127) / 255) as u8;
-                                let oa = ((sa * 255 + (dst[3] as u32) * inv_a + 127) / 255).min(255) as u8;
-                                if target_is_bgra {
-                                    dst.copy_from_slice(&[b, g, r, oa]);
-                                } else {
-                                    dst.copy_from_slice(&[r, g, b, oa]);
-                                }
-                            }
-                        }
-                        w0 += dw0_dx;
-                        w1 += dw1_dx;
-                    }
+                    let w0_r = w0_row;
+                    let w1_r = w1_row;
                     w0_row += dw0_dy;
                     w1_row += dw1_dy;
-                }
-                continue;
-            }
-        }
-
-        for py in min_y..=max_y {
-            let mut w0 = w0_row;
-            let mut w1 = w1_row;
-            let row_off = (py as usize) * tw;
-            for px in min_x..=max_x {
-                let w2 = 1.0 - w0 - w1;
-                if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
-                    let tu = v0.u * w0 + v1.u * w1 + v2.u * w2;
-                    let tv = v0.v * w0 + v1.v * w1 + v2.v * w2;
-                    let mut src = if let Some(ref ftex) = frag_snap {
-                        sample_tex_rgba(ftex, tu, tv)
-                    } else {
-                        [1.0, 1.0, 1.0, 1.0]
+                    let Some((px0, px1, _)) =
+                        scanline_x_span(w0_r, w1_r, dw0_dx, dw1_dx, dw2_dx, min_x, max_k)
+                    else {
+                        continue;
                     };
-                    if uniform_col {
-                        for c in 0..4 {
-                            src[c] *= v0.col[c];
+                    let row_off = (py as usize) * tw;
+                    let span_start = (row_off + px0 as usize) * 4;
+                    let span_end = (row_off + px1 as usize + 1) * 4;
+                    if !do_blend {
+                        for chunk in dst_pixels[span_start..span_end].chunks_exact_mut(4) {
+                            chunk.copy_from_slice(&solid_px);
                         }
                     } else {
-                        for c in 0..4 {
-                            src[c] *= (v0.col[c] * w0 + v1.col[c] * w1 + v2.col[c] * w2).clamp(0.0, 1.0);
-                        }
-                    }
-                    let sa = (src[3].clamp(0.0, 1.0) * 255.0).round() as u32;
-                    if !(pso.blend_enabled && sa == 0) {
-                        let sr = (src[0].clamp(0.0, 1.0) * 255.0).round() as u32;
-                        let sg = (src[1].clamp(0.0, 1.0) * 255.0).round() as u32;
-                        let sb = (src[2].clamp(0.0, 1.0) * 255.0).round() as u32;
-                        let off = (row_off + (px as usize)) * 4;
-                        let dst = &mut dst_pixels[off..off + 4];
-                        if pso.blend_enabled && sa < 255 {
-                            let inv_a = 255 - sa;
+                        for dst in dst_pixels[span_start..span_end].chunks_exact_mut(4) {
                             let (dr, dg, db) = if target_is_bgra {
                                 (dst[2] as u32, dst[1] as u32, dst[0] as u32)
                             } else {
                                 (dst[0] as u32, dst[1] as u32, dst[2] as u32)
                             };
-                            let r = ((sr * sa + dr * inv_a + 127) / 255) as u8;
-                            let g = ((sg * sa + dg * inv_a + 127) / 255) as u8;
-                            let b = ((sb * sa + db * inv_a + 127) / 255) as u8;
-                            let oa = ((sa * 255 + (dst[3] as u32) * inv_a + 127) / 255).min(255) as u8;
+                            let r = mul_div255(sr * sa + dr * inv_a) as u8;
+                            let g = mul_div255(sg * sa + dg * inv_a) as u8;
+                            let b = mul_div255(sb * sa + db * inv_a) as u8;
+                            let oa = mul_div255(sa * 255 + (dst[3] as u32) * inv_a).min(255) as u8;
                             if target_is_bgra {
                                 dst.copy_from_slice(&[b, g, r, oa]);
                             } else {
                                 dst.copy_from_slice(&[r, g, b, oa]);
                             }
-                        } else if target_is_bgra {
-                            dst.copy_from_slice(&[sb as u8, sg as u8, sr as u8, sa as u8]);
-                        } else {
-                            dst.copy_from_slice(&[sr as u8, sg as u8, sb as u8, sa as u8]);
                         }
                     }
                 }
-                w0 += dw0_dx;
-                w1 += dw1_dx;
+                continue;
             }
+
+            let cr = (v0.col[0].clamp(0.0, 1.0) * 255.0).round() as u32;
+            let cg = (v0.col[1].clamp(0.0, 1.0) * 255.0).round() as u32;
+            let cb = (v0.col[2].clamp(0.0, 1.0) * 255.0).round() as u32;
+            let ca = (v0.col[3].clamp(0.0, 1.0) * 255.0).round() as u32;
+            if pso.blend_enabled && ca == 0 {
+                continue;
+            }
+            let modulate = cr != 255 || cg != 255 || cb != 255 || ca != 255;
+            let du_dx = v0.u * dw0_dx + v1.u * dw1_dx + v2.u * dw2_dx;
+            let dv_dx = v0.v * dw0_dx + v1.v * dw1_dx + v2.v * dw2_dx;
+            let du_wrapped = if du_dx.is_finite() { du_dx - du_dx.round() } else { 0.0 };
+            let dv_wrapped = if dv_dx.is_finite() { dv_dx - dv_dx.round() } else { 0.0 };
+            let du_fp = (du_wrapped * fw_f * 65536.0).round() as i64;
+            let dv_fp = (dv_wrapped * fh_f * 65536.0).round() as i64;
+
+            for py in min_y..=max_y {
+                let w0_r = w0_row;
+                let w1_r = w1_row;
+                w0_row += dw0_dy;
+                w1_row += dw1_dy;
+                let Some((px0, px1, k_start)) =
+                    scanline_x_span(w0_r, w1_r, dw0_dx, dw1_dx, dw2_dx, min_x, max_k)
+                else {
+                    continue;
+                };
+                let w0_s = w0_r + k_start * dw0_dx;
+                let w1_s = w1_r + k_start * dw1_dx;
+                let w2_s = 1.0 - w0_s - w1_s;
+                let tu_s = v0.u * w0_s + v1.u * w1_s + v2.u * w2_s;
+                let tv_s = v0.v * w0_s + v1.v * w1_s + v2.v * w2_s;
+                let uf_s = if tu_s.is_finite() { tu_s - tu_s.floor() } else { 0.0 };
+                let vf_s = if tv_s.is_finite() { tv_s - tv_s.floor() } else { 0.0 };
+                let u_fp = (uf_s * fw_f * 65536.0) as i64;
+                let v_fp = (vf_s * fh_f * 65536.0) as i64;
+
+                let row_off = (py as usize) * tw;
+                let span_start = (row_off + px0 as usize) * 4;
+                let span_end = (row_off + px1 as usize + 1) * 4;
+                let dst_span = &mut dst_pixels[span_start..span_end];
+                if frag_is_r8 {
+                    match (both_pot, pso.blend_enabled) {
+                        (true, true) => rasterize_r8_span::<true, true>(dst_span, frag_bytes, fw, fh, dr_i, db_i, u_fp, v_fp, du_fp, dv_fp, cr, cg, cb, ca),
+                        (true, false) => rasterize_r8_span::<true, false>(dst_span, frag_bytes, fw, fh, dr_i, db_i, u_fp, v_fp, du_fp, dv_fp, cr, cg, cb, ca),
+                        (false, true) => rasterize_r8_span::<false, true>(dst_span, frag_bytes, fw, fh, dr_i, db_i, u_fp, v_fp, du_fp, dv_fp, cr, cg, cb, ca),
+                        (false, false) => rasterize_r8_span::<false, false>(dst_span, frag_bytes, fw, fh, dr_i, db_i, u_fp, v_fp, du_fp, dv_fp, cr, cg, cb, ca),
+                    }
+                } else {
+                    match (both_pot, pso.blend_enabled, modulate) {
+                        (true, true, true) => rasterize_textured_span::<true, true, true>(dst_span, frag_bytes, fw, fh, sr_i, sb_i, dr_i, db_i, u_fp, v_fp, du_fp, dv_fp, cr, cg, cb, ca),
+                        (true, true, false) => rasterize_textured_span::<true, true, false>(dst_span, frag_bytes, fw, fh, sr_i, sb_i, dr_i, db_i, u_fp, v_fp, du_fp, dv_fp, cr, cg, cb, ca),
+                        (true, false, true) => rasterize_textured_span::<true, false, true>(dst_span, frag_bytes, fw, fh, sr_i, sb_i, dr_i, db_i, u_fp, v_fp, du_fp, dv_fp, cr, cg, cb, ca),
+                        (true, false, false) => rasterize_textured_span::<true, false, false>(dst_span, frag_bytes, fw, fh, sr_i, sb_i, dr_i, db_i, u_fp, v_fp, du_fp, dv_fp, cr, cg, cb, ca),
+                        (false, true, true) => rasterize_textured_span::<false, true, true>(dst_span, frag_bytes, fw, fh, sr_i, sb_i, dr_i, db_i, u_fp, v_fp, du_fp, dv_fp, cr, cg, cb, ca),
+                        (false, true, false) => rasterize_textured_span::<false, true, false>(dst_span, frag_bytes, fw, fh, sr_i, sb_i, dr_i, db_i, u_fp, v_fp, du_fp, dv_fp, cr, cg, cb, ca),
+                        (false, false, true) => rasterize_textured_span::<false, false, true>(dst_span, frag_bytes, fw, fh, sr_i, sb_i, dr_i, db_i, u_fp, v_fp, du_fp, dv_fp, cr, cg, cb, ca),
+                        (false, false, false) => rasterize_textured_span::<false, false, false>(dst_span, frag_bytes, fw, fh, sr_i, sb_i, dr_i, db_i, u_fp, v_fp, du_fp, dv_fp, cr, cg, cb, ca),
+                    }
+                }
+            }
+            continue;
+        }
+
+        let du_dx = v0.u * dw0_dx + v1.u * dw1_dx + v2.u * dw2_dx;
+        let dv_dx = v0.v * dw0_dx + v1.v * dw1_dx + v2.v * dw2_dx;
+        let du_wrapped = if du_dx.is_finite() { du_dx - du_dx.round() } else { 0.0 };
+        let dv_wrapped = if dv_dx.is_finite() { dv_dx - dv_dx.round() } else { 0.0 };
+        let du_fp = (du_wrapped * fw_f * 65536.0).round() as i64;
+        let dv_fp = (dv_wrapped * fh_f * 65536.0).round() as i64;
+        let dr_dx = v0.col[0] * dw0_dx + v1.col[0] * dw1_dx + v2.col[0] * dw2_dx;
+        let dg_dx = v0.col[1] * dw0_dx + v1.col[1] * dw1_dx + v2.col[1] * dw2_dx;
+        let db_dx = v0.col[2] * dw0_dx + v1.col[2] * dw1_dx + v2.col[2] * dw2_dx;
+        let da_dx = v0.col[3] * dw0_dx + v1.col[3] * dw1_dx + v2.col[3] * dw2_dx;
+
+        for py in min_y..=max_y {
+            let w0_r = w0_row;
+            let w1_r = w1_row;
             w0_row += dw0_dy;
             w1_row += dw1_dy;
+            let Some((px0, px1, k_start)) =
+                scanline_x_span(w0_r, w1_r, dw0_dx, dw1_dx, dw2_dx, min_x, max_k)
+            else {
+                continue;
+            };
+            let w0_s = w0_r + k_start * dw0_dx;
+            let w1_s = w1_r + k_start * dw1_dx;
+            let w2_s = 1.0 - w0_s - w1_s;
+            let mut u_fp = 0i64;
+            let mut v_fp = 0i64;
+            if tex_uniform.is_none() {
+                let tu_s = v0.u * w0_s + v1.u * w1_s + v2.u * w2_s;
+                let tv_s = v0.v * w0_s + v1.v * w1_s + v2.v * w2_s;
+                let uf_s = if tu_s.is_finite() { tu_s - tu_s.floor() } else { 0.0 };
+                let vf_s = if tv_s.is_finite() { tv_s - tv_s.floor() } else { 0.0 };
+                u_fp = (uf_s * fw_f * 65536.0) as i64;
+                v_fp = (vf_s * fh_f * 65536.0) as i64;
+                if u_fp < 0 {
+                    u_fp += fw_fp;
+                } else if u_fp >= fw_fp {
+                    u_fp -= fw_fp;
+                }
+                if v_fp < 0 {
+                    v_fp += fh_fp;
+                } else if v_fp >= fh_fp {
+                    v_fp -= fh_fp;
+                }
+            }
+            let mut cr_f = v0.col[0] * w0_s + v1.col[0] * w1_s + v2.col[0] * w2_s;
+            let mut cg_f = v0.col[1] * w0_s + v1.col[1] * w1_s + v2.col[1] * w2_s;
+            let mut cb_f = v0.col[2] * w0_s + v1.col[2] * w1_s + v2.col[2] * w2_s;
+            let mut ca_f = v0.col[3] * w0_s + v1.col[3] * w1_s + v2.col[3] * w2_s;
+
+            let row_off = (py as usize) * tw;
+            let span_start = (row_off + px0 as usize) * 4;
+            let span_end = (row_off + px1 as usize + 1) * 4;
+            for dst in dst_pixels[span_start..span_end].chunks_exact_mut(4) {
+                let (mut sr, mut sg, mut sb, mut sa) = if let Some(tc) = tex_uniform {
+                    (
+                        (tc[0].clamp(0.0, 1.0) * 255.0).round() as u32,
+                        (tc[1].clamp(0.0, 1.0) * 255.0).round() as u32,
+                        (tc[2].clamp(0.0, 1.0) * 255.0).round() as u32,
+                        (tc[3].clamp(0.0, 1.0) * 255.0).round() as u32,
+                    )
+                } else {
+                    let tx = if fw_pot {
+                        ((u_fp >> 16) as usize) & fw_mask
+                    } else {
+                        ((u_fp >> 16).max(0) as usize).min(fw - 1)
+                    };
+                    let ty = if fh_pot {
+                        ((v_fp >> 16) as usize) & fh_mask
+                    } else {
+                        ((v_fp >> 16).max(0) as usize).min(fh - 1)
+                    };
+                    if fw_pot {
+                        u_fp = u_fp.wrapping_add(du_fp);
+                    } else {
+                        u_fp += du_fp;
+                        if u_fp >= fw_fp {
+                            u_fp -= fw_fp;
+                        } else if u_fp < 0 {
+                            u_fp += fw_fp;
+                        }
+                    }
+                    if fh_pot {
+                        v_fp = v_fp.wrapping_add(dv_fp);
+                    } else {
+                        v_fp += dv_fp;
+                        if v_fp >= fh_fp {
+                            v_fp -= fh_fp;
+                        } else if v_fp < 0 {
+                            v_fp += fh_fp;
+                        }
+                    }
+                    if frag_is_r8 {
+                        let r = frag_bytes[ty * fw + tx] as u32;
+                        (r, r, r, 255u32)
+                    } else {
+                        let off_s = (ty * fw + tx) * 4;
+                        if frag_is_bgra {
+                            (
+                                frag_bytes[off_s + 2] as u32,
+                                frag_bytes[off_s + 1] as u32,
+                                frag_bytes[off_s] as u32,
+                                frag_bytes[off_s + 3] as u32,
+                            )
+                        } else {
+                            (
+                                frag_bytes[off_s] as u32,
+                                frag_bytes[off_s + 1] as u32,
+                                frag_bytes[off_s + 2] as u32,
+                                frag_bytes[off_s + 3] as u32,
+                            )
+                        }
+                    }
+                };
+                let cr = (cr_f.clamp(0.0, 1.0) * 255.0).round() as u32;
+                let cg = (cg_f.clamp(0.0, 1.0) * 255.0).round() as u32;
+                let cb = (cb_f.clamp(0.0, 1.0) * 255.0).round() as u32;
+                let ca = (ca_f.clamp(0.0, 1.0) * 255.0).round() as u32;
+                cr_f += dr_dx;
+                cg_f += dg_dx;
+                cb_f += db_dx;
+                ca_f += da_dx;
+
+                sr = mul_div255(sr * cr);
+                sg = mul_div255(sg * cg);
+                sb = mul_div255(sb * cb);
+                sa = mul_div255(sa * ca);
+
+                if !(pso.blend_enabled && sa == 0) {
+                    if pso.blend_enabled && sa < 255 {
+                        let inv_a = 255 - sa;
+                        let (dr, dg, db) = if target_is_bgra {
+                            (dst[2] as u32, dst[1] as u32, dst[0] as u32)
+                        } else {
+                            (dst[0] as u32, dst[1] as u32, dst[2] as u32)
+                        };
+                        let r = mul_div255(sr * sa + dr * inv_a) as u8;
+                        let g = mul_div255(sg * sa + dg * inv_a) as u8;
+                        let b = mul_div255(sb * sa + db * inv_a) as u8;
+                        let oa = mul_div255(sa * 255 + (dst[3] as u32) * inv_a).min(255) as u8;
+                        if target_is_bgra {
+                            dst.copy_from_slice(&[b, g, r, oa]);
+                        } else {
+                            dst.copy_from_slice(&[r, g, b, oa]);
+                        }
+                    } else if target_is_bgra {
+                        dst.copy_from_slice(&[sb as u8, sg as u8, sr as u8, sa as u8]);
+                    } else {
+                        dst.copy_from_slice(&[sr as u8, sg as u8, sb as u8, sa as u8]);
+                    }
+                }
+            }
         }
     }
 }
@@ -2386,37 +2943,64 @@ extern "C" fn blit_copy_texture(
     if src_tex.is_null() || dst_tex.is_null() || src_size.width == 0 || src_size.height == 0 {
         return;
     }
-    let src_snap = {
+    let snaps = {
         let g = textures().lock().unwrap();
-        g.get(&(src_tex as usize))
-            .map(|t| (t.width, t.height, Arc::clone(&t.pixels)))
+        let s = g
+            .get(&(src_tex as usize))
+            .map(|t| (t.width, t.height, Arc::clone(&t.pixels)));
+        let d = g
+            .get(&(dst_tex as usize))
+            .map(|t| (t.width, t.height, Arc::clone(&t.pixels)));
+        s.zip(d)
     };
-    let Some((sw, sh, spixels)) = src_snap else {
-        return;
-    };
-    let mut g = textures().lock().unwrap();
-    let Some(dst) = g.get_mut(&(dst_tex as usize)) else {
+    let Some(((sw, sh, src_arc), (dst_w, dst_h, dst_arc))) = snaps else {
         return;
     };
     let cols = src_size
         .width
         .min(sw.saturating_sub(src_origin.x))
-        .min(dst.width.saturating_sub(dst_origin.x));
+        .min(dst_w.saturating_sub(dst_origin.x));
     let rows = src_size
         .height
         .min(sh.saturating_sub(src_origin.y))
-        .min(dst.height.saturating_sub(dst_origin.y));
+        .min(dst_h.saturating_sub(dst_origin.y));
     let copy_bytes = cols * 4;
-    let dst_w = dst.width;
-    let dst_pixels = Arc::make_mut(&mut dst.pixels);
-    for r in 0..rows {
-        let s_off = ((src_origin.y + r) * sw + src_origin.x) * 4;
-        let d_off = ((dst_origin.y + r) * dst_w + dst_origin.x) * 4;
-        if let (Some(src_row), Some(dst_row)) = (
-            spixels.get(s_off..s_off + copy_bytes),
-            dst_pixels.get_mut(d_off..d_off + copy_bytes),
-        ) {
-            dst_row.copy_from_slice(src_row);
+    if copy_bytes == 0 || rows == 0 {
+        return;
+    }
+    if Arc::ptr_eq(&src_arc, &dst_arc) {
+        let src_copy = src_arc.read().unwrap().clone();
+        let mut dst_pixels = dst_arc.write().unwrap();
+        for r in 0..rows {
+            let s_off = ((src_origin.y + r) * sw + src_origin.x) * 4;
+            let d_off = ((dst_origin.y + r) * dst_w + dst_origin.x) * 4;
+            if let (Some(src_row), Some(dst_row)) = (
+                src_copy.get(s_off..s_off + copy_bytes),
+                dst_pixels.get_mut(d_off..d_off + copy_bytes),
+            ) {
+                dst_row.copy_from_slice(src_row);
+            }
+        }
+    } else {
+        let (spixels, mut dst_pixels) =
+            if (Arc::as_ptr(&src_arc) as usize) < (Arc::as_ptr(&dst_arc) as usize) {
+                let r = src_arc.read().unwrap();
+                let w = dst_arc.write().unwrap();
+                (r, w)
+            } else {
+                let w = dst_arc.write().unwrap();
+                let r = src_arc.read().unwrap();
+                (r, w)
+            };
+        for r in 0..rows {
+            let s_off = ((src_origin.y + r) * sw + src_origin.x) * 4;
+            let d_off = ((dst_origin.y + r) * dst_w + dst_origin.x) * 4;
+            if let (Some(src_row), Some(dst_row)) = (
+                spixels.get(s_off..s_off + copy_bytes),
+                dst_pixels.get_mut(d_off..d_off + copy_bytes),
+            ) {
+                dst_row.copy_from_slice(src_row);
+            }
         }
     }
 }
@@ -2488,7 +3072,7 @@ extern "C" fn blit_copy_texture_to_buffer(
         g.get(&(src_tex as usize))
             .map(|t| (t.width, t.height, Arc::clone(&t.pixels)))
     };
-    let Some((sw, sh, spixels)) = src_snap else {
+    let Some((sw, sh, spixels_arc)) = src_snap else {
         return;
     };
     let cols = src_size.width.min(sw.saturating_sub(src_origin.x));
@@ -2498,6 +3082,7 @@ extern "C" fn blit_copy_texture_to_buffer(
         return;
     }
     let dst_stride = if dst_bpr >= copy_bytes { dst_bpr } else { copy_bytes };
+    let spixels = spixels_arc.read().unwrap();
     let mut g = buffers().lock().unwrap();
     let Some(dst) = g.get_mut(&(dst_buf as usize)) else {
         return;
