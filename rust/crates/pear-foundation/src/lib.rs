@@ -700,6 +700,40 @@ extern "C" fn str_uppercase(this: Id, _: Sel) -> Id {
     nsstring_from_rust(&a.to_uppercase())
 }
 
+extern "C" fn str_capitalized(this: Id, _: Sel) -> Id {
+    let a = rust_str_from_nsstring(this).unwrap_or_default();
+    let mut out = String::with_capacity(a.len());
+    let mut new_word = true;
+    for ch in a.chars() {
+        if ch.is_alphanumeric() {
+            if new_word {
+                for up in ch.to_uppercase() {
+                    out.push(up);
+                }
+                new_word = false;
+            } else {
+                for lo in ch.to_lowercase() {
+                    out.push(lo);
+                }
+            }
+        } else {
+            out.push(ch);
+            new_word = true;
+        }
+    }
+    nsstring_from_rust(&out)
+}
+
+extern "C" fn str_replacing_chars_in_range(this: Id, _: Sel, range: NSRange, repl: Id) -> Id {
+    let s = rust_str_from_nsstring(this).unwrap_or_default();
+    let r = rust_str_from_nsstring(repl).unwrap_or_default();
+    let mut u16s: Vec<u16> = s.encode_utf16().collect();
+    let loc = range.location.min(u16s.len());
+    let end = loc.saturating_add(range.length).min(u16s.len());
+    u16s.splice(loc..end, r.encode_utf16());
+    nsstring_from_rust(&String::from_utf16_lossy(&u16s))
+}
+
 extern "C" fn str_range_of(this: Id, _: Sel, needle: Id) -> NSRange {
     let hay = rust_str_from_nsstring(this).unwrap_or_default();
     let sub = rust_str_from_nsstring(needle).unwrap_or_default();
@@ -1127,6 +1161,14 @@ extern "C" fn arr_remove_at(this: Id, _: Sel, idx: usize) {
 extern "C" fn arr_remove_all(this: Id, _: Sel) {
     if let Some(Backing::Arr(v)) = store().lock().unwrap().get_mut(&(this as usize)) {
         v.clear();
+    }
+}
+
+extern "C" fn arr_remove_in_range(this: Id, _: Sel, range: NSRange) {
+    if let Some(Backing::Arr(v)) = store().lock().unwrap().get_mut(&(this as usize)) {
+        let loc = range.location.min(v.len());
+        let end = loc.saturating_add(range.length).min(v.len());
+        v.drain(loc..end);
     }
 }
 
@@ -2382,6 +2424,8 @@ pub fn init_foundation() {
                 ("initWithFormat:", i(str_init_with_format as *const ())),
                 ("initWithFormat:arguments:", i(str_init_with_format_args as *const ())),
                 ("initWithFormat:locale:arguments:", i(str_init_with_format_loc_args as *const ())),
+                ("capitalizedString", i(str_capitalized as *const ())),
+                ("stringByReplacingCharactersInRange:withString:", i(str_replacing_chars_in_range as *const ())),
                 ("copyWithZone:", i(str_copy_zone as *const ())),
                 ("dealloc", i(f_dealloc as *const ())),
             ],
@@ -2458,6 +2502,8 @@ pub fn init_foundation() {
                 ("initWithFormat:", i(str_init_with_format as *const ())),
                 ("initWithFormat:arguments:", i(str_init_with_format_args as *const ())),
                 ("initWithFormat:locale:arguments:", i(str_init_with_format_loc_args as *const ())),
+                ("capitalizedString", i(str_capitalized as *const ())),
+                ("stringByReplacingCharactersInRange:withString:", i(str_replacing_chars_in_range as *const ())),
                 ("copyWithZone:", i(str_copy_zone as *const ())),
                 ("dealloc", i(f_dealloc as *const ())),
             ],
@@ -2557,6 +2603,7 @@ pub fn init_foundation() {
                 ("removeLastObject", i(arr_remove_last as *const ())),
                 ("removeObjectAtIndex:", i(arr_remove_at as *const ())),
                 ("removeAllObjects", i(arr_remove_all as *const ())),
+                ("removeObjectsInRange:", i(arr_remove_in_range as *const ())),
                 ("copy", i(arr_copy as *const ())),
                 ("mutableCopy", i(arr_mcopy as *const ())),
                 ("copyWithZone:", i(arr_copy_zone as *const ())),
@@ -2880,7 +2927,10 @@ pub fn init_foundation() {
                 ("setResourceValue:forKey:error:", i(url_set_resource_val as *const ())),
                 ("scheme", i(url_scheme as *const ())),
                 ("host", i(url_host as *const ())),
+                ("user", i(url_user as *const ())),
+                ("password", i(url_password as *const ())),
                 ("query", i(url_query as *const ())),
+                ("fragment", i(url_fragment as *const ())),
                 ("isEqual:", i(str_is_equal as *const ())),
                 ("hash", i(str_hash as *const ())),
                 ("copy", i(copy_retain as *const ())),
@@ -2962,6 +3012,9 @@ pub fn init_foundation() {
                 ("stringForKey:", i(ud_string_for_key as *const ())),
                 ("boolForKey:", i(ud_bool_for_key as *const ())),
                 ("integerForKey:", i(ud_int_for_key as *const ())),
+                ("dictionaryForKey:", i(ud_dict_for_key as *const ())),
+                ("arrayForKey:", i(ud_array_for_key as *const ())),
+                ("dataForKey:", i(ud_data_for_key as *const ())),
                 ("setObject:forKey:", i(ud_set_obj_for_key as *const ())),
                 ("setValue:forKey:", i(ud_set_obj_for_key as *const ())),
                 ("setInteger:forKey:", i(ud_set_int_for_key as *const ())),
@@ -3055,9 +3108,17 @@ pub fn init_foundation() {
                 ("URL", i(req_url as *const ())),
                 ("HTTPMethod", i(req_method as *const ())),
                 ("HTTPBody", i(req_body as *const ())),
+                ("allHTTPHeaderFields", i(req_all_headers as *const ())),
+                ("timeoutInterval", i(req_timeout as *const ())),
+                ("cachePolicy", i(req_cache_policy as *const ())),
+                ("initWithURL:", i(req_init_with_url as *const ())),
+                ("initWithURL:cachePolicy:timeoutInterval:", i(req_init_with_url_policy_timeout as *const ())),
                 ("dealloc", i(f_dealloc as *const ())),
             ],
-            &[("requestWithURL:", i(req_with_url as *const ()))],
+            &[
+                ("requestWithURL:", i(req_with_url as *const ())),
+                ("requestWithURL:cachePolicy:timeoutInterval:", i(req_with_url_policy_timeout as *const ())),
+            ],
         );
         runtime::register_builtin(
             NSMUTABLEURLREQUEST_CLASS.ptr(),
@@ -3066,14 +3127,27 @@ pub fn init_foundation() {
             16,
             &[
                 ("URL", i(req_url as *const ())),
+                ("setURL:", i(req_set_url as *const ())),
                 ("HTTPMethod", i(req_method as *const ())),
                 ("setHTTPMethod:", i(req_set_method as *const ())),
                 ("setValue:forHTTPHeaderField:", i(req_set_header as *const ())),
+                ("addValue:forHTTPHeaderField:", i(req_add_header as *const ())),
+                ("allHTTPHeaderFields", i(req_all_headers as *const ())),
+                ("setAllHTTPHeaderFields:", i(req_set_all_headers as *const ())),
                 ("HTTPBody", i(req_body as *const ())),
                 ("setHTTPBody:", i(req_set_body as *const ())),
+                ("timeoutInterval", i(req_timeout as *const ())),
+                ("setTimeoutInterval:", i(req_set_timeout as *const ())),
+                ("cachePolicy", i(req_cache_policy as *const ())),
+                ("setCachePolicy:", i(req_set_cache_policy as *const ())),
+                ("initWithURL:", i(req_init_with_url as *const ())),
+                ("initWithURL:cachePolicy:timeoutInterval:", i(req_init_with_url_policy_timeout as *const ())),
                 ("dealloc", i(f_dealloc as *const ())),
             ],
-            &[("requestWithURL:", i(mreq_with_url as *const ()))],
+            &[
+                ("requestWithURL:", i(mreq_with_url as *const ())),
+                ("requestWithURL:cachePolicy:timeoutInterval:", i(mreq_with_url_policy_timeout as *const ())),
+            ],
         );
         runtime::register_builtin(
             NSUUID_CLASS.ptr(),
@@ -3554,6 +3628,39 @@ extern "C" fn url_query(self_: Id, _cmd: Sel) -> Id {
         .unwrap_or(std::ptr::null_mut())
 }
 
+fn url_userinfo(self_: Id) -> Option<String> {
+    let s = rust_str_from_nsstring(self_)?;
+    let (_, rest) = s.split_once("://")?;
+    let auth = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let (ui, _) = auth.rsplit_once('@')?;
+    Some(ui.to_string())
+}
+
+extern "C" fn url_user(self_: Id, _cmd: Sel) -> Id {
+    let Some(ui) = url_userinfo(self_) else {
+        return std::ptr::null_mut();
+    };
+    let u = ui.split(':').next().unwrap_or("");
+    if u.is_empty() { std::ptr::null_mut() } else { nsstring_from_rust(u) }
+}
+
+extern "C" fn url_password(self_: Id, _cmd: Sel) -> Id {
+    let Some(ui) = url_userinfo(self_) else {
+        return std::ptr::null_mut();
+    };
+    match ui.split_once(':') {
+        Some((_, pw)) if !pw.is_empty() => nsstring_from_rust(pw),
+        _ => std::ptr::null_mut(),
+    }
+}
+
+extern "C" fn url_fragment(self_: Id, _cmd: Sel) -> Id {
+    let s = rust_str_from_nsstring(self_).unwrap_or_default();
+    s.split_once('#')
+        .map(|(_, f)| nsstring_from_rust(f))
+        .unwrap_or(std::ptr::null_mut())
+}
+
 extern "C" fn str_can_be_converted(this: Id, _cmd: Sel, _enc: usize) -> bool {
     rust_str_from_nsstring(this).is_some()
 }
@@ -3842,6 +3949,33 @@ extern "C" fn ud_int_for_key(self_: Id, _cmd: Sel, key: Id) -> isize {
     let o = ud_obj_for_key(self_, _cmd, key);
     if o.is_null() { return 0; }
     num_as_i64(o, _cmd) as isize
+}
+
+extern "C" fn ud_dict_for_key(self_: Id, _cmd: Sel, key: Id) -> Id {
+    let o = ud_obj_for_key(self_, _cmd, key);
+    if !o.is_null() && matches!(store().lock().unwrap().get(&(o as usize)), Some(Backing::Dict(_))) {
+        o
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+extern "C" fn ud_array_for_key(self_: Id, _cmd: Sel, key: Id) -> Id {
+    let o = ud_obj_for_key(self_, _cmd, key);
+    if !o.is_null() && matches!(store().lock().unwrap().get(&(o as usize)), Some(Backing::Arr(_))) {
+        o
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+extern "C" fn ud_data_for_key(self_: Id, _cmd: Sel, key: Id) -> Id {
+    let o = ud_obj_for_key(self_, _cmd, key);
+    if !o.is_null() && matches!(store().lock().unwrap().get(&(o as usize)), Some(Backing::Bytes(_))) {
+        o
+    } else {
+        std::ptr::null_mut()
+    }
 }
 
 extern "C" fn ud_sync(_self: Id, _cmd: Sel) -> bool {
@@ -4593,11 +4727,25 @@ extern "C" fn locale_obj_for_key(self_: Id, _cmd: Sel, key: Id) -> Id {
     }
 }
 
+fn req_dict_insert(self_: Id, key: &str, val: usize) {
+    let mut g = store().lock().unwrap();
+    let entry = g.entry(self_ as usize).or_insert_with(|| Backing::Dict(HashMap::new()));
+    if let Backing::Dict(d) = entry {
+        d.insert(key.to_string(), val);
+    }
+}
+
 extern "C" fn req_with_url(_self: Id, _cmd: Sel, url: Id) -> Id {
     let mut map = HashMap::new();
     map.insert("url".into(), retain(url) as usize);
     map.insert("method".into(), retain(nsstring_from_rust("GET")) as usize);
     unsafe { alloc_with_backing(NSURLREQUEST_CLASS.ptr(), Backing::Dict(map)) }
+}
+extern "C" fn req_with_url_policy_timeout(_cls: Id, _cmd: Sel, url: Id, policy: usize, timeout: f64) -> Id {
+    let obj = req_with_url(std::ptr::null_mut(), _cmd, url);
+    req_set_cache_policy(obj, _cmd, policy);
+    req_set_timeout(obj, _cmd, timeout);
+    obj
 }
 extern "C" fn mreq_with_url(_self: Id, _cmd: Sel, url: Id) -> Id {
     let mut map = HashMap::new();
@@ -4605,11 +4753,37 @@ extern "C" fn mreq_with_url(_self: Id, _cmd: Sel, url: Id) -> Id {
     map.insert("method".into(), retain(nsstring_from_rust("GET")) as usize);
     unsafe { alloc_with_backing(NSMUTABLEURLREQUEST_CLASS.ptr(), Backing::Dict(map)) }
 }
+extern "C" fn mreq_with_url_policy_timeout(_cls: Id, _cmd: Sel, url: Id, policy: usize, timeout: f64) -> Id {
+    let obj = mreq_with_url(std::ptr::null_mut(), _cmd, url);
+    req_set_cache_policy(obj, _cmd, policy);
+    req_set_timeout(obj, _cmd, timeout);
+    obj
+}
+extern "C" fn req_init_with_url(self_: Id, _cmd: Sel, url: Id) -> Id {
+    req_dict_insert(self_, "url", retain(url) as usize);
+    req_dict_insert(self_, "method", retain(nsstring_from_rust("GET")) as usize);
+    self_
+}
+extern "C" fn req_init_with_url_policy_timeout(
+    self_: Id,
+    _cmd: Sel,
+    url: Id,
+    policy: usize,
+    timeout: f64,
+) -> Id {
+    req_init_with_url(self_, _cmd, url);
+    req_set_cache_policy(self_, _cmd, policy);
+    req_set_timeout(self_, _cmd, timeout);
+    self_
+}
 extern "C" fn req_url(self_: Id, _cmd: Sel) -> Id {
     if let Some(Backing::Dict(d)) = store().lock().unwrap().get(&(self_ as usize)) {
         return d.get("url").copied().unwrap_or(0) as Id;
     }
     std::ptr::null_mut()
+}
+extern "C" fn req_set_url(self_: Id, _cmd: Sel, url: Id) {
+    req_dict_insert(self_, "url", retain(url) as usize);
 }
 extern "C" fn req_method(self_: Id, _cmd: Sel) -> Id {
     if let Some(Backing::Dict(d)) = store().lock().unwrap().get(&(self_ as usize)) {
@@ -4618,15 +4792,26 @@ extern "C" fn req_method(self_: Id, _cmd: Sel) -> Id {
     nsstring_from_rust("GET")
 }
 extern "C" fn req_set_method(self_: Id, _cmd: Sel, m: Id) {
-    if let Some(Backing::Dict(d)) = store().lock().unwrap().get_mut(&(self_ as usize)) {
-        d.insert("method".into(), retain(m) as usize);
-    }
+    req_dict_insert(self_, "method", retain(m) as usize);
 }
 extern "C" fn req_set_header(self_: Id, _cmd: Sel, v: Id, field: Id) {
     let f = rust_str_from_nsstring(field).unwrap_or_default();
-    if let Some(Backing::Dict(d)) = store().lock().unwrap().get_mut(&(self_ as usize)) {
-        d.insert(format!("hdr:{f}"), retain(v) as usize);
+    req_dict_insert(self_, &format!("hdr:{f}"), retain(v) as usize);
+}
+extern "C" fn req_add_header(self_: Id, cmd: Sel, v: Id, field: Id) {
+    req_set_header(self_, cmd, v, field);
+}
+extern "C" fn req_all_headers(self_: Id, _cmd: Sel) -> Id {
+    if let Some(Backing::Dict(d)) = store().lock().unwrap().get(&(self_ as usize)) {
+        if let Some(&h) = d.get("all_headers") {
+            return h as Id;
+        }
     }
+    std::ptr::null_mut()
+}
+extern "C" fn req_set_all_headers(self_: Id, _cmd: Sel, dict: Id) {
+    let v = if dict.is_null() { 0 } else { retain(dict) as usize };
+    req_dict_insert(self_, "all_headers", v);
 }
 extern "C" fn req_body(self_: Id, _cmd: Sel) -> Id {
     if let Some(Backing::Dict(d)) = store().lock().unwrap().get(&(self_ as usize)) {
@@ -4635,9 +4820,37 @@ extern "C" fn req_body(self_: Id, _cmd: Sel) -> Id {
     std::ptr::null_mut()
 }
 extern "C" fn req_set_body(self_: Id, _cmd: Sel, body: Id) {
-    if let Some(Backing::Dict(d)) = store().lock().unwrap().get_mut(&(self_ as usize)) {
-        d.insert("body".into(), retain(body) as usize);
+    req_dict_insert(self_, "body", retain(body) as usize);
+}
+extern "C" fn req_set_timeout(self_: Id, _cmd: Sel, timeout: f64) {
+    let num = unsafe { alloc_with_backing(NSNUMBER_CLASS.ptr(), Backing::NumF64(timeout)) };
+    req_dict_insert(self_, "timeout", num as usize);
+}
+extern "C" fn req_timeout(self_: Id, _cmd: Sel) -> f64 {
+    let g = store().lock().unwrap();
+    if let Some(Backing::Dict(d)) = g.get(&(self_ as usize)) {
+        if let Some(&id) = d.get("timeout") {
+            if let Some(Backing::NumF64(v)) = g.get(&id) {
+                return *v;
+            }
+        }
     }
+    60.0
+}
+extern "C" fn req_set_cache_policy(self_: Id, _cmd: Sel, policy: usize) {
+    let num = unsafe { alloc_with_backing(NSNUMBER_CLASS.ptr(), Backing::NumI64(policy as i64)) };
+    req_dict_insert(self_, "cache_policy", num as usize);
+}
+extern "C" fn req_cache_policy(self_: Id, _cmd: Sel) -> usize {
+    let g = store().lock().unwrap();
+    if let Some(Backing::Dict(d)) = g.get(&(self_ as usize)) {
+        if let Some(&id) = d.get("cache_policy") {
+            if let Some(Backing::NumI64(v)) = g.get(&id) {
+                return (*v).max(0) as usize;
+            }
+        }
+    }
+    0
 }
 
 extern "C" fn uuid_new(_self: Id, _cmd: Sel) -> Id {
@@ -5306,6 +5519,51 @@ mod tests {
 
             assert!(send1::<Id, bool>(NSJSONSERIALIZATION_CLASS.ptr() as Id, "isValidJSONObject:", parsed));
             assert!(!send1::<Id, bool>(NSJSONSERIALIZATION_CLASS.ptr() as Id, "isValidJSONObject:", ud_key));
+
+            // Phase 5.12: capitalizedString, stringByReplacingCharactersInRange:, removeObjectsInRange:, NSURL user/password/fragment, dictionaryForKey:, NSMutableURLRequest
+            let cap: Id = send0(nsstring_from_rust("hello WORLD-foo"), "capitalizedString");
+            assert_eq!(rust_str_from_nsstring(cap).as_deref(), Some("Hello World-Foo"));
+            let repl_s: Id = send2(
+                nsstring_from_rust("abcdef"),
+                "stringByReplacingCharactersInRange:withString:",
+                NSRange { location: 2, length: 2 },
+                nsstring_from_rust("XY"),
+            );
+            assert_eq!(rust_str_from_nsstring(repl_s).as_deref(), Some("abXYef"));
+
+            let ma: Id = send0(NSMUTABLEARRAY_CLASS.ptr() as Id, "array");
+            for s in ["a", "b", "c", "d"] {
+                let _: () = send1(ma, "addObject:", nsstring_from_rust(s));
+            }
+            let _: () = send1(ma, "removeObjectsInRange:", NSRange { location: 1, length: 2 });
+            assert_eq!(cf_array_get_count(ma), 2);
+            assert_eq!(
+                rust_str_from_nsstring(cf_array_get_value_at_index(ma, 1) as Id).as_deref(),
+                Some("d")
+            );
+
+            let full_url: Id = send1(
+                NSURL_CLASS.ptr() as Id,
+                "URLWithString:",
+                nsstring_from_rust("https://alice:pw@example.com/p#f"),
+            );
+            assert_eq!(rust_str_from_nsstring(send0(full_url, "user")).as_deref(), Some("alice"));
+            assert_eq!(rust_str_from_nsstring(send0(full_url, "password")).as_deref(), Some("pw"));
+            assert_eq!(rust_str_from_nsstring(send0(full_url, "fragment")).as_deref(), Some("f"));
+
+            let dk = nsstring_from_rust("phase5_12_dict_key");
+            let _: () = send2(ud, "setObject:forKey:", parsed, dk);
+            assert_eq!(send1::<Id, Id>(ud, "dictionaryForKey:", dk), parsed);
+
+            let mreq: Id = send0(send0(NSMUTABLEURLREQUEST_CLASS.ptr() as Id, "alloc"), "init");
+            let _: () = send1(mreq, "setURL:", full_url);
+            let _: () = send1(mreq, "setTimeoutInterval:", 12.5f64);
+            let _: () = send1(mreq, "setCachePolicy:", 3usize);
+            let _: () = send1(mreq, "setAllHTTPHeaderFields:", parsed);
+            assert_eq!(send0::<Id>(mreq, "URL"), full_url);
+            assert_eq!(send0::<f64>(mreq, "timeoutInterval"), 12.5f64);
+            assert_eq!(send0::<usize>(mreq, "cachePolicy"), 3usize);
+            assert_eq!(send0::<Id>(mreq, "allHTTPHeaderFields"), parsed);
         }
     }
 

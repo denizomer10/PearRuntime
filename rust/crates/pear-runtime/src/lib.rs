@@ -130,6 +130,7 @@ guest_class!(UITOOLBAR_CLASS, UITOOLBAR_META);
 guest_class!(MTLFXSPATIALSCALERDESCRIPTOR_CLASS, MTLFXSPATIALSCALERDESCRIPTOR_META);
 guest_class!(MTLFXTEMPORALSCALERDESCRIPTOR_CLASS, MTLFXTEMPORALSCALERDESCRIPTOR_META);
 guest_class!(NSTIMEZONE_CLASS, NSTIMEZONE_META);
+guest_class!(NSURLCONNECTION_CLASS, NSURLCONNECTION_META);
 
 extern "C" fn shared_app_stub(_self: Id, _cmd: Sel) -> Id {
     static APP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -2139,6 +2140,12 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
                 ("IOBufferDuration", i(avaudiosession_io_buf_dur as *const ())),
                 ("setPreferredSampleRate:error:", i(avaudiosession_set_f64_err as *const ())),
                 ("setPreferredIOBufferDuration:error:", i(avaudiosession_set_f64_err as *const ())),
+                ("outputNumberOfChannels", i(avaudiosession_channels as *const ())),
+                ("maximumOutputNumberOfChannels", i(avaudiosession_channels as *const ())),
+                ("preferredOutputNumberOfChannels", i(avaudiosession_channels as *const ())),
+                ("inputNumberOfChannels", i(avaudiosession_input_channels as *const ())),
+                ("maximumInputNumberOfChannels", i(avaudiosession_input_channels as *const ())),
+                ("setPreferredOutputNumberOfChannels:error:", i(avaudiosession_set_channels_err as *const ())),
             ],
             &[("sharedInstance", i(ret_singleton as *const ()))],
         );
@@ -2182,6 +2189,25 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
                 ("systemTimeZone", i(nstimezone_shared0 as *const ())),
                 ("defaultTimeZone", i(nstimezone_shared0 as *const ())),
                 ("GMTTimeZone", i(nstimezone_shared0 as *const ())),
+            ],
+        );
+        objc_rt::register_builtin(
+            NSURLCONNECTION_CLASS.ptr(),
+            NSURLCONNECTION_META.ptr(),
+            "NSURLConnection",
+            32,
+            &[
+                ("initWithRequest:delegate:startImmediately:", i(url_conn_init_req_del_start as *const ())),
+                ("initWithRequest:delegate:", i(url_conn_init_req_del as *const ())),
+                ("setDelegateQueue:", i(app_noop1 as *const ())),
+                ("scheduleInRunLoop:forMode:", i(app_noop2 as *const ())),
+                ("unscheduleFromRunLoop:forMode:", i(app_noop2 as *const ())),
+                ("start", i(noop_method as *const ())),
+                ("cancel", i(noop_method as *const ())),
+            ],
+            &[
+                ("connectionWithRequest:delegate:", i(url_conn_with_req_del as *const ())),
+                ("canHandleRequest:", i(app_true1 as *const ())),
             ],
         );
         objc_rt::register_builtin(
@@ -2293,7 +2319,7 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
         // Foundation / CFNetwork base classes
         for name in [
             "NSProxy", "NSOperation", "NSHTTPURLResponse", "NSURLResponse",
-            "NSURLCache", "NSCachedURLResponse", "NSURLProtocol", "NSURLConnection",
+            "NSURLCache", "NSCachedURLResponse", "NSURLProtocol",
             "NSURLCredential", "NSURLSessionTask", "NSHTTPCookie", "NSHTTPCookieStorage",
             "NSNetService", "NSInputStream", "NSOutputStream",
             "NSCache", "NSDateFormatter", "NSISO8601DateFormatter",
@@ -3244,6 +3270,49 @@ extern "C" fn avaudiosession_set_mode_err(_self: Id, _cmd: Sel, _mode: Id, err: 
     if !err.is_null() {
         unsafe { *err = std::ptr::null_mut(); }
     }
+    true
+}
+
+extern "C" fn avaudiosession_channels(_self: Id, _cmd: Sel) -> isize {
+    2
+}
+
+extern "C" fn avaudiosession_input_channels(_self: Id, _cmd: Sel) -> isize {
+    1
+}
+
+extern "C" fn avaudiosession_set_channels_err(
+    _self: Id,
+    _cmd: Sel,
+    _ch: isize,
+    err: *mut Id,
+) -> bool {
+    if !err.is_null() {
+        unsafe { *err = std::ptr::null_mut(); }
+    }
+    true
+}
+
+extern "C" fn url_conn_init_req_del_start(
+    self_: Id,
+    _cmd: Sel,
+    _req: Id,
+    _del: Id,
+    _start: bool,
+) -> Id {
+    self_
+}
+
+extern "C" fn url_conn_init_req_del(self_: Id, _cmd: Sel, _req: Id, _del: Id) -> Id {
+    self_
+}
+
+extern "C" fn url_conn_with_req_del(_cls: Id, _cmd: Sel, _req: Id, _del: Id) -> Id {
+    unsafe { alloc(NSURLCONNECTION_CLASS.ptr()) }
+}
+
+extern "C" fn app_noop2(_self: Id, _cmd: Sel, _a: Id, _b: Id) {}
+extern "C" fn app_true1(_self: Id, _cmd: Sel, _a: Id) -> bool {
     true
 }
 
@@ -7733,6 +7802,55 @@ mod tests {
             let d_sec = pear_libobjc::message::lookup_for_send(tz, s_sec);
             let f_sec: extern "C" fn(Id, Sel) -> isize = std::mem::transmute(d_sec.imp);
             assert_eq!(f_sec(d_sec.receiver, s_sec), 0);
+        }
+    }
+
+    #[test]
+    fn phase5_12_audio_channels_and_url_connection() {
+        init();
+        unsafe {
+            let sess_cls = AVAUDIOSESSION_CLASS.ptr() as Id;
+            let s_shared = objc_rt::sel("sharedInstance");
+            let d_shared = pear_libobjc::message::lookup_for_send(sess_cls, s_shared);
+            let f_shared: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_shared.imp);
+            let sess = f_shared(d_shared.receiver, s_shared);
+
+            for sel_name in ["outputNumberOfChannels", "maximumOutputNumberOfChannels"] {
+                let s = objc_rt::sel(sel_name);
+                let d = pear_libobjc::message::lookup_for_send(sess, s);
+                let f: extern "C" fn(Id, Sel) -> isize = std::mem::transmute(d.imp);
+                assert_eq!(f(d.receiver, s), 2);
+            }
+
+            let mut err: Id = 0x1usize as Id;
+            let s_set_ch = objc_rt::sel("setPreferredOutputNumberOfChannels:error:");
+            let d_set_ch = pear_libobjc::message::lookup_for_send(sess, s_set_ch);
+            let f_set_ch: extern "C" fn(Id, Sel, isize, *mut Id) -> bool =
+                std::mem::transmute(d_set_ch.imp);
+            assert!(f_set_ch(d_set_ch.receiver, s_set_ch, 2, &mut err));
+            assert!(err.is_null());
+
+            let conn = alloc(NSURLCONNECTION_CLASS.ptr());
+            let s_init = objc_rt::sel("initWithRequest:delegate:startImmediately:");
+            let d_init = pear_libobjc::message::lookup_for_send(conn, s_init);
+            let f_init: extern "C" fn(Id, Sel, Id, Id, bool) -> Id =
+                std::mem::transmute(d_init.imp);
+            assert_eq!(
+                f_init(d_init.receiver, s_init, std::ptr::null_mut(), std::ptr::null_mut(), true),
+                conn
+            );
+            for void1_sel in ["setDelegateQueue:"] {
+                let s = objc_rt::sel(void1_sel);
+                let d = pear_libobjc::message::lookup_for_send(conn, s);
+                let f: extern "C" fn(Id, Sel, Id) = std::mem::transmute(d.imp);
+                f(d.receiver, s, std::ptr::null_mut());
+            }
+            for void0_sel in ["start", "cancel"] {
+                let s = objc_rt::sel(void0_sel);
+                let d = pear_libobjc::message::lookup_for_send(conn, s);
+                let f: extern "C" fn(Id, Sel) = std::mem::transmute(d.imp);
+                f(d.receiver, s);
+            }
         }
     }
 }
