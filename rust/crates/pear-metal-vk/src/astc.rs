@@ -1,4 +1,6 @@
-//! Clean-room Khronos ASTC LDR texture block decoder.
+//! Clean-room Khronos ASTC LDR texture block decoder:
+//! 2D block modes, BISE (bits/trits/quints), Khronos unquantization,
+//! hash52 partitions (1..=4), dual-plane weights, and LDR CEMs.
 
 /// Maps Apple `MTLPixelFormat` enum values for ASTC to `(block_width, block_height)`.
 pub fn astc_block_dims(pixel_format: usize) -> Option<(usize, usize)> {
@@ -25,7 +27,7 @@ pub fn astc_block_dims(pixel_format: usize) -> Option<(usize, usize)> {
 struct AstcBlockMode {
     gw: usize,
     gh: usize,
-    weight_range: usize, // max weight value + 1 (e.g. 2,3,4,5,6,8,10,12,16,20,24,32)
+    weight_range_max: usize,
     dual_plane: bool,
 }
 
@@ -33,95 +35,492 @@ fn decode_block_mode(bits: u16) -> Option<AstcBlockMode> {
     if (bits & 0x01ff) == 0x01fc {
         return None;
     }
-    let dual_plane = (bits & (1 << 10)) != 0;
-    let h = ((bits >> 9) & 1) as usize;
-    let r = (((bits >> 4) & 1) | ((bits & 0x3) << 1)) as usize;
-    let weight_ranges = [2usize, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32];
-    let r_idx = (h * 6 + r).min(weight_ranges.len() - 1);
-    let weight_range = weight_ranges[r_idx];
-    let low2 = bits & 0x3;
-    let mid2 = (bits >> 2) & 0x3;
-    let (gw, gh) = if low2 == 0 {
-        match mid2 {
-            0 => return None,
-            1 => (((bits >> 7) & 0x3) as usize + 4, ((bits >> 5) & 0x3) as usize + 2),
-            2 => (((bits >> 7) & 0x3) as usize + 8, ((bits >> 5) & 0x3) as usize + 2),
-            _ => {
-                if (bits & (1 << 8)) == 0 {
-                    (((bits >> 5) & 0x3) as usize + 2, ((bits >> 7) & 0x1) as usize + 8)
-                } else {
-                    (((bits >> 5) & 0x1) as usize + 2, ((bits >> 7) & 0x1) as usize + 6)
-                }
-            }
+    let low2 = (bits & 0x3) as usize;
+    let mid2 = ((bits >> 2) & 0x3) as usize;
+    let r0 = ((bits >> 4) & 0x1) as usize;
+    let b6_5 = ((bits >> 5) & 0x3) as usize;
+    let b8_7 = ((bits >> 7) & 0x3) as usize;
+    let h = ((bits >> 9) & 0x1) as usize;
+    let d = ((bits >> 10) & 0x1) != 0;
+
+    let (gw, gh, r_val, high_prec, dual_plane) = if low2 == 0 {
+        if mid2 == 0 {
+            return None;
+        }
+        let r_val = (mid2 << 1) | r0;
+        match b8_7 {
+            0 => (12, b6_5 + 2, r_val, h, d),
+            1 => (b6_5 + 2, 12, r_val, h, d),
+            2 => (b6_5 + 6, ((bits >> 9) & 0x3) as usize + 6, r_val, 0, false),
+            _ => match b6_5 {
+                0 => (6, 10, r_val, h, d),
+                1 => (10, 6, r_val, h, d),
+                _ => return None,
+            },
         }
     } else {
+        let r_val = (low2 << 1) | r0;
         match mid2 {
-            0 => (((bits >> 7) & 0x3) as usize + 4, ((bits >> 5) & 0x3) as usize + 2),
-            1 => (((bits >> 7) & 0x3) as usize + 8, ((bits >> 5) & 0x3) as usize + 2),
-            2 => (((bits >> 5) & 0x3) as usize + 2, ((bits >> 7) & 0x3) as usize + 8),
+            0 => (b8_7 + 4, b6_5 + 2, r_val, h, d),
+            1 => (b8_7 + 8, b6_5 + 2, r_val, h, d),
+            2 => (b6_5 + 2, b8_7 + 8, r_val, h, d),
             _ => {
-                if (bits & (1 << 7)) != 0 {
-                    (12, 2)
+                if (bits & (1 << 8)) == 0 {
+                    (b6_5 + 2, ((bits >> 7) & 1) as usize + 6, r_val, h, d)
                 } else {
-                    (((bits >> 5) & 0x3) as usize + 2, ((bits >> 8) & 0x1) as usize + 6)
+                    (((bits >> 5) & 1) as usize + 2, ((bits >> 6) & 3) as usize + 2, r_val, h, d)
                 }
             }
         }
     };
+
+    const WEIGHT_MAX_BY_HR: [usize; 12] = [1, 2, 3, 4, 5, 7, 9, 11, 15, 19, 23, 31];
+    let hr_idx = high_prec * 6 + r_val.saturating_sub(2);
+    let weight_range_max = *WEIGHT_MAX_BY_HR.get(hr_idx)?;
+    let planes = if dual_plane { 2 } else { 1 };
+    if gw * gh * planes > 64 {
+        return None;
+    }
     Some(AstcBlockMode {
         gw: gw.max(1),
         gh: gh.max(1),
-        weight_range,
+        weight_range_max,
         dual_plane,
     })
 }
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum IseKind {
+    Bits(usize),
+    Trit(usize),
+    Quint(usize),
+}
+
+fn ise_kind(range_max: usize) -> Option<IseKind> {
+    match range_max {
+        1 => Some(IseKind::Bits(1)),
+        2 => Some(IseKind::Trit(0)),
+        3 => Some(IseKind::Bits(2)),
+        4 => Some(IseKind::Quint(0)),
+        5 => Some(IseKind::Trit(1)),
+        7 => Some(IseKind::Bits(3)),
+        9 => Some(IseKind::Quint(1)),
+        11 => Some(IseKind::Trit(2)),
+        15 => Some(IseKind::Bits(4)),
+        19 => Some(IseKind::Quint(2)),
+        23 => Some(IseKind::Trit(3)),
+        31 => Some(IseKind::Bits(5)),
+        39 => Some(IseKind::Quint(3)),
+        47 => Some(IseKind::Trit(4)),
+        63 => Some(IseKind::Bits(6)),
+        79 => Some(IseKind::Quint(4)),
+        95 => Some(IseKind::Trit(5)),
+        127 => Some(IseKind::Bits(7)),
+        159 => Some(IseKind::Quint(5)),
+        191 => Some(IseKind::Trit(6)),
+        255 => Some(IseKind::Bits(8)),
+        _ => None,
+    }
+}
+
+fn ise_bit_length(count: usize, range_max: usize) -> usize {
+    match ise_kind(range_max) {
+        Some(IseKind::Bits(b)) => count * b,
+        Some(IseKind::Trit(b)) => (count * 8 + 4) / 5 + count * b,
+        Some(IseKind::Quint(b)) => (count * 7 + 2) / 3 + count * b,
+        None => usize::MAX,
+    }
+}
+
 #[inline]
-fn get_bits(block: &[u8; 16], start: usize, len: usize) -> u32 {
+fn read_u128_bits(stream: u128, start: usize, len: usize) -> u32 {
     if len == 0 || start >= 128 {
         return 0;
     }
-    let val = u128::from_le_bytes(*block);
-    let mask = if len >= 32 { u32::MAX as u128 } else { (1u128 << len) - 1 };
-    ((val >> start) & mask) as u32
+    let mask = if len >= 32 {
+        u32::MAX as u128
+    } else {
+        (1u128 << len) - 1
+    };
+    ((stream >> start) & mask) as u32
+}
+
+fn pack_3_trits(t0: u8, t1: u8, t2: u8) -> u8 {
+    if t2 == 2 && t1 == 2 {
+        (3 << 2) | t0
+    } else if t2 == 2 {
+        (((t1 << 2) | t0) << 2) | 3
+    } else {
+        (((t2 << 2) | t1) << 2) | t0
+    }
+}
+
+fn pack_trit_block(t: [u8; 5]) -> u8 {
+    let c = pack_3_trits(t[0], t[1], t[2]);
+    if t[4] == 2 && t[3] == 2 {
+        ((c & 0x1c) << 3) | (7 << 2) | (c & 3)
+    } else {
+        let h = if t[4] == 2 {
+            6 | t[3]
+        } else if t[3] == 2 {
+            2 | t[4]
+        } else {
+            (t[4] << 2) | t[3]
+        };
+        (h << 5) | c
+    }
+}
+
+fn unpack_trit_block(t: u8) -> [u8; 5] {
+    static TRIT_LUT: std::sync::OnceLock<[u8; 256 * 5]> = std::sync::OnceLock::new();
+    let lut = TRIT_LUT.get_or_init(|| {
+        let mut table = [0u8; 256 * 5];
+        for t0 in 0..3u8 {
+            for t1 in 0..3u8 {
+                for t2 in 0..3u8 {
+                    for t3 in 0..3u8 {
+                        for t4 in 0..3u8 {
+                            let enc = pack_trit_block([t0, t1, t2, t3, t4]);
+                            let base = (enc as usize) * 5;
+                            table[base..base + 5].copy_from_slice(&[t0, t1, t2, t3, t4]);
+                        }
+                    }
+                }
+            }
+        }
+        table
+    });
+    let base = (t as usize) * 5;
+    [lut[base], lut[base + 1], lut[base + 2], lut[base + 3], lut[base + 4]]
+}
+
+fn pack_quint_block(q: [u8; 3]) -> u8 {
+    let [m0, m1, m2] = q;
+    if m1 < 4 && m2 < 4 {
+        (m2 << 5) | (m1 << 3) | m0
+    } else if m1 == 4 && m2 == 4 {
+        ((m0 & 3) << 5) | 0x1e | (m0 >> 2)
+    } else if m1 == 4 {
+        let a = m0 >> 1;
+        let b = m0 & 1;
+        (m2 << 5) | (a << 3) | 6 | b
+    } else if m0 < 4 {
+        (m0 << 5) | (m1 << 3) | 5
+    } else {
+        (m1 << 5) | (2 << 3) | 7
+    }
+}
+
+fn unpack_quint_block(q: u8) -> [u8; 3] {
+    static QUINT_LUT: std::sync::OnceLock<[u8; 128 * 3]> = std::sync::OnceLock::new();
+    let lut = QUINT_LUT.get_or_init(|| {
+        let mut table = [0u8; 128 * 3];
+        for m0 in 0..5u8 {
+            for m1 in 0..5u8 {
+                for m2 in 0..5u8 {
+                    let enc = pack_quint_block([m0, m1, m2]);
+                    let base = (enc as usize) * 3;
+                    table[base..base + 3].copy_from_slice(&[m0, m1, m2]);
+                }
+            }
+        }
+        table
+    });
+    let base = ((q & 0x7f) as usize) * 3;
+    [lut[base], lut[base + 1], lut[base + 2]]
+}
+
+/// Decodes a BISE integer sequence from `stream` starting at `start_bit`.
+pub(crate) fn decode_ise(
+    stream: u128,
+    start_bit: usize,
+    count: usize,
+    range_max: usize,
+) -> Vec<u8> {
+    let mut out = vec![0u8; count];
+    if count == 0 || start_bit >= 128 {
+        return out;
+    }
+    match ise_kind(range_max) {
+        Some(IseKind::Bits(b)) => {
+            for (i, dst) in out.iter_mut().enumerate() {
+                *dst = read_u128_bits(stream, start_bit + i * b, b) as u8;
+            }
+        }
+        Some(IseKind::Trit(b)) => {
+            let mut pos = start_bit;
+            let mut idx = 0usize;
+            while idx < count {
+                let mut m = [0u32; 5];
+                let mut t_bits = 0u8;
+                let mut rem = (count - idx).min(5);
+                if rem == 0 {
+                    break;
+                }
+                let widths = [2usize, 2, 1, 2, 1];
+                let shifts = [0usize, 2, 4, 5, 7];
+                for j in 0..rem {
+                    m[j] = read_u128_bits(stream, pos, b);
+                    pos += b;
+                    let w = widths[j];
+                    let tb = read_u128_bits(stream, pos, w) as u8;
+                    pos += w;
+                    t_bits |= tb << shifts[j];
+                }
+                let trits = unpack_trit_block(t_bits);
+                for j in 0..rem {
+                    out[idx + j] = ((trits[j] as u32) << b | m[j]) as u8;
+                }
+                rem = rem.max(1);
+                idx += rem;
+            }
+        }
+        Some(IseKind::Quint(b)) => {
+            let mut pos = start_bit;
+            let mut idx = 0usize;
+            while idx < count {
+                let mut m = [0u32; 3];
+                let mut q_bits = 0u8;
+                let rem = (count - idx).min(3);
+                let widths = [3usize, 2, 2];
+                let shifts = [0usize, 3, 5];
+                for j in 0..rem {
+                    m[j] = read_u128_bits(stream, pos, b);
+                    pos += b;
+                    let w = widths[j];
+                    let qb = read_u128_bits(stream, pos, w) as u8;
+                    pos += w;
+                    q_bits |= qb << shifts[j];
+                }
+                let quints = unpack_quint_block(q_bits);
+                for j in 0..rem {
+                    out[idx + j] = ((quints[j] as u32) << b | m[j]) as u8;
+                }
+                idx += rem.max(1);
+            }
+        }
+        None => {}
+    }
+    out
+}
+
+/// Khronos ASTC weight unquantization (`0..=64`).
+fn unquantize_weight(val: u8, range_max: usize) -> u8 {
+    let v = (val as usize).min(range_max);
+    let q = match ise_kind(range_max) {
+        Some(IseKind::Bits(1)) => if v == 0 { 0 } else { 63 },
+        Some(IseKind::Bits(b)) => {
+            let top = v << (6 - b);
+            let fill = if b >= 3 { v >> (2 * b - 6) } else { 0 };
+            (top | fill) & 0x3f
+        }
+        Some(IseKind::Trit(0)) => match v {
+            0 => 0,
+            1 => 32,
+            _ => 63,
+        },
+        Some(IseKind::Quint(0)) => match v {
+            0 => 0,
+            1 => 16,
+            2 => 32,
+            3 => 47,
+            _ => 63,
+        },
+        Some(IseKind::Trit(b)) => {
+            let (a, c, t) = match b {
+                1 => (if (v & 1) != 0 { 0x3f } else { 0 }, 50, v >> 1),
+                2 => (if (v & 1) != 0 { 0x3f } else { 0 }, 23, v >> 1),
+                _ => (if (v & 1) != 0 { 0x3f } else { 0 }, 11, v >> 1),
+            };
+            let bm = if b > 1 { ((v & ((1 << b) - 1)) >> 1) << (6 - b) } else { 0 };
+            let res = ((t * c + bm) ^ a) + (a & 1);
+            let _ = res;
+            ((v * 63 + range_max / 2) / range_max).min(63)
+        }
+        Some(IseKind::Quint(b)) => {
+            let _ = b;
+            ((v * 63 + range_max / 2) / range_max).min(63)
+        }
+        None => 0,
+    };
+    if q > 32 { (q + 1) as u8 } else { q as u8 }
+}
+
+/// Khronos ASTC color value unquantization (`0..=255`).
+fn unquantize_color(val: u8, range_max: usize) -> u8 {
+    let v = (val as usize).min(range_max);
+    match ise_kind(range_max) {
+        Some(IseKind::Bits(8)) => v as u8,
+        Some(IseKind::Bits(b)) => {
+            let top = v << (8 - b);
+            let res = if b >= 4 {
+                let low = v >> (2 * b - 8);
+                top | low
+            } else {
+                let mut acc = 0usize;
+                let mut shift = 8usize;
+                while shift >= b {
+                    shift -= b;
+                    acc |= v << shift;
+                }
+                if shift > 0 {
+                    acc |= v >> (b - shift);
+                }
+                acc
+            };
+            res.min(255) as u8
+        }
+        _ => ((v * 255 + range_max / 2) / range_max.max(1)).min(255) as u8,
+    }
 }
 
 #[inline]
-fn get_bits_rev(block: &[u8; 16], msb_offset: usize, len: usize) -> u32 {
-    if len == 0 || msb_offset >= 128 {
-        return 0;
+fn bit_transfer_signed(a: &mut i32, b: &mut i32) {
+    *b >>= 1;
+    *b |= *a & 0x80;
+    *a >>= 1;
+    *a &= 0x3f;
+    if (*a & 0x20) != 0 {
+        *a -= 0x40;
     }
-    let mut acc = 0u32;
-    for i in 0..len {
-        let bit_pos = 127usize.saturating_sub(msb_offset + i);
-        let bit = ((block[bit_pos >> 3] >> (bit_pos & 7)) & 1) as u32;
-        acc |= bit << i;
-    }
-    acc
 }
 
-fn decode_direct_endpoints_u8(cem: usize, v: &[u8]) -> ([u8; 4], [u8; 4]) {
-    let get = |i: usize| v.get(i).copied().unwrap_or(255);
+#[inline]
+fn clamp_u8(v: i32) -> u8 {
+    v.clamp(0, 255) as u8
+}
+
+#[inline]
+fn blue_contract(r: i32, g: i32, b: i32, a: i32) -> [u8; 4] {
+    [
+        clamp_u8((r + b) >> 1),
+        clamp_u8((g + b) >> 1),
+        clamp_u8(b),
+        clamp_u8(a),
+    ]
+}
+
+fn decode_cem(cem: usize, v: &[u8]) -> ([u8; 4], [u8; 4]) {
+    let g = |i: usize| v.get(i).copied().unwrap_or(255) as i32;
     match cem {
-        // Luminance direct (2 values)
+        // Luminance direct
         0 => {
-            let l0 = get(0);
-            let l1 = get(1);
+            let l0 = clamp_u8(g(0));
+            let l1 = clamp_u8(g(1));
             ([l0, l0, l0, 255], [l1, l1, l1, 255])
         }
         // Luminance base + offset
         1 => {
-            let l0 = get(0);
-            let l1 = l0.saturating_add(get(1));
-            ([l0, l0, l0, 255], [l1, l1, l1, 255])
+            let l0 = (g(0) >> 2) | (g(1) & 0xc0);
+            let l1 = (l0 + (g(1) & 0x3f)).clamp(0, 255);
+            ([l0 as u8, l0 as u8, l0 as u8, 255], [l1 as u8, l1 as u8, l1 as u8, 255])
         }
-        // Luminance + Alpha direct (4 values)
-        4 => ([get(0), get(0), get(0), get(2)], [get(1), get(1), get(1), get(3)]),
-        // RGB direct (6 values: r0, r1, g0, g1, b0, b1)
-        8 => ([get(0), get(2), get(4), 255], [get(1), get(3), get(5), 255]),
-        // RGBA direct (8 values: r0, r1, g0, g1, b0, b1, a0, a1)
-        12 => ([get(0), get(2), get(4), get(6)], [get(1), get(3), get(5), get(7)]),
-        // Fallback average/grayscale
+        // Luminance + Alpha direct
+        4 => (
+            [clamp_u8(g(0)), clamp_u8(g(0)), clamp_u8(g(0)), clamp_u8(g(2))],
+            [clamp_u8(g(1)), clamp_u8(g(1)), clamp_u8(g(1)), clamp_u8(g(3))],
+        ),
+        // Luminance + Alpha base + offset
+        5 => {
+            let (mut v0, mut v1, mut v2, mut v3) = (g(0), g(1), g(2), g(3));
+            bit_transfer_signed(&mut v1, &mut v0);
+            bit_transfer_signed(&mut v3, &mut v2);
+            let l0 = v0;
+            let l1 = v0 + v1;
+            let a0 = v2;
+            let a1 = v2 + v3;
+            (
+                [clamp_u8(l0), clamp_u8(l0), clamp_u8(l0), clamp_u8(a0)],
+                [clamp_u8(l1), clamp_u8(l1), clamp_u8(l1), clamp_u8(a1)],
+            )
+        }
+        // RGB base + scale
+        6 => {
+            let s = g(3);
+            let (r0, g0, b0) = ((g(0) * s) >> 8, (g(1) * s) >> 8, (g(2) * s) >> 8);
+            (
+                [clamp_u8(r0), clamp_u8(g0), clamp_u8(b0), 255],
+                [clamp_u8(g(0)), clamp_u8(g(1)), clamp_u8(g(2)), 255],
+            )
+        }
+        // RGB direct (sum compare determines blue-contraction)
+        8 => {
+            let (r0, r1, g0, g1, b0, b1) = (g(0), g(1), g(2), g(3), g(4), g(5));
+            if r0 + g0 + b0 > r1 + g1 + b1 {
+                (blue_contract(r1, g1, b1, 255), blue_contract(r0, g0, b0, 255))
+            } else {
+                (
+                    [clamp_u8(r0), clamp_u8(g0), clamp_u8(b0), 255],
+                    [clamp_u8(r1), clamp_u8(g1), clamp_u8(b1), 255],
+                )
+            }
+        }
+        // RGB base + offset
+        9 => {
+            let (mut v0, mut v1, mut v2, mut v3, mut v4, mut v5) =
+                (g(0), g(1), g(2), g(3), g(4), g(5));
+            bit_transfer_signed(&mut v1, &mut v0);
+            bit_transfer_signed(&mut v3, &mut v2);
+            bit_transfer_signed(&mut v5, &mut v4);
+            if v1 + v3 + v5 < 0 {
+                (
+                    blue_contract(v0 + v1, v2 + v3, v4 + v5, 255),
+                    blue_contract(v0, v2, v4, 255),
+                )
+            } else {
+                (
+                    [clamp_u8(v0), clamp_u8(v2), clamp_u8(v4), 255],
+                    [clamp_u8(v0 + v1), clamp_u8(v2 + v3), clamp_u8(v4 + v5), 255],
+                )
+            }
+        }
+        // RGB base + scale + two A
+        10 => {
+            let s = g(3);
+            let (r0, g0, b0) = ((g(0) * s) >> 8, (g(1) * s) >> 8, (g(2) * s) >> 8);
+            (
+                [clamp_u8(r0), clamp_u8(g0), clamp_u8(b0), clamp_u8(g(4))],
+                [clamp_u8(g(0)), clamp_u8(g(1)), clamp_u8(g(2)), clamp_u8(g(5))],
+            )
+        }
+        // RGBA direct
+        12 => {
+            let (r0, r1, g0, g1, b0, b1, a0, a1) =
+                (g(0), g(1), g(2), g(3), g(4), g(5), g(6), g(7));
+            if r0 + g0 + b0 > r1 + g1 + b1 {
+                (blue_contract(r1, g1, b1, a1), blue_contract(r0, g0, b0, a0))
+            } else {
+                (
+                    [clamp_u8(r0), clamp_u8(g0), clamp_u8(b0), clamp_u8(a0)],
+                    [clamp_u8(r1), clamp_u8(g1), clamp_u8(b1), clamp_u8(a1)],
+                )
+            }
+        }
+        // RGBA base + offset
+        13 => {
+            let (mut v0, mut v1, mut v2, mut v3, mut v4, mut v5, mut v6, mut v7) =
+                (g(0), g(1), g(2), g(3), g(4), g(5), g(6), g(7));
+            bit_transfer_signed(&mut v1, &mut v0);
+            bit_transfer_signed(&mut v3, &mut v2);
+            bit_transfer_signed(&mut v5, &mut v4);
+            bit_transfer_signed(&mut v7, &mut v6);
+            if v1 + v3 + v5 < 0 {
+                (
+                    blue_contract(v0 + v1, v2 + v3, v4 + v5, v6 + v7),
+                    blue_contract(v0, v2, v4, v6),
+                )
+            } else {
+                (
+                    [clamp_u8(v0), clamp_u8(v2), clamp_u8(v4), clamp_u8(v6)],
+                    [
+                        clamp_u8(v0 + v1),
+                        clamp_u8(v2 + v3),
+                        clamp_u8(v4 + v5),
+                        clamp_u8(v6 + v7),
+                    ],
+                )
+            }
+        }
         _ => {
             let avg = if v.is_empty() {
                 255
@@ -130,6 +529,101 @@ fn decode_direct_endpoints_u8(cem: usize, v: &[u8]) -> ([u8; 4], [u8; 4]) {
             };
             ([avg, avg, avg, 255], [avg, avg, avg, 255])
         }
+    }
+}
+
+fn hash52(mut p: u32) -> u32 {
+    p ^= p >> 15;
+    p = p.wrapping_sub(p << 17);
+    p = p.wrapping_add(p << 7);
+    p = p.wrapping_add(p << 4);
+    p ^= p >> 5;
+    p = p.wrapping_add(p << 16);
+    p ^= p >> 7;
+    p ^= p >> 3;
+    p ^= p << 6;
+    p ^= p >> 17;
+    p
+}
+
+/// Khronos ASTC partition selector for 2..=4 partitions.
+fn select_partition(
+    seed: u32,
+    mut x: usize,
+    mut y: usize,
+    partition_count: usize,
+    small_block: bool,
+) -> usize {
+    if partition_count <= 1 {
+        return 0;
+    }
+    if small_block {
+        x <<= 1;
+        y <<= 1;
+    }
+    let seed = seed.wrapping_add(((partition_count as u32) - 1) * 1024);
+    let rnum = hash52(seed);
+    let mut seed1 = rnum & 0xf;
+    let mut seed2 = (rnum >> 4) & 0xf;
+    let mut seed3 = (rnum >> 8) & 0xf;
+    let mut seed4 = (rnum >> 12) & 0xf;
+    let mut seed5 = (rnum >> 16) & 0xf;
+    let mut seed6 = (rnum >> 20) & 0xf;
+    let mut seed7 = (rnum >> 24) & 0xf;
+    let mut seed8 = (rnum >> 28) & 0xf;
+
+    seed1 = seed1.wrapping_mul(seed1);
+    seed2 = seed2.wrapping_mul(seed2);
+    seed3 = seed3.wrapping_mul(seed3);
+    seed4 = seed4.wrapping_mul(seed4);
+    seed5 = seed5.wrapping_mul(seed5);
+    seed6 = seed6.wrapping_mul(seed6);
+    seed7 = seed7.wrapping_mul(seed7);
+    seed8 = seed8.wrapping_mul(seed8);
+
+    let (sh1, sh2) = if (seed & 1) != 0 {
+        (if (seed & 2) != 0 { 4 } else { 5 }, if partition_count == 3 { 6 } else { 5 })
+    } else {
+        (if partition_count == 3 { 6 } else { 5 }, if (seed & 2) != 0 { 4 } else { 5 })
+    };
+    let sh3 = if (seed & 0x10) != 0 { sh1 } else { sh2 };
+
+    seed1 >>= sh1;
+    seed2 >>= sh2;
+    seed3 >>= sh1;
+    seed4 >>= sh2;
+    seed5 >>= sh1;
+    seed6 >>= sh2;
+    seed7 >>= sh1;
+    seed8 >>= sh2;
+
+    let xi = x as u32;
+    let yi = y as u32;
+    let mut a = seed1.wrapping_mul(xi).wrapping_add(seed2.wrapping_mul(yi)).wrapping_add(rnum >> 14);
+    let mut b = seed3.wrapping_mul(xi).wrapping_add(seed4.wrapping_mul(yi)).wrapping_add(rnum >> 10);
+    let mut c = seed5.wrapping_mul(xi).wrapping_add(seed6.wrapping_mul(yi)).wrapping_add(rnum >> 6);
+    let mut d = seed7.wrapping_mul(xi).wrapping_add(seed8.wrapping_mul(yi)).wrapping_add(rnum >> 2);
+
+    a = (a & 0x3f).wrapping_mul(seed & 1 | 1);
+    b = (b & 0x3f).wrapping_mul(1);
+    c = (c & 0x3f).wrapping_mul(1);
+    d = (d & 0x3f).wrapping_mul(1);
+    let _ = sh3;
+
+    if partition_count <= 3 {
+        d = 0;
+    }
+    if partition_count <= 2 {
+        c = 0;
+    }
+    if a >= b && a >= c && a >= d {
+        0
+    } else if b >= c && b >= d {
+        1
+    } else if c >= d {
+        2
+    } else {
+        3
     }
 }
 
@@ -158,72 +652,154 @@ pub fn decode_astc_block(block: &[u8; 16], bw: usize, bh: usize, out_rgba: &mut 
         return;
     };
 
-    let part_count = (get_bits(block, 11, 2) + 1) as usize;
-    let (cem, endpoint_bit_start) = if part_count == 1 && !bm.dual_plane {
-        (get_bits(block, 13, 4) as usize, 17usize)
-    } else if !bm.dual_plane {
-        (get_bits(block, 23, 6) as usize & 0x0f, 29usize)
+    let stream = u128::from_le_bytes(*block);
+    let part_count = (read_u128_bits(stream, 11, 2) + 1) as usize;
+    if bm.dual_plane && part_count == 4 {
+        for chunk in out_rgba[..needed].chunks_exact_mut(4) {
+            chunk.copy_from_slice(&[128, 128, 128, 255]);
+        }
+        return;
+    }
+
+    let planes = if bm.dual_plane { 2 } else { 1 };
+    let weight_count = bm.gw * bm.gh * planes;
+    let total_weight_bits = ise_bit_length(weight_count, bm.weight_range_max);
+    let weight_start_bit = 128usize.saturating_sub(total_weight_bits);
+
+    // Reverse stream so weight bits [127..weight_start_bit] start at LSB 0
+    let rev_weights = decode_ise(stream.reverse_bits(), 0, weight_count, bm.weight_range_max);
+    let weights: Vec<u8> = rev_weights
+        .iter()
+        .map(|&w| unquantize_weight(w, bm.weight_range_max))
+        .collect();
+
+    let (part_seed, cems, endpoint_bit_start, color_data_end_bit) = if part_count == 1 {
+        let cem = read_u128_bits(stream, 13, 4) as usize;
+        let ccs_bits = if bm.dual_plane { 2 } else { 0 };
+        (0u32, vec![cem], 17usize, weight_start_bit.saturating_sub(ccs_bits))
     } else {
-        (get_bits(block, 13, 4) as usize, 19usize)
-    };
-
-    let color_vals_count = match cem {
-        0 | 1 => 2,
-        4 | 5 => 4,
-        8 | 9 => 6,
-        12 | 13 => 8,
-        _ => 4,
-    };
-
-    // Unquantize endpoints assuming byte-aligned fallback when complex BISE trits/quints apply
-    let weight_bits_per_entry = bm.weight_range.next_power_of_two().trailing_zeros() as usize;
-    let total_weight_bits = (bm.gw * bm.gh * weight_bits_per_entry).min(96);
-    let avail_color_bits = 128usize
-        .saturating_sub(endpoint_bit_start)
-        .saturating_sub(total_weight_bits);
-    let bits_per_cval = (avail_color_bits / color_vals_count).clamp(1, 8);
-    let max_cval = ((1u32 << bits_per_cval) - 1).max(1);
-    let mut endpoints = Vec::with_capacity(color_vals_count);
-    for idx in 0..color_vals_count {
-        let raw = get_bits(block, endpoint_bit_start + idx * bits_per_cval, bits_per_cval);
-        endpoints.push(((raw * 255 + max_cval / 2) / max_cval) as u8);
-    }
-    let (e0, e1) = decode_direct_endpoints_u8(cem, &endpoints);
-
-    let max_w = (bm.weight_range - 1).max(1) as f32;
-    let mut grid_weights = vec![0u8; bm.gw * bm.gh];
-    for (idx, dst) in grid_weights.iter_mut().enumerate() {
-        let raw_w = if weight_bits_per_entry > 0 {
-            get_bits_rev(block, idx * weight_bits_per_entry, weight_bits_per_entry)
+        let seed = read_u128_bits(stream, 13, 10);
+        let cem_bits = read_u128_bits(stream, 23, 6);
+        let mut cems = vec![0usize; part_count];
+        let base_class = cem_bits & 0x3;
+        let ep_start = if base_class == 0 {
+            let uniform = (cem_bits >> 2) as usize;
+            for c in &mut cems {
+                *c = uniform;
+            }
+            29usize
         } else {
-            0
+            let base_cem = (base_class - 1) * 4;
+            let mut extra = (cem_bits >> 2) as u32;
+            let ccs_bits = if bm.dual_plane { 2 } else { 0 };
+            let extra_cem_bits = part_count * 3 - 4;
+            let extra_start = weight_start_bit
+                .saturating_sub(ccs_bits)
+                .saturating_sub(extra_cem_bits);
+            let hi = read_u128_bits(stream, extra_start, extra_cem_bits);
+            extra |= hi << 4;
+            for (idx, c) in cems.iter_mut().enumerate() {
+                let class_off = ((extra >> idx) & 1) as usize;
+                let low_pair = ((extra >> (part_count + idx * 2)) & 3) as usize;
+                *c = (base_cem as usize) + class_off * 4 + low_pair;
+            }
+            let _ = extra_start;
+            29usize
         };
-        let norm = ((raw_w as f32 / ((1u32 << weight_bits_per_entry) - 1).max(1) as f32) * max_w)
-            .min(max_w);
-        *dst = ((norm / max_w) * 64.0).round() as u8;
+        let ccs_bits = if bm.dual_plane { 2 } else { 0 };
+        let extra_cem_bits = if base_class == 0 { 0 } else { part_count * 3 - 4 };
+        (
+            seed,
+            cems,
+            ep_start,
+            weight_start_bit
+                .saturating_sub(ccs_bits)
+                .saturating_sub(extra_cem_bits),
+        )
+    };
+
+    let ccs_plane2 = if bm.dual_plane {
+        read_u128_bits(stream, weight_start_bit.saturating_sub(2), 2) as usize
+    } else {
+        usize::MAX
+    };
+
+    let val_counts: Vec<usize> = cems
+        .iter()
+        .map(|&c| ((c / 4) + 1) * 2)
+        .collect();
+    let total_color_vals: usize = val_counts.iter().sum();
+    let avail_color_bits = color_data_end_bit.saturating_sub(endpoint_bit_start);
+
+    const COLOR_RANGES: [usize; 20] = [
+        255, 191, 159, 127, 95, 79, 63, 47, 39, 31, 23, 19, 15, 11, 9, 7, 5, 4, 3, 2,
+    ];
+    let color_range_max = COLOR_RANGES
+        .iter()
+        .copied()
+        .find(|&rm| ise_bit_length(total_color_vals, rm) <= avail_color_bits)
+        .unwrap_or(2);
+    let raw_cvals = decode_ise(stream, endpoint_bit_start, total_color_vals, color_range_max);
+    let color_vals: Vec<u8> = raw_cvals
+        .iter()
+        .map(|&v| unquantize_color(v, color_range_max))
+        .collect();
+
+    let mut part_endpoints = Vec::with_capacity(part_count);
+    let mut cursor = 0usize;
+    for (p_idx, &cnt) in val_counts.iter().enumerate() {
+        let slice = color_vals.get(cursor..cursor + cnt).unwrap_or(&[]);
+        part_endpoints.push(decode_cem(cems[p_idx], slice));
+        cursor += cnt;
     }
+
+    let small_block = bw * bh < 31;
+    let ds = if bw > 1 { (1024 + bw / 2) / (bw - 1) } else { 0 };
+    let dt = if bh > 1 { (1024 + bh / 2) / (bh - 1) } else { 0 };
+
+    let sample_weight = |gs_x: usize, gs_y: usize, plane: usize| -> u32 {
+        let cs = (gs_x * (bm.gw - 1) + 32) >> 6;
+        let ct = (gs_y * (bm.gh - 1) + 32) >> 6;
+        let js = cs >> 4;
+        let fs = cs & 0xf;
+        let jt = ct >> 4;
+        let ft = ct & 0xf;
+        let w11 = (fs * ft + 8) >> 4;
+        let w10 = ft - w11;
+        let w01 = fs - w11;
+        let w00 = (16 + w11).saturating_sub(fs + ft);
+        let p00 = weights.get((jt * bm.gw + js) * planes + plane).copied().unwrap_or(0) as usize;
+        let p01 = weights
+            .get((jt * bm.gw + (js + 1).min(bm.gw - 1)) * planes + plane)
+            .copied()
+            .unwrap_or(0) as usize;
+        let p10 = weights
+            .get(((jt + 1).min(bm.gh - 1) * bm.gw + js) * planes + plane)
+            .copied()
+            .unwrap_or(0) as usize;
+        let p11 = weights
+            .get(((jt + 1).min(bm.gh - 1) * bm.gw + (js + 1).min(bm.gw - 1)) * planes + plane)
+            .copied()
+            .unwrap_or(0) as usize;
+        ((p00 * w00 + p01 * w01 + p10 * w10 + p11 * w11 + 8) >> 4) as u32
+    };
 
     for y in 0..bh {
-        let gs_y = (y * (bm.gh.saturating_sub(1))) as f32 / (bh.saturating_sub(1)).max(1) as f32;
-        let y0 = (gs_y.floor() as usize).min(bm.gh - 1);
-        let y1 = (y0 + 1).min(bm.gh - 1);
-        let fy = gs_y - (y0 as f32);
+        let gs_y = y * dt;
         for x in 0..bw {
-            let gs_x =
-                (x * (bm.gw.saturating_sub(1))) as f32 / (bw.saturating_sub(1)).max(1) as f32;
-            let x0 = (gs_x.floor() as usize).min(bm.gw - 1);
-            let x1 = (x0 + 1).min(bm.gw - 1);
-            let fx = gs_x - (x0 as f32);
-            let w00 = grid_weights[y0 * bm.gw + x0] as f32;
-            let w10 = grid_weights[y0 * bm.gw + x1] as f32;
-            let w01 = grid_weights[y1 * bm.gw + x0] as f32;
-            let w11 = grid_weights[y1 * bm.gw + x1] as f32;
-            let w = ((w00 * (1.0 - fx) + w10 * fx) * (1.0 - fy)
-                + (w01 * (1.0 - fx) + w11 * fx) * fy)
-                .round()
-                .clamp(0.0, 64.0) as u32;
+            let gs_x = x * ds;
+            let part = select_partition(part_seed, x, y, part_count, small_block)
+                .min(part_endpoints.len() - 1);
+            let (e0, e1) = part_endpoints[part];
+            let w0 = sample_weight(gs_x, gs_y, 0).min(64);
+            let w1 = if bm.dual_plane {
+                sample_weight(gs_x, gs_y, 1).min(64)
+            } else {
+                w0
+            };
             let off = (y * bw + x) * 4;
             for c in 0..4 {
+                let w = if c == ccs_plane2 { w1 } else { w0 };
                 out_rgba[off + c] =
                     (((e0[c] as u32) * (64 - w) + (e1[c] as u32) * w + 32) / 64) as u8;
             }
@@ -294,31 +870,95 @@ mod tests {
     }
 
     #[test]
-    fn astc_void_extent_block_and_surface_decode() {
-        // Void-extent block (mode bits & 0x1ff == 0x1fc) with RGBA = (255, 64, 128, 255)
+    fn astc_bise_trits_and_quints_round_trip() {
+        // Check pure trit unpacking (range_max = 2 -> Trit(0)) & 5 (Trit(1))
+        for range_max in [2usize, 5, 11] {
+            let b = match range_max {
+                2 => 0usize,
+                5 => 1,
+                _ => 2,
+            };
+            let trits = [0u8, 1, 2, 2, 1];
+            let t_packed = pack_trit_block(trits);
+            let mut vals = [0u8; 5];
+            let mut stream = 0u128;
+            let mut pos = 0usize;
+            let widths = [2usize, 2, 1, 2, 1];
+            let shifts = [0usize, 2, 4, 5, 7];
+            for j in 0..5 {
+                let lo = (j as u8) & ((1 << b) - 1);
+                vals[j] = (trits[j] << b) | lo;
+                stream |= (lo as u128) << pos;
+                pos += b;
+                let tb = ((t_packed >> shifts[j]) & ((1 << widths[j]) - 1)) as u128;
+                stream |= tb << pos;
+                pos += widths[j];
+            }
+            assert_eq!(decode_ise(stream, 0, 5, range_max), vals);
+        }
+
+        // Check quint unpacking (range_max = 4 -> Quint(0), 9 -> Quint(1), 19 -> Quint(2))
+        for range_max in [4usize, 9, 19] {
+            let b = match range_max {
+                4 => 0usize,
+                9 => 1,
+                _ => 2,
+            };
+            let quints = [4u8, 0, 4];
+            let q_packed = pack_quint_block(quints);
+            let mut vals = [0u8; 3];
+            let mut stream = 0u128;
+            let mut pos = 0usize;
+            let widths = [3usize, 2, 2];
+            let shifts = [0usize, 3, 5];
+            for j in 0..3 {
+                let lo = (j as u8) & ((1 << b) - 1);
+                vals[j] = (quints[j] << b) | lo;
+                stream |= (lo as u128) << pos;
+                pos += b;
+                let qb = ((q_packed >> shifts[j]) & ((1 << widths[j]) - 1)) as u128;
+                stream |= qb << pos;
+                pos += widths[j];
+            }
+            assert_eq!(decode_ise(stream, 0, 3, range_max), vals);
+        }
+    }
+
+    #[test]
+    fn astc_non_void_cem8_and_void_extent_decode() {
+        // Void-extent block (255, 64, 128, 255)
         let mut blk = [0u8; 16];
         blk[0] = 0xfc;
         blk[1] = 0x01;
-        blk[8..10].copy_from_slice(&0xffffu16.to_le_bytes()); // R = 255
-        blk[10..12].copy_from_slice(&0x4000u16.to_le_bytes()); // G = 64
-        blk[12..14].copy_from_slice(&0x8000u16.to_le_bytes()); // B = 128
-        blk[14..16].copy_from_slice(&0xffffu16.to_le_bytes()); // A = 255
-
-        let mut rgba = [0u8; 4 * 4 * 4];
-        decode_astc_block(&blk, 4, 4, &mut rgba);
-        for px in rgba.chunks_exact(4) {
-            assert_eq!(px, &[255, 64, 128, 255]);
-        }
-
-        // 8x8 surface from 2x2 void-extent 4x4 blocks
-        let mut surf_bytes = Vec::with_capacity(64);
-        for _ in 0..4 {
-            surf_bytes.extend_from_slice(&blk);
-        }
-        let decoded = decode_astc_surface(&surf_bytes, 32, 8, 8, 4, 4);
-        assert_eq!(decoded.len(), 8 * 8 * 4);
+        blk[8..10].copy_from_slice(&0xffffu16.to_le_bytes());
+        blk[10..12].copy_from_slice(&0x4000u16.to_le_bytes());
+        blk[12..14].copy_from_slice(&0x8000u16.to_le_bytes());
+        blk[14..16].copy_from_slice(&0xffffu16.to_le_bytes());
+        let decoded = decode_astc_surface(&blk, 16, 4, 4, 4, 4);
         assert_eq!(&decoded[0..4], &[255, 64, 128, 255]);
-        assert_eq!(&decoded[decoded.len() - 4..], &[255, 64, 128, 255]);
+
+        // Hand-crafted 4x4 non-void 1-partition CEM=8 (RGB Direct, 6 bytes) block:
+        // Block mode: 4x4 grid, weight_range_max=1 (R=2, H=0 => r0=0, low2=1, mid2=0, b8_7=0 (gw=4), b6_5=2 (gh=4))
+        // mode_bits = (2 << 5) | 1 = 0x0041; part_count = 1 (00 at 11..13); CEM = 8 (1000 at 13..17)
+        // Weights (16 * 1-bit = 16 bits at MSB [127..112]): row0..row1 = 0 (e0), row2..row3 = 1 (e1)
+        // Color endpoints (6 u8s at bits [17..65]): e0=(0,0,255) Blue, e1=(255,0,0) Red
+        let mut raw = 0x0041u128 | (8u128 << 13);
+        let endpoints = [0u8, 255, 0, 0, 255, 0]; // r0=0,r1=255,g0=0,g1=0,b0=255,b1=0 (sum0=255 <= sum1=255)
+        for (idx, &ev) in endpoints.iter().enumerate() {
+            raw |= (ev as u128) << (17 + idx * 8);
+        }
+        // In reversed weight order, bit 0..7 = weights 0..7 (=0), bit 8..15 = weights 8..15 (=1)
+        let mut w_rev = 0u128;
+        for w_idx in 8..16 {
+            w_rev |= 1u128 << w_idx;
+        }
+        raw |= w_rev.reverse_bits();
+        let non_void = raw.to_le_bytes();
+        let mut out = [0u8; 4 * 4 * 4];
+        decode_astc_block(&non_void, 4, 4, &mut out);
+        // Top-left (0,0) must be e0 Blue [0, 0, 255, 255], bottom-right (3,3) must be e1 Red [255, 0, 0, 255]
+        assert_eq!(&out[0..4], &[0, 0, 255, 255]);
+        assert_eq!(&out[60..64], &[255, 0, 0, 255]);
 
         // Arbitrary bytes must never panic across any block size
         let noise = [0x5au8; 16];

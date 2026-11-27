@@ -665,7 +665,7 @@ extern "C" fn dev_new_render_pipeline(_this: Id, _cmd: Sel, desc: Id, _err: *mut
             if !vdesc.is_null() {
                 let attrs_arr: Id = send0(vdesc, "attributes");
                 if !attrs_arr.is_null() {
-                    for idx in 0..8usize {
+                    for idx in 0..31usize {
                         let attr: Id = send1(attrs_arr, "objectAtIndexedSubscript:", idx);
                         if !attr.is_null() {
                             let format: usize = send0(attr, "format");
@@ -683,7 +683,7 @@ extern "C" fn dev_new_render_pipeline(_this: Id, _cmd: Sel, desc: Id, _err: *mut
                 }
                 let layouts_arr: Id = send0(vdesc, "layouts");
                 if !layouts_arr.is_null() {
-                    for idx in 0..8usize {
+                    for idx in 0..31usize {
                         let layout: Id = send1(layouts_arr, "objectAtIndexedSubscript:", idx);
                         if !layout.is_null() {
                             let stride: usize = send0(layout, "stride");
@@ -881,11 +881,14 @@ extern "C" fn tex_replace_region(
     this: Id,
     _cmd: Sel,
     region: MTLRegion,
-    _level: usize,
+    level: usize,
     bytes: *const u8,
     bytes_per_row: usize,
 ) {
     if this.is_null() || bytes.is_null() || region.size.width == 0 || region.size.height == 0 {
+        return;
+    }
+    if level != 0 {
         return;
     }
     let pf = textures()
@@ -1290,8 +1293,27 @@ fn fmt_byte_size(fmt: usize) -> usize {
         29 => 8,       // Float2
         30 => 12,      // Float3
         31 => 16,      // Float4
+        41 => 4,       // Half2
+        42 => 6,       // Half3
+        43 => 8,       // Half4
         45 => 4,       // UChar4Normalized
         _ => 0,
+    }
+}
+
+fn read_uv_pair(fmt: usize, buf: &[u8], off: usize) -> (f32, f32) {
+    if fmt == 41 || fmt == 43 {
+        let Some(s) = buf.get(off..off + 4) else {
+            return (0.0, 0.0);
+        };
+        let u = f16_to_f32(u16::from_le_bytes([s[0], s[1]]));
+        let v = f16_to_f32(u16::from_le_bytes([s[2], s[3]]));
+        (u, v)
+    } else {
+        (
+            read_f32_le(buf, off).unwrap_or(0.0),
+            read_f32_le(buf, off + 4).unwrap_or(0.0),
+        )
     }
 }
 
@@ -1332,27 +1354,33 @@ fn sample_tex_rgba(tex: &(usize, usize, usize, Vec<u8>), u: f32, v: f32) -> [f32
     }
 }
 
-fn try_extract_mvp(vb_data: &HashMap<usize, Vec<u8>>, pos_buf_idx: usize) -> Option<[f32; 16]> {
-    if pos_buf_idx == 0 {
-        return None;
-    }
-    let buf0 = vb_data.get(&0)?;
-    if buf0.len() < 64 {
-        return None;
-    }
+fn read_mat4(buf: &[u8], off: usize) -> Option<[f32; 16]> {
     let mut m = [0.0f32; 16];
     for (idx, dst) in m.iter_mut().enumerate() {
-        let v = read_f32_le(buf0, idx * 4)?;
+        let v = read_f32_le(buf, off + idx * 4)?;
         if !v.is_finite() {
             return None;
         }
         *dst = v;
     }
-    let has_xyz = m[..12].iter().any(|&v| v.abs() > 1e-6);
-    if !has_xyz || m[15].abs() > 1e4 {
+    if !m[..12].iter().any(|&v| v.abs() > 1e-6) || m[15].abs() > 1e4 {
         return None;
     }
     Some(m)
+}
+
+#[inline]
+fn mul_mat4(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
+    let mut out = [0.0f32; 16];
+    for col in 0..4 {
+        for row in 0..4 {
+            out[col * 4 + row] = a[0 * 4 + row] * b[col * 4 + 0]
+                + a[1 * 4 + row] * b[col * 4 + 1]
+                + a[2 * 4 + row] * b[col * 4 + 2]
+                + a[3 * 4 + row] * b[col * 4 + 3];
+        }
+    }
+    out
 }
 
 #[inline]
@@ -1364,6 +1392,103 @@ fn apply_mvp_to_ndc(m: &[f32; 16], x: f32, y: f32, z: f32) -> Option<(f32, f32)>
         return None;
     }
     Some((cx / cw, cy / cw))
+}
+
+fn is_good_ndc_transform(m: &[f32; 16], verts: &[(f32, f32, f32)]) -> bool {
+    if verts.is_empty() {
+        return false;
+    }
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for &(vx, vy, vz) in verts {
+        let Some((nx, ny)) = apply_mvp_to_ndc(m, vx, vy, vz) else {
+            return false;
+        };
+        if nx.abs() > 2.5 || ny.abs() > 2.5 {
+            return false;
+        }
+        min_x = min_x.min(nx);
+        max_x = max_x.max(nx);
+        min_y = min_y.min(ny);
+        max_y = max_y.max(ny);
+    }
+    (max_x - min_x) > 1e-3 && (max_y - min_y) > 1e-3
+}
+
+fn resolve_draw_transform(
+    vb_data: &HashMap<usize, Vec<u8>>,
+    pos_buf_idx: usize,
+    sample_verts: &[(f32, f32, f32)],
+    tw: usize,
+    th: usize,
+) -> Option<[f32; 16]> {
+    if sample_verts.is_empty() {
+        return None;
+    }
+    let raw_in_ndc = sample_verts
+        .iter()
+        .all(|&(x, y, _)| x.abs() <= 1.5 && y.abs() <= 1.5);
+    let is_identity = |m: &[f32; 16]| {
+        (m[0] - 1.0).abs() < 1e-4
+            && (m[5] - 1.0).abs() < 1e-4
+            && (m[10] - 1.0).abs() < 1e-4
+            && m[12].abs() < 1e-4
+            && m[13].abs() < 1e-4
+    };
+
+    if pos_buf_idx != 0 {
+        if let Some(buf0) = vb_data.get(&0) {
+            if buf0.len() >= 64 {
+                let max_off = buf0.len().saturating_sub(64).min(256);
+                let mut fallback_id = None;
+                for off in (0..=max_off).step_by(16) {
+                    if let Some(m) = read_mat4(buf0, off) {
+                        if is_good_ndc_transform(&m, sample_verts) {
+                            if !is_identity(&m) || raw_in_ndc {
+                                return Some(m);
+                            }
+                            if fallback_id.is_none() {
+                                fallback_id = Some(m);
+                            }
+                        }
+                    }
+                }
+                let max_pair = buf0.len().saturating_sub(128).min(192);
+                for off in (0..=max_pair).step_by(16) {
+                    if let (Some(ma), Some(mb)) = (read_mat4(buf0, off), read_mat4(buf0, off + 64)) {
+                        for cand in [mul_mat4(&ma, &mb), mul_mat4(&mb, &ma)] {
+                            if is_good_ndc_transform(&cand, sample_verts) {
+                                return Some(cand);
+                            }
+                        }
+                    }
+                }
+                if let Some(m) = fallback_id {
+                    return Some(m);
+                }
+            }
+        }
+    }
+
+    if tw > 0 && th > 0 {
+        let tw_f = tw as f32;
+        let th_f = th as f32;
+        let has_large_xy = sample_verts.iter().any(|&(x, y, _)| x.abs() > 2.0 || y.abs() > 2.0);
+        let in_pixel_bounds = sample_verts
+            .iter()
+            .all(|&(x, y, _)| x >= -tw_f && x <= 2.0 * tw_f && y >= -th_f && y <= 2.0 * th_f);
+        if has_large_xy && in_pixel_bounds {
+            return Some([
+                2.0 / tw_f, 0.0, 0.0, 0.0,
+                0.0, 2.0 / th_f, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                -1.0, -1.0, 0.0, 1.0,
+            ]);
+        }
+    }
+    None
 }
 
 fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
@@ -1416,12 +1541,7 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
             offset: 0,
             format: 30,
         });
-    let uv_attr = pso
-        .attrs
-        .iter()
-        .find(|a| a.format == 29 && !(a.buffer_idx == pos_attr.buffer_idx && a.offset == pos_attr.offset))
-        .cloned();
-    let col_attr = pso
+    let cand_col_attr = pso
         .attrs
         .iter()
         .find(|a| {
@@ -1445,31 +1565,80 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
         max_end.max(12)
     };
 
-    let mut active_mvp: Option<[f32; 16]> = None;
-    let first_idx = indices[0];
-    let first_raw = {
-        let p_stride = stride_for(pos_attr.buffer_idx);
-        vb_data.get(&pos_attr.buffer_idx).and_then(|p_buf| {
-            let p_off = (first_idx as usize).checked_mul(p_stride)?.checked_add(pos_attr.offset)?;
-            let x = read_f32_le(p_buf, p_off)?;
-            let y = read_f32_le(p_buf, p_off + 4)?;
-            let z = if pos_attr.format >= 30 {
-                read_f32_le(p_buf, p_off + 8).unwrap_or(0.0)
-            } else {
-                0.0
-            };
-            Some((x, y, z))
-        })
+    // Guard Float4 tangent/normal attributes against being mistaken for vertex colors.
+    let col_attr = cand_col_attr.filter(|ca| {
+        if ca.format == 45 {
+            return true;
+        }
+        let cs = stride_for(ca.buffer_idx);
+        let Some(cb) = vb_data.get(&ca.buffer_idx) else {
+            return false;
+        };
+        let Some(coff) = (indices[0] as usize).checked_mul(cs).and_then(|o| o.checked_add(ca.offset)) else {
+            return false;
+        };
+        let (Some(r), Some(g), Some(b), Some(a)) = (
+            read_f32_le(cb, coff),
+            read_f32_le(cb, coff + 4),
+            read_f32_le(cb, coff + 8),
+            read_f32_le(cb, coff + 12),
+        ) else {
+            return false;
+        };
+        (0.0..=1.0).contains(&r)
+            && (0.0..=1.0).contains(&g)
+            && (0.0..=1.0).contains(&b)
+            && a > 0.0
+            && a <= 1.0
+    });
+
+    let same_slot = |a: &VertexAttrInfo, b: &VertexAttrInfo| {
+        a.buffer_idx == b.buffer_idx && a.offset == b.offset
     };
-    if let (Some(cand_m), Some((vx, vy, vz))) =
-        (try_extract_mvp(&vb_data, pos_attr.buffer_idx), first_raw)
-    {
-        if let Some((nx, ny)) = apply_mvp_to_ndc(&cand_m, vx, vy, vz) {
-            if nx.abs() <= 4.0 && ny.abs() <= 4.0 {
-                active_mvp = Some(cand_m);
+    let uv_attr = pso
+        .attrs
+        .iter()
+        .find(|a| matches!(a.format, 29 | 41) && !same_slot(a, &pos_attr))
+        .or_else(|| {
+            pso.attrs.iter().find(|a| {
+                matches!(a.format, 30 | 31 | 43)
+                    && !same_slot(a, &pos_attr)
+                    && col_attr.as_ref().map_or(true, |c| !same_slot(a, c))
+            })
+        })
+        .cloned();
+
+    let mut sample_verts: Vec<(f32, f32, f32)> = Vec::new();
+    let p_stride = stride_for(pos_attr.buffer_idx);
+    if let Some(p_buf) = vb_data.get(&pos_attr.buffer_idx) {
+        let mut seen_idx = Vec::new();
+        for &vi in indices {
+            if !seen_idx.contains(&vi) {
+                seen_idx.push(vi);
+                if let Some(p_off) = (vi as usize).checked_mul(p_stride).and_then(|o| o.checked_add(pos_attr.offset)) {
+                    if let (Some(x), Some(y)) = (read_f32_le(p_buf, p_off), read_f32_le(p_buf, p_off + 4)) {
+                        let z = if pos_attr.format >= 30 {
+                            read_f32_le(p_buf, p_off + 8).unwrap_or(0.0)
+                        } else {
+                            0.0
+                        };
+                        sample_verts.push((x, y, z));
+                        if sample_verts.len() >= 4 {
+                            break;
+                        }
+                    }
+                }
             }
         }
     }
+
+    let (tw_hint, th_hint) = textures()
+        .lock()
+        .unwrap()
+        .get(&st.color_tex)
+        .map(|t| (t.width, t.height))
+        .unwrap_or((0, 0));
+    let active_mvp = resolve_draw_transform(&vb_data, pos_attr.buffer_idx, &sample_verts, tw_hint, th_hint);
 
     let frag_tex_id = st.fragment_textures.get(&0).copied().unwrap_or(0);
     let frag_snap = if frag_tex_id != 0 {
@@ -1483,21 +1652,94 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
     };
 
     if metal_trace_enabled() && MTL_TRACE_COUNT.fetch_add(1, Ordering::Relaxed) < 12 {
-        let (fw, fh, fpf, fnz) = if let Some((w, h, pf, ref p)) = frag_snap {
+        let (fw, fh, fpf, fnz, tex_mid, tex_a_nz) = if let Some(ref ftex) = frag_snap {
+            let (w, h, pf, ref p) = *ftex;
             let nz = p.chunks_exact(4).take(4096).filter(|c| c != &[0, 0, 0, 0]).count();
-            (w, h, pf, nz)
+            let mid = sample_tex_rgba(ftex, 0.5, 0.5);
+            let mut a_nz = 0usize;
+            for gy in 0..16 {
+                for gx in 0..16 {
+                    let s = sample_tex_rgba(ftex, (gx as f32 + 0.5) / 16.0, (gy as f32 + 0.5) / 16.0);
+                    if s[3] > 0.01 {
+                        a_nz += 1;
+                    }
+                }
+            }
+            (w, h, pf, nz, mid, a_nz)
         } else {
-            (0, 0, 0, 0)
+            (0, 0, 0, 0, [0.0; 4], 0)
         };
+        let i0 = indices[0] as usize;
+        let v0_uv = if let Some(ref ua) = uv_attr {
+            let us = stride_for(ua.buffer_idx);
+            let ub = vb_data.get(&ua.buffer_idx);
+            let uoff = i0.checked_mul(us).and_then(|o| o.checked_add(ua.offset));
+            match (ub, uoff) {
+                (Some(b), Some(o)) => read_uv_pair(ua.format, b, o),
+                _ => (0.0, 0.0),
+            }
+        } else {
+            (0.0, 0.0)
+        };
+        let v0_col = if let Some(ref ca) = col_attr {
+            let cs = stride_for(ca.buffer_idx);
+            let cb = vb_data.get(&ca.buffer_idx);
+            let coff = i0.checked_mul(cs).and_then(|o| o.checked_add(ca.offset));
+            match (cb, coff) {
+                (Some(b), Some(o)) if ca.format == 45 => b
+                    .get(o..o + 4)
+                    .map(|s| [s[0] as f32 / 255.0, s[1] as f32 / 255.0, s[2] as f32 / 255.0, s[3] as f32 / 255.0])
+                    .unwrap_or([1.0; 4]),
+                (Some(b), Some(o)) if ca.format == 31 => [
+                    read_f32_le(b, o).unwrap_or(1.0),
+                    read_f32_le(b, o + 4).unwrap_or(1.0),
+                    read_f32_le(b, o + 8).unwrap_or(1.0),
+                    read_f32_le(b, o + 12).unwrap_or(1.0),
+                ],
+                _ => [1.0; 4],
+            }
+        } else {
+            [1.0; 4]
+        };
+        let vp_dbg = st.viewport.unwrap_or(MTLViewport {
+            origin_x: 0.0,
+            origin_y: 0.0,
+            width: tw_hint as f64,
+            height: th_hint as f64,
+            znear: 0.0,
+            zfar: 1.0,
+        });
+        let mut s_min_x = f32::INFINITY;
+        let mut s_max_x = f32::NEG_INFINITY;
+        let mut s_min_y = f32::INFINITY;
+        let mut s_max_y = f32::NEG_INFINITY;
+        for &(vx, vy, vz) in &sample_verts {
+            let (nx, ny) = active_mvp
+                .and_then(|m| apply_mvp_to_ndc(&m, vx, vy, vz))
+                .unwrap_or((vx, vy));
+            let sx = (vp_dbg.origin_x + (nx as f64 * 0.5 + 0.5) * vp_dbg.width) as f32;
+            let sy = (vp_dbg.origin_y + (0.5 - ny as f64 * 0.5) * vp_dbg.height) as f32;
+            s_min_x = s_min_x.min(sx);
+            s_max_x = s_max_x.max(sx);
+            s_min_y = s_min_y.min(sy);
+            s_max_y = s_max_y.max(sy);
+        }
         let mut vb_lens: Vec<(usize, usize)> =
             vb_data.iter().map(|(&k, v)| (k, v.len())).collect();
         vb_lens.sort_by_key(|&(k, _)| k);
-        let (vx, vy, vz) = first_raw.unwrap_or((0.0, 0.0, 0.0));
-        let (nx, ny) = active_mvp
-            .and_then(|m| apply_mvp_to_ndc(&m, vx, vy, vz))
-            .unwrap_or((vx, vy));
+        let fmt_attr = |a: Option<&VertexAttrInfo>| -> String {
+            match a {
+                Some(x) => format!("({},{},{})", x.format, x.offset, x.buffer_idx),
+                None => "none".to_string(),
+            }
+        };
+        let all_attrs: Vec<(usize, usize, usize)> = pso
+            .attrs
+            .iter()
+            .map(|a| (a.format, a.offset, a.buffer_idx))
+            .collect();
         eprintln!(
-            "[PearRuntime][metal][draw] tex={:#x} ptype={} indices={} frag=({},{},{},{}) blend={} mvp={} vb_lens={:?} v0=({:.2},{:.2},{:.2})->({:.2},{:.2})",
+            "[PearRuntime][metal][draw] tex={:#x} ptype={} indices={} frag=({},{},{},{}) tex_mid=({:.2},{:.2},{:.2},{:.2}) tex_a_nz={}/256 blend={} mvp={} vb_lens={:?} bbox=({:.1},{:.1})..({:.1},{:.1}) v0_uv=({:.3},{:.3}) v0_col=({:.2},{:.2},{:.2},{:.2}) attrs=[pos={},uv={},col={}] all_attrs={:?}",
             st.color_tex,
             ptype,
             indices.len(),
@@ -1505,14 +1747,28 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
             fh,
             fpf,
             fnz,
+            tex_mid[0],
+            tex_mid[1],
+            tex_mid[2],
+            tex_mid[3],
+            tex_a_nz,
             pso.blend_enabled,
             active_mvp.is_some(),
             vb_lens,
-            vx,
-            vy,
-            vz,
-            nx,
-            ny
+            s_min_x,
+            s_min_y,
+            s_max_x,
+            s_max_y,
+            v0_uv.0,
+            v0_uv.1,
+            v0_col[0],
+            v0_col[1],
+            v0_col[2],
+            v0_col[3],
+            fmt_attr(Some(&pos_attr)),
+            fmt_attr(uv_attr.as_ref()),
+            fmt_attr(col_attr.as_ref()),
+            all_attrs,
         );
     }
 
@@ -1576,10 +1832,7 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
             let ub = vb_data.get(&ua.buffer_idx);
             let uoff = (vi as usize).checked_mul(us).and_then(|o| o.checked_add(ua.offset));
             match (ub, uoff) {
-                (Some(b), Some(o)) => (
-                    read_f32_le(b, o).unwrap_or(0.0),
-                    read_f32_le(b, o + 4).unwrap_or(0.0),
-                ),
+                (Some(b), Some(o)) => read_uv_pair(ua.format, b, o),
                 _ => (0.0, 0.0),
             }
         } else {
@@ -1653,7 +1906,7 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
                 let w0 = ((v2.sx - v1.sx) * (cy - v1.sy) - (v2.sy - v1.sy) * (cx - v1.sx)) * inv_area;
                 let w1 = ((v0.sx - v2.sx) * (cy - v2.sy) - (v0.sy - v2.sy) * (cx - v2.sx)) * inv_area;
                 let w2 = 1.0 - w0 - w1;
-                if w0 < -1e-3 || w1 < -1e-3 || w2 < -1e-3 {
+                if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
                     continue;
                 }
                 let tu = v0.u * w0 + v1.u * w1 + v2.u * w2;
@@ -1907,7 +2160,7 @@ extern "C" fn blit_copy_buffer_to_texture(
     src_size: MTLSize,
     dst_tex: Id,
     _dst_slice: usize,
-    _dst_level: usize,
+    dst_level: usize,
     dst_origin: MTLOrigin,
 ) {
     if let Some(&cb) = encoder_to_cb().lock().unwrap().get(&(this as usize)) {
@@ -1916,6 +2169,9 @@ extern "C" fn blit_copy_buffer_to_texture(
         }
     }
     if src_buf.is_null() || dst_tex.is_null() || src_size.width == 0 || src_size.height == 0 {
+        return;
+    }
+    if dst_level != 0 {
         return;
     }
     let src_bytes = {
