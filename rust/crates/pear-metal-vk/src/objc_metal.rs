@@ -425,12 +425,25 @@ extern "C" fn prop_set_f64(this: Id, cmd: Sel, val: f64) {
         props_f64().lock().unwrap().insert((this as usize, gk), val);
     }
 }
-extern "C" fn ds_is_alpha_to_coverage(this: Id, _cmd: Sel) -> usize {
+extern "C" fn prop_get_bool_is(this: Id, cmd: Sel) -> usize {
     let g = props_usize().lock().unwrap();
-    g.get(&(this as usize, objc_rt::sel("isAlphaToCoverageEnabled") as usize))
-        .or_else(|| g.get(&(this as usize, objc_rt::sel("alphaToCoverageEnabled") as usize)))
-        .copied()
-        .unwrap_or(0)
+    if let Some(&v) = g.get(&(this as usize, cmd as usize)) {
+        return v;
+    }
+    if let Ok(name) = unsafe { std::ffi::CStr::from_ptr(cmd) }.to_str() {
+        if let Some(rest) = name.strip_prefix("is") {
+            let mut chars = rest.chars();
+            if let Some(first) = chars.next() {
+                if first.is_ascii_uppercase() {
+                    let alt = format!("{}{}", first.to_ascii_lowercase(), chars.as_str());
+                    if let Some(&v) = g.get(&(this as usize, objc_rt::sel(&alt) as usize)) {
+                        return v;
+                    }
+                }
+            }
+        }
+    }
+    0
 }
 
 extern "C" fn mtl_ret_self(this: Id, _cmd: Sel) -> Id { this }
@@ -755,6 +768,115 @@ extern "C" fn tex_usage(this: Id, _cmd: Sel) -> usize {
 extern "C" fn tex_new_view(this: Id, _cmd: Sel, _pf: usize) -> Id {
     this
 }
+fn f16_to_f32(bits: u16) -> f32 {
+    let sign = ((bits as u32) & 0x8000) << 16;
+    let exp = ((bits >> 10) & 0x1f) as u32;
+    let frac = (bits & 0x03ff) as u32;
+    if exp == 0 {
+        if frac == 0 {
+            f32::from_bits(sign)
+        } else {
+            let v = (frac as f32) / 1024.0 * 2.0f32.powi(-14);
+            if sign != 0 { -v } else { v }
+        }
+    } else if exp == 31 {
+        let bits32 = sign | 0x7f80_0000 | (frac << 13);
+        f32::from_bits(bits32)
+    } else {
+        let bits32 = sign | ((exp + 112) << 23) | (frac << 13);
+        f32::from_bits(bits32)
+    }
+}
+
+fn tex_src_bpp(pixel_format: usize) -> usize {
+    match pixel_format {
+        1 | 10 | 11 | 12 => 1,
+        30 | 31 => 2,
+        115 => 8,
+        125 => 16,
+        _ => 4,
+    }
+}
+
+fn upload_texture_region_bytes(tex_id: usize, region: MTLRegion, src: &[u8], bytes_per_row: usize) {
+    if src.is_empty() || region.size.width == 0 || region.size.height == 0 {
+        return;
+    }
+    let mut g = textures().lock().unwrap();
+    let Some(t) = g.get_mut(&tex_id) else { return };
+    if t.pixels.is_empty() || region.origin.x >= t.width || region.origin.y >= t.height {
+        return;
+    }
+    let dst_row_stride = t.width * 4;
+    let copy_cols = region.size.width.min(t.width.saturating_sub(region.origin.x));
+    let copy_rows = region.size.height.min(t.height.saturating_sub(region.origin.y));
+
+    if let Some((bw, bh)) = crate::astc::astc_block_dims(t.pixel_format) {
+        let decoded = crate::astc::decode_astc_surface(
+            src,
+            bytes_per_row,
+            region.size.width,
+            region.size.height,
+            bw,
+            bh,
+        );
+        let copy_bytes = copy_cols * 4;
+        for row in 0..copy_rows {
+            let dy = region.origin.y + row;
+            let s_off = row * region.size.width * 4;
+            let d_off = dy * dst_row_stride + region.origin.x * 4;
+            if let (Some(sr), Some(dr)) = (
+                decoded.get(s_off..s_off + copy_bytes),
+                t.pixels.get_mut(d_off..d_off + copy_bytes),
+            ) {
+                dr.copy_from_slice(sr);
+            }
+        }
+        return;
+    }
+
+    let bpp = tex_src_bpp(t.pixel_format);
+    let src_row_stride = if bytes_per_row >= region.size.width * bpp {
+        bytes_per_row
+    } else {
+        region.size.width * bpp
+    };
+    for row in 0..copy_rows {
+        let dy = region.origin.y + row;
+        for col in 0..copy_cols {
+            let s_off = row * src_row_stride + col * bpp;
+            let d_off = dy * dst_row_stride + (region.origin.x + col) * 4;
+            let Some(s) = src.get(s_off..s_off + bpp) else { break };
+            let Some(d) = t.pixels.get_mut(d_off..d_off + 4) else { break };
+            match bpp {
+                1 => {
+                    let v = s[0];
+                    if t.pixel_format == 1 {
+                        d.copy_from_slice(&[255, 255, 255, v]);
+                    } else {
+                        d.copy_from_slice(&[v, v, v, 255]);
+                    }
+                }
+                2 => d.copy_from_slice(&[s[0], s[1], 0, 255]),
+                8 => {
+                    for c in 0..4 {
+                        let f = f16_to_f32(u16::from_le_bytes([s[c * 2], s[c * 2 + 1]]));
+                        d[c] = (f.clamp(0.0, 1.0) * 255.0).round() as u8;
+                    }
+                }
+                16 => {
+                    for c in 0..4 {
+                        let o = c * 4;
+                        let f = f32::from_le_bytes([s[o], s[o + 1], s[o + 2], s[o + 3]]);
+                        d[c] = (f.clamp(0.0, 1.0) * 255.0).round() as u8;
+                    }
+                }
+                _ => d.copy_from_slice(&[s[0], s[1], s[2], s[3]]),
+            }
+        }
+    }
+}
+
 extern "C" fn tex_replace_region(
     this: Id,
     _cmd: Sel,
@@ -763,36 +885,34 @@ extern "C" fn tex_replace_region(
     bytes: *const u8,
     bytes_per_row: usize,
 ) {
-    if bytes.is_null() || region.size.width == 0 || region.size.height == 0 {
+    if this.is_null() || bytes.is_null() || region.size.width == 0 || region.size.height == 0 {
         return;
     }
-    let mut g = textures().lock().unwrap();
-    let Some(t) = g.get_mut(&(this as usize)) else { return };
-    if t.pixels.is_empty() {
+    let pf = textures()
+        .lock()
+        .unwrap()
+        .get(&(this as usize))
+        .map(|t| t.pixel_format)
+        .unwrap_or(0);
+    let src_len = if let Some((bw, bh)) = crate::astc::astc_block_dims(pf) {
+        let bx = region.size.width.div_ceil(bw);
+        let by = region.size.height.div_ceil(bh);
+        let bpr = if bytes_per_row >= bx * 16 { bytes_per_row } else { bx * 16 };
+        by.saturating_mul(bpr)
+    } else {
+        let bpp = tex_src_bpp(pf);
+        let bpr = if bytes_per_row >= region.size.width * bpp {
+            bytes_per_row
+        } else {
+            region.size.width * bpp
+        };
+        region.size.height.saturating_mul(bpr)
+    };
+    if src_len == 0 {
         return;
     }
-    let bpp = 4usize;
-    let src_row_stride = if bytes_per_row > 0 { bytes_per_row } else { region.size.width * bpp };
-    let dst_row_stride = t.width * bpp;
-    for row in 0..region.size.height {
-        let dy = region.origin.y + row;
-        if dy >= t.height {
-            break;
-        }
-        let copy_cols = region.size.width.min(t.width.saturating_sub(region.origin.x));
-        let copy_bytes = copy_cols * bpp;
-        let dst_off = dy * dst_row_stride + region.origin.x * bpp;
-        if dst_off + copy_bytes > t.pixels.len() {
-            break;
-        }
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytes.add(row * src_row_stride),
-                t.pixels.as_mut_ptr().add(dst_off),
-                copy_bytes,
-            );
-        }
-    }
+    let src = unsafe { std::slice::from_raw_parts(bytes, src_len) };
+    upload_texture_region_bytes(this as usize, region, src, bytes_per_row);
 }
 extern "C" fn tex_replace_region_slice(
     this: Id,
@@ -1212,6 +1332,40 @@ fn sample_tex_rgba(tex: &(usize, usize, usize, Vec<u8>), u: f32, v: f32) -> [f32
     }
 }
 
+fn try_extract_mvp(vb_data: &HashMap<usize, Vec<u8>>, pos_buf_idx: usize) -> Option<[f32; 16]> {
+    if pos_buf_idx == 0 {
+        return None;
+    }
+    let buf0 = vb_data.get(&0)?;
+    if buf0.len() < 64 {
+        return None;
+    }
+    let mut m = [0.0f32; 16];
+    for (idx, dst) in m.iter_mut().enumerate() {
+        let v = read_f32_le(buf0, idx * 4)?;
+        if !v.is_finite() {
+            return None;
+        }
+        *dst = v;
+    }
+    let has_xyz = m[..12].iter().any(|&v| v.abs() > 1e-6);
+    if !has_xyz || m[15].abs() > 1e4 {
+        return None;
+    }
+    Some(m)
+}
+
+#[inline]
+fn apply_mvp_to_ndc(m: &[f32; 16], x: f32, y: f32, z: f32) -> Option<(f32, f32)> {
+    let cx = m[0] * x + m[4] * y + m[8] * z + m[12];
+    let cy = m[1] * x + m[5] * y + m[9] * z + m[13];
+    let cw = m[3] * x + m[7] * y + m[11] * z + m[15];
+    if !cx.is_finite() || !cy.is_finite() || !cw.is_finite() || cw.abs() <= 1e-5 {
+        return None;
+    }
+    Some((cx / cw, cy / cw))
+}
+
 fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
     if indices.len() < 3 || (ptype != 3 && ptype != 4) {
         return;
@@ -1225,19 +1379,6 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
         .get(&st.pipeline)
         .cloned()
         .unwrap_or_default();
-
-    if metal_trace_enabled() && MTL_TRACE_COUNT.fetch_add(1, Ordering::Relaxed) < 12 {
-        let frag0 = st.fragment_textures.get(&0).copied().unwrap_or(0);
-        eprintln!(
-            "[PearRuntime][metal][draw] tex={:#x} ptype={} indices={} frag_tex={:#x} attrs={} strides={:?}",
-            st.color_tex,
-            ptype,
-            indices.len(),
-            frag0,
-            pso.attrs.len(),
-            pso.strides
-        );
-    }
 
     if st.color_tex == 0 {
         return;
@@ -1304,6 +1445,32 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
         max_end.max(12)
     };
 
+    let mut active_mvp: Option<[f32; 16]> = None;
+    let first_idx = indices[0];
+    let first_raw = {
+        let p_stride = stride_for(pos_attr.buffer_idx);
+        vb_data.get(&pos_attr.buffer_idx).and_then(|p_buf| {
+            let p_off = (first_idx as usize).checked_mul(p_stride)?.checked_add(pos_attr.offset)?;
+            let x = read_f32_le(p_buf, p_off)?;
+            let y = read_f32_le(p_buf, p_off + 4)?;
+            let z = if pos_attr.format >= 30 {
+                read_f32_le(p_buf, p_off + 8).unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            Some((x, y, z))
+        })
+    };
+    if let (Some(cand_m), Some((vx, vy, vz))) =
+        (try_extract_mvp(&vb_data, pos_attr.buffer_idx), first_raw)
+    {
+        if let Some((nx, ny)) = apply_mvp_to_ndc(&cand_m, vx, vy, vz) {
+            if nx.abs() <= 4.0 && ny.abs() <= 4.0 {
+                active_mvp = Some(cand_m);
+            }
+        }
+    }
+
     let frag_tex_id = st.fragment_textures.get(&0).copied().unwrap_or(0);
     let frag_snap = if frag_tex_id != 0 {
         textures()
@@ -1314,6 +1481,40 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
     } else {
         None
     };
+
+    if metal_trace_enabled() && MTL_TRACE_COUNT.fetch_add(1, Ordering::Relaxed) < 12 {
+        let (fw, fh, fpf, fnz) = if let Some((w, h, pf, ref p)) = frag_snap {
+            let nz = p.chunks_exact(4).take(4096).filter(|c| c != &[0, 0, 0, 0]).count();
+            (w, h, pf, nz)
+        } else {
+            (0, 0, 0, 0)
+        };
+        let mut vb_lens: Vec<(usize, usize)> =
+            vb_data.iter().map(|(&k, v)| (k, v.len())).collect();
+        vb_lens.sort_by_key(|&(k, _)| k);
+        let (vx, vy, vz) = first_raw.unwrap_or((0.0, 0.0, 0.0));
+        let (nx, ny) = active_mvp
+            .and_then(|m| apply_mvp_to_ndc(&m, vx, vy, vz))
+            .unwrap_or((vx, vy));
+        eprintln!(
+            "[PearRuntime][metal][draw] tex={:#x} ptype={} indices={} frag=({},{},{},{}) blend={} mvp={} vb_lens={:?} v0=({:.2},{:.2},{:.2})->({:.2},{:.2})",
+            st.color_tex,
+            ptype,
+            indices.len(),
+            fw,
+            fh,
+            fpf,
+            fnz,
+            pso.blend_enabled,
+            active_mvp.is_some(),
+            vb_lens,
+            vx,
+            vy,
+            vz,
+            nx,
+            ny
+        );
+    }
 
     let mut tg = textures().lock().unwrap();
     let Some(target) = tg.get_mut(&st.color_tex) else {
@@ -1349,14 +1550,24 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
         let p_off = (vi as usize).checked_mul(p_stride)?.checked_add(pos_attr.offset)?;
         let x = read_f32_le(p_buf, p_off)?;
         let y = read_f32_le(p_buf, p_off + 4)?;
-        let w = if pos_attr.format == 31 {
-            read_f32_le(p_buf, p_off + 12).unwrap_or(1.0)
+        let (nx_f, ny_f) = if let Some(ref m) = active_mvp {
+            let z = if pos_attr.format >= 30 {
+                read_f32_le(p_buf, p_off + 8).unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            apply_mvp_to_ndc(m, x, y, z).unwrap_or((x, y))
         } else {
-            1.0
+            let w = if pos_attr.format == 31 {
+                read_f32_le(p_buf, p_off + 12).unwrap_or(1.0)
+            } else {
+                1.0
+            };
+            let inv_w = if w.abs() > 1e-6 { 1.0 / w } else { 1.0 };
+            (x * inv_w, y * inv_w)
         };
-        let inv_w = if w.abs() > 1e-6 { 1.0 / w } else { 1.0 };
-        let nx = (x * inv_w) as f64;
-        let ny = (y * inv_w) as f64;
+        let nx = nx_f as f64;
+        let ny = ny_f as f64;
         let sx = (vp.origin_x + (nx * 0.5 + 0.5) * vp.width) as f32;
         let sy = (vp.origin_y + (0.5 - ny * 0.5) * vp.height) as f32;
 
@@ -1686,6 +1897,96 @@ extern "C" fn blit_copy_texture(
     }
 }
 
+extern "C" fn blit_copy_buffer_to_texture(
+    this: Id,
+    _cmd: Sel,
+    src_buf: Id,
+    src_off: usize,
+    src_bpr: usize,
+    _src_bpi: usize,
+    src_size: MTLSize,
+    dst_tex: Id,
+    _dst_slice: usize,
+    _dst_level: usize,
+    dst_origin: MTLOrigin,
+) {
+    if let Some(&cb) = encoder_to_cb().lock().unwrap().get(&(this as usize)) {
+        if let Some(st) = cmd_buffers().lock().unwrap().get_mut(&cb) {
+            st.blit_ops += 1;
+        }
+    }
+    if src_buf.is_null() || dst_tex.is_null() || src_size.width == 0 || src_size.height == 0 {
+        return;
+    }
+    let src_bytes = {
+        let g = buffers().lock().unwrap();
+        let Some(src) = g.get(&(src_buf as usize)) else { return };
+        let Some(slice) = src.bytes.get(src_off..) else { return };
+        slice.to_vec()
+    };
+    upload_texture_region_bytes(
+        dst_tex as usize,
+        MTLRegion {
+            origin: dst_origin,
+            size: src_size,
+        },
+        &src_bytes,
+        src_bpr,
+    );
+}
+
+extern "C" fn blit_copy_texture_to_buffer(
+    this: Id,
+    _cmd: Sel,
+    src_tex: Id,
+    _src_slice: usize,
+    _src_level: usize,
+    src_origin: MTLOrigin,
+    src_size: MTLSize,
+    dst_buf: Id,
+    dst_off: usize,
+    dst_bpr: usize,
+    _dst_bpi: usize,
+) {
+    if let Some(&cb) = encoder_to_cb().lock().unwrap().get(&(this as usize)) {
+        if let Some(st) = cmd_buffers().lock().unwrap().get_mut(&cb) {
+            st.blit_ops += 1;
+        }
+    }
+    if src_tex.is_null() || dst_buf.is_null() || src_size.width == 0 || src_size.height == 0 {
+        return;
+    }
+    let src_snap = {
+        let g = textures().lock().unwrap();
+        g.get(&(src_tex as usize))
+            .map(|t| (t.width, t.height, t.pixels.clone()))
+    };
+    let Some((sw, sh, spixels)) = src_snap else {
+        return;
+    };
+    let cols = src_size.width.min(sw.saturating_sub(src_origin.x));
+    let rows = src_size.height.min(sh.saturating_sub(src_origin.y));
+    let copy_bytes = cols * 4;
+    if copy_bytes == 0 {
+        return;
+    }
+    let dst_stride = if dst_bpr >= copy_bytes { dst_bpr } else { copy_bytes };
+    let mut g = buffers().lock().unwrap();
+    let Some(dst) = g.get_mut(&(dst_buf as usize)) else {
+        return;
+    };
+    for r in 0..rows {
+        let s_off = ((src_origin.y + r) * sw + src_origin.x) * 4;
+        let d_off = dst_off.saturating_add(r * dst_stride);
+        if let (Some(sr), Some(dr)) = (
+            spixels.get(s_off..s_off + copy_bytes),
+            dst.bytes.get_mut(d_off..d_off + copy_bytes),
+        ) {
+            dr.copy_from_slice(sr);
+        }
+    }
+}
+
 // ---- Subscript array & descriptor helpers ----
 fn subscript_for(arr: Id, idx: usize, elem_cls: &StaticClass) -> Id {
     let mut g = subscript_slots().lock().unwrap();
@@ -2008,7 +2309,9 @@ pub fn register_classes() {
             32,
             &[
                 ("copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:", i(blit_copy_buffer as *const ())),
+                ("copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:", i(blit_copy_buffer_to_texture as *const ())),
                 ("copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:", i(blit_copy_texture as *const ())),
+                ("copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:", i(blit_copy_texture_to_buffer as *const ())),
                 ("fillBuffer:range:value:", i(mtl_noop3 as *const ())),
                 ("generateMipmapsForTexture:", i(mtl_noop1 as *const ())),
                 ("synchronizeResource:", i(mtl_noop1 as *const ())),
@@ -2176,7 +2479,7 @@ pub fn register_classes() {
                 ("rasterSampleCount", i(prop_get_usize as *const ())),
                 ("setRasterSampleCount:", i(prop_set_usize as *const ())),
                 ("alphaToCoverageEnabled", i(prop_get_usize as *const ())),
-                ("isAlphaToCoverageEnabled", i(ds_is_alpha_to_coverage as *const ())),
+                ("isAlphaToCoverageEnabled", i(prop_get_bool_is as *const ())),
                 ("setAlphaToCoverageEnabled:", i(prop_set_usize as *const ())),
                 ("reset", i(mtl_noop0 as *const ())),
             ],
@@ -2283,7 +2586,8 @@ pub fn register_classes() {
             &[
                 ("pixelFormat", i(prop_get_usize as *const ())),
                 ("setPixelFormat:", i(prop_set_usize as *const ())),
-                ("isBlendingEnabled", i(prop_get_usize as *const ())),
+                ("isBlendingEnabled", i(prop_get_bool_is as *const ())),
+                ("blendingEnabled", i(prop_get_usize as *const ())),
                 ("setBlendingEnabled:", i(prop_set_usize as *const ())),
                 ("rgbBlendOperation", i(prop_get_usize as *const ())),
                 ("setRgbBlendOperation:", i(prop_set_usize as *const ())),
@@ -2376,7 +2680,8 @@ pub fn register_classes() {
             &[
                 ("depthCompareFunction", i(prop_get_usize as *const ())),
                 ("setDepthCompareFunction:", i(prop_set_usize as *const ())),
-                ("isDepthWriteEnabled", i(prop_get_usize as *const ())),
+                ("isDepthWriteEnabled", i(prop_get_bool_is as *const ())),
+                ("depthWriteEnabled", i(prop_get_usize as *const ())),
                 ("setDepthWriteEnabled:", i(prop_set_usize as *const ())),
                 ("frontFaceStencil", i(ds_front_face_stencil as *const ())),
                 ("setFrontFaceStencil:", i(prop_set_id as *const ())),

@@ -1,6 +1,7 @@
 //! Clean-room Metal → Vulkan + `MTLB`/AIR → SPIR-V compatibility layer
 //! built on `pear-libobjc`, `pear-foundation`, `pear-graphics`, and `pear-host`.
 
+pub mod astc;
 pub mod mtlb;
 pub mod objc_metal;
 pub mod spirv;
@@ -487,6 +488,216 @@ mod tests {
                 0,
             );
             assert_eq!(out_px, green_px);
+        }
+    }
+
+    #[test]
+    fn phase5_9_astc_blit_mvp_and_is_bool_props() {
+        init();
+        unsafe {
+            // 1. isBlendingEnabled / isDepthWriteEnabled / isAlphaToCoverageEnabled round-trip
+            let rp_ca_cls =
+                objc_rt::class_named("MTLRenderPipelineColorAttachmentDescriptor").unwrap() as Id;
+            let rp_ca: Id = send0(send0(rp_ca_cls, "alloc"), "init");
+            assert_eq!(send0::<usize>(rp_ca, "isBlendingEnabled"), 0);
+            send1::<usize, ()>(rp_ca, "setBlendingEnabled:", 1);
+            assert_eq!(send0::<usize>(rp_ca, "isBlendingEnabled"), 1);
+
+            let ds_cls = objc_rt::class_named("MTLDepthStencilDescriptor").unwrap() as Id;
+            let ds: Id = send0(send0(ds_cls, "alloc"), "init");
+            assert_eq!(send0::<usize>(ds, "isDepthWriteEnabled"), 0);
+            send1::<usize, ()>(ds, "setDepthWriteEnabled:", 1);
+            assert_eq!(send0::<usize>(ds, "isDepthWriteEnabled"), 1);
+
+            let pd_cls = objc_rt::class_named("MTLRenderPipelineDescriptor").unwrap() as Id;
+            let pd: Id = send0(send0(pd_cls, "alloc"), "init");
+            assert_eq!(send0::<usize>(pd, "isAlphaToCoverageEnabled"), 0);
+            send1::<usize, ()>(pd, "setAlphaToCoverageEnabled:", 1);
+            assert_eq!(send0::<usize>(pd, "isAlphaToCoverageEnabled"), 1);
+
+            // 2. Upload 16-byte ASTC 4x4 void-extent red block via copyFromBuffer:...toTexture:
+            let dev = create_system_default_device();
+            let cq: Id = send0(dev, "newCommandQueue");
+            let tdesc_cls = objc_rt::class_named("MTLTextureDescriptor").unwrap() as Id;
+            let s_td = objc_rt::sel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
+            let d_td = lookup_for_send(tdesc_cls, s_td);
+            let f_td: unsafe extern "C" fn(Id, Sel, usize, usize, usize, bool) -> Id =
+                std::mem::transmute(d_td.imp);
+            let tdesc_astc = f_td(d_td.receiver, s_td, 204, 4, 4, false); // ASTC_4x4_LDR
+            let tex_astc: Id = send1(dev, "newTextureWithDescriptor:", tdesc_astc);
+
+            let mut astc_blk = [0u8; 16];
+            astc_blk[0] = 0xfc;
+            astc_blk[1] = 0x01;
+            astc_blk[8..10].copy_from_slice(&0xffffu16.to_le_bytes()); // R = 255
+            astc_blk[14..16].copy_from_slice(&0xffffu16.to_le_bytes()); // A = 255
+            let astc_buf: Id = send3(
+                dev,
+                "newBufferWithBytes:length:options:",
+                astc_blk.as_ptr() as *const c_void,
+                astc_blk.len(),
+                0usize,
+            );
+
+            let cb_up: Id = send0(cq, "commandBuffer");
+            let blit_up: Id = send0(cb_up, "blitCommandEncoder");
+            let s_b2t = objc_rt::sel("copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:");
+            let d_b2t = lookup_for_send(blit_up, s_b2t);
+            let f_b2t: unsafe extern "C" fn(
+                Id,
+                Sel,
+                Id,
+                usize,
+                usize,
+                usize,
+                MTLSize,
+                Id,
+                usize,
+                usize,
+                MTLOrigin,
+            ) = std::mem::transmute(d_b2t.imp);
+            f_b2t(
+                d_b2t.receiver,
+                s_b2t,
+                astc_buf,
+                0,
+                16,
+                16,
+                MTLSize { width: 4, height: 4, depth: 1 },
+                tex_astc,
+                0,
+                0,
+                MTLOrigin { x: 0, y: 0, z: 0 },
+            );
+            send0::<()>(blit_up, "endEncoding");
+            send0::<()>(cb_up, "commit");
+
+            // 3. Readback ASTC decoded RGBA pixels via copyFromTexture:...toBuffer:
+            let rb_buf: Id = send2(dev, "newBufferWithLength:options:", 4 * 4 * 4, 0usize);
+            let cb_rb: Id = send0(cq, "commandBuffer");
+            let blit_rb: Id = send0(cb_rb, "blitCommandEncoder");
+            let s_t2b = objc_rt::sel("copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:");
+            let d_t2b = lookup_for_send(blit_rb, s_t2b);
+            let f_t2b: unsafe extern "C" fn(
+                Id,
+                Sel,
+                Id,
+                usize,
+                usize,
+                MTLOrigin,
+                MTLSize,
+                Id,
+                usize,
+                usize,
+                usize,
+            ) = std::mem::transmute(d_t2b.imp);
+            f_t2b(
+                d_t2b.receiver,
+                s_t2b,
+                tex_astc,
+                0,
+                0,
+                MTLOrigin { x: 0, y: 0, z: 0 },
+                MTLSize { width: 4, height: 4, depth: 1 },
+                rb_buf,
+                0,
+                16,
+                64,
+            );
+            send0::<()>(blit_rb, "endEncoding");
+            send0::<()>(cb_rb, "commit");
+            let rb_ptr = send0::<*const u8>(rb_buf, "contents");
+            assert_eq!(std::slice::from_raw_parts(rb_ptr, 4), &[255, 0, 0, 255]);
+
+            // 4. Column-major 4x4 MVP in buffer 0 mapping [0..1, 0..1] -> [-1..1, -1..1]
+            let mvp: [f32; 16] = [
+                2.0, 0.0, 0.0, 0.0, // col 0
+                0.0, 2.0, 0.0, 0.0, // col 1
+                0.0, 0.0, 1.0, 0.0, // col 2
+                -1.0, -1.0, 0.0, 1.0, // col 3
+            ];
+            #[rustfmt::skip]
+            let obj_verts: [f32; 20] = [
+                0.0, 0.0, 0.0,  0.0, 0.0,
+                1.0, 0.0, 0.0,  1.0, 0.0,
+                1.0, 1.0, 0.0,  1.0, 1.0,
+                0.0, 1.0, 0.0,  0.0, 1.0,
+            ];
+            let indices: [u16; 6] = [0, 1, 2, 0, 2, 3];
+            let ibuf: Id = send3(
+                dev,
+                "newBufferWithBytes:length:options:",
+                indices.as_ptr() as *const c_void,
+                indices.len() * 2,
+                0usize,
+            );
+
+            let vdesc_cls = objc_rt::class_named("MTLVertexDescriptor").unwrap() as Id;
+            let vdesc: Id = send0(vdesc_cls, "vertexDescriptor");
+            let attrs: Id = send0(vdesc, "attributes");
+            let a0: Id = send1(attrs, "objectAtIndexedSubscript:", 0usize);
+            send1::<usize, ()>(a0, "setFormat:", 30); // Float3
+            send1::<usize, ()>(a0, "setOffset:", 0);
+            send1::<usize, ()>(a0, "setBufferIndex:", 1);
+            let a1: Id = send1(attrs, "objectAtIndexedSubscript:", 1usize);
+            send1::<usize, ()>(a1, "setFormat:", 29); // Float2
+            send1::<usize, ()>(a1, "setOffset:", 12);
+            send1::<usize, ()>(a1, "setBufferIndex:", 1);
+            let layouts: Id = send0(vdesc, "layouts");
+            let l1: Id = send1(layouts, "objectAtIndexedSubscript:", 1usize);
+            send1::<usize, ()>(l1, "setStride:", 20);
+
+            let pdesc: Id = send0(send0(pd_cls, "alloc"), "init");
+            send1::<Id, ()>(pdesc, "setVertexDescriptor:", vdesc);
+            let mut err: Id = std::ptr::null_mut();
+            let pso: Id = send2(dev, "newRenderPipelineStateWithDescriptor:error:", pdesc, &mut err);
+
+            let layer_dummy = 0x5959usize as Id;
+            let drawable = next_drawable_for_layer(layer_dummy, 16, 16, 80);
+            let dtex: Id = send0(drawable, "texture");
+            let pass_cls = objc_rt::class_named("MTLRenderPassDescriptor").unwrap() as Id;
+            let pass: Id = send0(pass_cls, "renderPassDescriptor");
+            let catts: Id = send0(pass, "colorAttachments");
+            let ca0: Id = send1(catts, "objectAtIndexedSubscript:", 0usize);
+            send1::<Id, ()>(ca0, "setTexture:", dtex);
+            send1::<usize, ()>(ca0, "setLoadAction:", 2);
+
+            let cb: Id = send0(cq, "commandBuffer");
+            let renc: Id = send1(cb, "renderCommandEncoderWithDescriptor:", pass);
+            send1::<Id, ()>(renc, "setRenderPipelineState:", pso);
+            send3::<*const u8, usize, usize, ()>(
+                renc,
+                "setVertexBytes:length:atIndex:",
+                mvp.as_ptr() as *const u8,
+                std::mem::size_of_val(&mvp),
+                0usize,
+            );
+            send3::<*const u8, usize, usize, ()>(
+                renc,
+                "setVertexBytes:length:atIndex:",
+                obj_verts.as_ptr() as *const u8,
+                std::mem::size_of_val(&obj_verts),
+                1usize,
+            );
+            send2::<Id, usize, ()>(renc, "setFragmentTexture:atIndex:", tex_astc, 0usize);
+            send5::<usize, usize, usize, Id, usize, ()>(
+                renc,
+                "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:",
+                3usize,
+                6usize,
+                0usize,
+                ibuf,
+                0usize,
+            );
+            send0::<()>(renc, "endEncoding");
+            send1::<Id, ()>(cb, "presentDrawable:", drawable);
+            send0::<()>(cb, "commit");
+
+            let (fw, fh, rgba) = last_presented_frame().expect("frame missing");
+            assert_eq!((fw, fh), (16, 16));
+            assert_eq!(&rgba[0..4], &[255, 0, 0, 255]);
+            let br = (15 * 16 + 15) * 4;
+            assert_eq!(&rgba[br..br + 4], &[255, 0, 0, 255]);
         }
     }
 }
