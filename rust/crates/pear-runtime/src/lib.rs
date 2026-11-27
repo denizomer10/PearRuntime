@@ -1343,7 +1343,6 @@ fn init_guest_frameworks() {
             (&CKQUERYOPERATION_CLASS, &CKQUERYOPERATION_META, "CKQueryOperation"),
             (&CKRECORD_CLASS, &CKRECORD_META, "CKRecord"),
             (&CKRECORDID_CLASS, &CKRECORDID_META, "CKRecordID"),
-            (&GCCONTROLLER_CLASS, &GCCONTROLLER_META, "GCController"),
         ] {
             objc_rt::register_builtin(cls.ptr(), meta.ptr(), name, 32, &[], &[]);
         }
@@ -1805,8 +1804,39 @@ fn init_guest_frameworks() {
                 ("isGyroAvailable", i(app_false as *const ())),
                 ("isDeviceMotionAvailable", i(app_false as *const ())),
                 ("isAccelerometerAvailable", i(app_false as *const ())),
+                ("isMagnetometerAvailable", i(app_false as *const ())),
+                ("isGyroActive", i(app_false as *const ())),
+                ("isDeviceMotionActive", i(app_false as *const ())),
+                ("isAccelerometerActive", i(app_false as *const ())),
+                ("isMagnetometerActive", i(app_false as *const ())),
+                ("gyroData", i(uivc_nil as *const ())),
+                ("deviceMotion", i(uivc_nil as *const ())),
+                ("accelerometerData", i(uivc_nil as *const ())),
+                ("magnetometerData", i(uivc_nil as *const ())),
+                ("startGyroUpdates", i(noop_method as *const ())),
+                ("stopGyroUpdates", i(noop_method as *const ())),
+                ("startDeviceMotionUpdates", i(noop_method as *const ())),
+                ("stopDeviceMotionUpdates", i(noop_method as *const ())),
+                ("startAccelerometerUpdates", i(noop_method as *const ())),
+                ("stopAccelerometerUpdates", i(noop_method as *const ())),
+                ("setGyroUpdateInterval:", i(cm_set_interval as *const ())),
+                ("setDeviceMotionUpdateInterval:", i(cm_set_interval as *const ())),
+                ("setAccelerometerUpdateInterval:", i(cm_set_interval as *const ())),
             ],
             &[],
+        );
+        objc_rt::register_builtin(
+            GCCONTROLLER_CLASS.ptr(),
+            GCCONTROLLER_META.ptr(),
+            "GCController",
+            32,
+            &[],
+            &[
+                ("controllers", i(ret_empty_array as *const ())),
+                ("current", i(uivc_nil as *const ())),
+                ("startWirelessControllerDiscoveryWithCompletionHandler:", i(gc_start_discovery as *const ())),
+                ("stopWirelessControllerDiscovery", i(noop_method as *const ())),
+            ],
         );
         extern "C" fn msig_args(_self: Id, _cmd: Sel) -> usize { 2 }
         extern "C" fn msig_retlen(_self: Id, _cmd: Sel) -> usize { 0 }
@@ -3314,6 +3344,22 @@ extern "C" fn url_conn_with_req_del(_cls: Id, _cmd: Sel, _req: Id, _del: Id) -> 
 extern "C" fn app_noop2(_self: Id, _cmd: Sel, _a: Id, _b: Id) {}
 extern "C" fn app_true1(_self: Id, _cmd: Sel, _a: Id) -> bool {
     true
+}
+
+extern "C" fn cm_set_interval(_self: Id, _cmd: Sel, _interval: f64) {}
+
+extern "C" fn gc_start_discovery(_cls: Id, _cmd: Sel, handler: Id) {
+    if handler.is_null() {
+        return;
+    }
+    unsafe {
+        let block = handler as *const c_void;
+        let invoke = *((block as *const usize).add(2));
+        if invoke != 0 {
+            let f: unsafe extern "C" fn(*const c_void) = std::mem::transmute(invoke);
+            f(block);
+        }
+    }
 }
 
 extern "C" fn avaudioplayer_init_err(self_: Id, _cmd: Sel, _arg: Id, err: *mut Id) -> Id {
@@ -7851,6 +7897,37 @@ mod tests {
                 let f: extern "C" fn(Id, Sel) = std::mem::transmute(d.imp);
                 f(d.receiver, s);
             }
+        }
+    }
+
+    #[test]
+    fn phase5_13_motion_and_game_controller_selectors() {
+        init();
+        unsafe {
+            let cm = alloc(CMMOTIONMANAGER_CLASS.ptr());
+            for nil_sel in ["gyroData", "deviceMotion"] {
+                let s = objc_rt::sel(nil_sel);
+                let d = pear_libobjc::message::lookup_for_send(cm, s);
+                let f: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d.imp);
+                assert!(f(d.receiver, s).is_null());
+            }
+            let s_iv = objc_rt::sel("setGyroUpdateInterval:");
+            let d_iv = pear_libobjc::message::lookup_for_send(cm, s_iv);
+            let f_iv: extern "C" fn(Id, Sel, f64) = std::mem::transmute(d_iv.imp);
+            f_iv(d_iv.receiver, s_iv, 1.0 / 60.0);
+
+            let gc_cls = GCCONTROLLER_CLASS.ptr() as Id;
+            let s_ctrls = objc_rt::sel("controllers");
+            let d_ctrls = pear_libobjc::message::lookup_for_send(gc_cls, s_ctrls);
+            let f_ctrls: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_ctrls.imp);
+            let ctrls = f_ctrls(d_ctrls.receiver, s_ctrls);
+            assert!(!ctrls.is_null());
+            assert_eq!(pear_foundation::cf_array_get_count(ctrls), 0);
+
+            let s_cur = objc_rt::sel("current");
+            let d_cur = pear_libobjc::message::lookup_for_send(gc_cls, s_cur);
+            let f_cur: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_cur.imp);
+            assert!(f_cur(d_cur.receiver, s_cur).is_null());
         }
     }
 }

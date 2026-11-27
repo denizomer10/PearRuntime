@@ -882,4 +882,64 @@ mod tests {
             assert_eq!(&rgba2[center..center + 4], &[0, 255, 0, 255]);
         }
     }
+
+    #[test]
+    fn phase5_13_async_library_completion_and_tex_desc_copy() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        init();
+        static GOT_LIB: AtomicUsize = AtomicUsize::new(0);
+        static GOT_ERR: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+        #[repr(C)]
+        struct TestBlock {
+            isa: *const c_void,
+            flags: i32,
+            reserved: i32,
+            invoke: unsafe extern "C" fn(*const c_void, Id, Id),
+            descriptor: *const c_void,
+        }
+        unsafe extern "C" fn on_done(_blk: *const c_void, lib: Id, err: Id) {
+            GOT_LIB.store(lib as usize, Ordering::SeqCst);
+            GOT_ERR.store(err as usize, Ordering::SeqCst);
+        }
+
+        unsafe {
+            let dev = create_system_default_device();
+            assert!(!dev.is_null());
+
+            let blk = TestBlock {
+                isa: std::ptr::null(),
+                flags: 0,
+                reserved: 0,
+                invoke: on_done,
+                descriptor: std::ptr::null(),
+            };
+            let src = pear_foundation::nsstring_from_rust("fragment half4 fragMain() { return half4(1); }");
+            send3::<Id, Id, Id, ()>(
+                dev,
+                "newLibraryWithSource:options:completionHandler:",
+                src,
+                std::ptr::null_mut(),
+                (&raw const blk) as Id,
+            );
+            assert_ne!(GOT_LIB.load(Ordering::SeqCst), 0);
+            assert_eq!(GOT_ERR.load(Ordering::SeqCst), 0);
+
+            let td_cls = objc_rt::class_named("MTLTextureDescriptor").unwrap() as Id;
+            let s_td = objc_rt::sel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
+            let d_td = lookup_for_send(td_cls, s_td);
+            let f_td: unsafe extern "C" fn(Id, Sel, usize, usize, usize, bool) -> Id =
+                std::mem::transmute(d_td.imp);
+            let td = f_td(d_td.receiver, s_td, 70, 64, 32, false);
+            let copy_td: Id = send1(td, "copyWithZone:", std::ptr::null_mut::<c_void>());
+            assert!(!copy_td.is_null());
+            assert_ne!(copy_td, td);
+            assert_eq!(send0::<usize>(copy_td, "pixelFormat"), 70);
+            assert_eq!(send0::<usize>(copy_td, "width"), 64);
+            assert_eq!(send0::<usize>(copy_td, "height"), 32);
+            send1::<usize, ()>(copy_td, "setWidth:", 128);
+            assert_eq!(send0::<usize>(copy_td, "width"), 128);
+            assert_eq!(send0::<usize>(td, "width"), 64);
+        }
+    }
 }

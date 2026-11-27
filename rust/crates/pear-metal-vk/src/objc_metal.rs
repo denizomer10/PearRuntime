@@ -316,6 +316,30 @@ unsafe fn invoke_cb_handler(block_ptr: usize, cb: Id) {
     }
 }
 
+unsafe fn invoke_obj_err_handler(handler: Id, obj: Id, err: Id) {
+    if handler.is_null() {
+        return;
+    }
+    let block = handler as *const c_void;
+    let invoke = *((block as *const usize).add(2));
+    if invoke != 0 {
+        let f: unsafe extern "C" fn(*const c_void, Id, Id) = std::mem::transmute(invoke);
+        f(block, obj, err);
+    }
+}
+
+unsafe fn invoke_obj_refl_err_handler(handler: Id, obj: Id, refl: Id, err: Id) {
+    if handler.is_null() {
+        return;
+    }
+    let block = handler as *const c_void;
+    let invoke = *((block as *const usize).add(2));
+    if invoke != 0 {
+        let f: unsafe extern "C" fn(*const c_void, Id, Id, Id) = std::mem::transmute(invoke);
+        f(block, obj, refl, err);
+    }
+}
+
 unsafe fn make_nsarray(items: &[Id]) -> Id {
     let Some(cls) = objc_rt::class_named("NSArray") else {
         return std::ptr::null_mut();
@@ -648,6 +672,17 @@ extern "C" fn dev_new_library_with_source(_this: Id, _cmd: Sel, src_id: Id, _opt
     obj
 }
 
+extern "C" fn dev_new_library_with_source_async(
+    this: Id,
+    cmd: Sel,
+    src_id: Id,
+    opts: Id,
+    handler: Id,
+) {
+    let lib = dev_new_library_with_source(this, cmd, src_id, opts, std::ptr::null_mut());
+    unsafe { invoke_obj_err_handler(handler, lib, std::ptr::null_mut()) };
+}
+
 extern "C" fn dev_new_default_library(_this: Id, _cmd: Sel) -> Id {
     let obj = unsafe { alloc(MTLLIBRARY_CLASS.ptr()) };
     libraries().lock().unwrap().insert(obj as usize, LibraryState {
@@ -712,6 +747,67 @@ extern "C" fn dev_new_compute_pipeline(_this: Id, _cmd: Sel, _fn: Id, _err: *mut
 }
 extern "C" fn dev_new_compute_pipeline_desc(_this: Id, _cmd: Sel, _desc: Id, _opts: usize, _refl: *mut Id, _err: *mut Id) -> Id {
     unsafe { alloc(MTLCOMPUTEPIPELINESTATE_CLASS.ptr()) }
+}
+extern "C" fn dev_new_render_pipeline_opts_sync(
+    this: Id,
+    cmd: Sel,
+    desc: Id,
+    _opts: usize,
+    refl: *mut Id,
+    err: *mut Id,
+) -> Id {
+    if !refl.is_null() {
+        unsafe { *refl = std::ptr::null_mut(); }
+    }
+    if !err.is_null() {
+        unsafe { *err = std::ptr::null_mut(); }
+    }
+    dev_new_render_pipeline(this, cmd, desc, err)
+}
+extern "C" fn dev_new_render_pipeline_async(this: Id, cmd: Sel, desc: Id, handler: Id) {
+    let pso = dev_new_render_pipeline(this, cmd, desc, std::ptr::null_mut());
+    unsafe { invoke_obj_err_handler(handler, pso, std::ptr::null_mut()) };
+}
+extern "C" fn dev_new_render_pipeline_opts_async(
+    this: Id,
+    cmd: Sel,
+    desc: Id,
+    _opts: usize,
+    handler: Id,
+) {
+    let pso = dev_new_render_pipeline(this, cmd, desc, std::ptr::null_mut());
+    unsafe { invoke_obj_refl_err_handler(handler, pso, std::ptr::null_mut(), std::ptr::null_mut()) };
+}
+extern "C" fn dev_new_compute_pipeline_async(this: Id, cmd: Sel, func: Id, handler: Id) {
+    let cps = dev_new_compute_pipeline(this, cmd, func, std::ptr::null_mut());
+    unsafe { invoke_obj_err_handler(handler, cps, std::ptr::null_mut()) };
+}
+extern "C" fn dev_new_compute_pipeline_opts_async(
+    this: Id,
+    cmd: Sel,
+    func: Id,
+    _opts: usize,
+    handler: Id,
+) {
+    let cps = dev_new_compute_pipeline(this, cmd, func, std::ptr::null_mut());
+    unsafe { invoke_obj_refl_err_handler(handler, cps, std::ptr::null_mut(), std::ptr::null_mut()) };
+}
+extern "C" fn dev_new_compute_pipeline_desc_async(
+    this: Id,
+    cmd: Sel,
+    desc: Id,
+    opts: usize,
+    handler: Id,
+) {
+    let cps = dev_new_compute_pipeline_desc(
+        this,
+        cmd,
+        desc,
+        opts,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    );
+    unsafe { invoke_obj_refl_err_handler(handler, cps, std::ptr::null_mut(), std::ptr::null_mut()) };
 }
 extern "C" fn dev_new_depth_stencil(_this: Id, _cmd: Sel, _desc: Id) -> Id {
     unsafe { alloc(MTLDEPTHSTENCILSTATE_CLASS.ptr()) }
@@ -2331,6 +2427,49 @@ extern "C" fn vdesc_layouts(this: Id, _cmd: Sel) -> Id {
 extern "C" fn desc_new(cls_obj: Id, _cmd: Sel) -> Id {
     unsafe { alloc(cls_obj as *const ClassT) }
 }
+fn clone_prop_map<T: Clone>(m: &Mutex<HashMap<(usize, usize), T>>, src: usize, dst: usize) {
+    let mut g = m.lock().unwrap();
+    let cloned: Vec<(usize, T)> = g
+        .iter()
+        .filter(|&(&(obj, _), _)| obj == src)
+        .map(|(&(_, k), v)| (k, v.clone()))
+        .collect();
+    for (k, v) in cloned {
+        g.insert((dst, k), v);
+    }
+}
+extern "C" fn desc_copy_with_zone(this: Id, _cmd: Sel, _zone: *mut c_void) -> Id {
+    if this.is_null() {
+        return std::ptr::null_mut();
+    }
+    let src = this as usize;
+    let dst_id = unsafe {
+        let cls = *(this as *const *const ClassT);
+        alloc(cls)
+    };
+    let dst = dst_id as usize;
+    clone_prop_map(props_usize(), src, dst);
+    clone_prop_map(props_f64(), src, dst);
+    clone_prop_map(props_color(), src, dst);
+    {
+        let mut g = props_id().lock().unwrap();
+        let cloned: Vec<(usize, usize)> = g
+            .iter()
+            .filter(|&(&(obj, _), _)| obj == src)
+            .map(|(&(_, k), &v)| (k, v))
+            .collect();
+        for (k, v) in cloned {
+            if v != 0 {
+                unsafe { pear_libobjc::object::retain(v as Id) };
+            }
+            g.insert((dst, k), v);
+        }
+    }
+    dst_id
+}
+extern "C" fn desc_copy(this: Id, cmd: Sel) -> Id {
+    desc_copy_with_zone(this, cmd, std::ptr::null_mut())
+}
 extern "C" fn tex_desc_2d(_cls: Id, _cmd: Sel, pf: usize, w: usize, h: usize, mip: bool) -> Id {
     let obj = unsafe { alloc(MTLTEXTUREDESCRIPTOR_CLASS.ptr()) };
     let mut u = props_usize().lock().unwrap();
@@ -2440,11 +2579,18 @@ pub fn register_classes() {
                 ("newTextureWithDescriptor:", i(dev_new_texture_desc as *const ())),
                 ("newLibraryWithData:error:", i(dev_new_library_with_data as *const ())),
                 ("newLibraryWithSource:options:error:", i(dev_new_library_with_source as *const ())),
+                ("newLibraryWithSource:options:completionHandler:", i(dev_new_library_with_source_async as *const ())),
                 ("newDefaultLibrary", i(dev_new_default_library as *const ())),
                 ("newDefaultLibraryWithBundle:error:", i(dev_new_default_library as *const ())),
                 ("newRenderPipelineStateWithDescriptor:error:", i(dev_new_render_pipeline as *const ())),
+                ("newRenderPipelineStateWithDescriptor:options:reflection:error:", i(dev_new_render_pipeline_opts_sync as *const ())),
+                ("newRenderPipelineStateWithDescriptor:completionHandler:", i(dev_new_render_pipeline_async as *const ())),
+                ("newRenderPipelineStateWithDescriptor:options:completionHandler:", i(dev_new_render_pipeline_opts_async as *const ())),
                 ("newComputePipelineStateWithFunction:error:", i(dev_new_compute_pipeline as *const ())),
                 ("newComputePipelineStateWithDescriptor:options:reflection:error:", i(dev_new_compute_pipeline_desc as *const ())),
+                ("newComputePipelineStateWithFunction:completionHandler:", i(dev_new_compute_pipeline_async as *const ())),
+                ("newComputePipelineStateWithFunction:options:completionHandler:", i(dev_new_compute_pipeline_opts_async as *const ())),
+                ("newComputePipelineStateWithDescriptor:options:completionHandler:", i(dev_new_compute_pipeline_desc_async as *const ())),
                 ("newDepthStencilStateWithDescriptor:", i(dev_new_depth_stencil as *const ())),
                 ("newSamplerStateWithDescriptor:", i(dev_new_sampler as *const ())),
                 ("newHeapWithDescriptor:", i(dev_new_heap as *const ())),
@@ -2705,6 +2851,16 @@ pub fn register_classes() {
                 ("setSampleCount:", i(prop_set_usize as *const ())),
                 ("arrayLength", i(prop_get_usize as *const ())),
                 ("setArrayLength:", i(prop_set_usize as *const ())),
+                ("resourceOptions", i(prop_get_usize as *const ())),
+                ("setResourceOptions:", i(prop_set_usize as *const ())),
+                ("cpuCacheMode", i(prop_get_usize as *const ())),
+                ("setCpuCacheMode:", i(prop_set_usize as *const ())),
+                ("hazardTrackingMode", i(prop_get_usize as *const ())),
+                ("setHazardTrackingMode:", i(prop_set_usize as *const ())),
+                ("allowGPUOptimizedContents", i(prop_get_usize as *const ())),
+                ("setAllowGPUOptimizedContents:", i(prop_set_usize as *const ())),
+                ("copy", i(desc_copy as *const ())),
+                ("copyWithZone:", i(desc_copy_with_zone as *const ())),
             ],
             &[
                 ("texture2DDescriptorWithPixelFormat:width:height:mipmapped:", i(tex_desc_2d as *const ())),
@@ -2738,6 +2894,8 @@ pub fn register_classes() {
                 ("isAlphaToCoverageEnabled", i(prop_get_bool_is as *const ())),
                 ("setAlphaToCoverageEnabled:", i(prop_set_usize as *const ())),
                 ("reset", i(mtl_noop0 as *const ())),
+                ("copy", i(desc_copy as *const ())),
+                ("copyWithZone:", i(desc_copy_with_zone as *const ())),
             ],
             &[],
         );
@@ -2760,6 +2918,8 @@ pub fn register_classes() {
                 ("setRenderTargetWidth:", i(prop_set_usize as *const ())),
                 ("renderTargetHeight", i(prop_get_usize as *const ())),
                 ("setRenderTargetHeight:", i(prop_set_usize as *const ())),
+                ("copy", i(desc_copy as *const ())),
+                ("copyWithZone:", i(desc_copy_with_zone as *const ())),
             ],
             &[("renderPassDescriptor", i(desc_new as *const ()))],
         );
@@ -2872,6 +3032,8 @@ pub fn register_classes() {
                 ("attributes", i(vdesc_attributes as *const ())),
                 ("layouts", i(vdesc_layouts as *const ())),
                 ("reset", i(mtl_noop0 as *const ())),
+                ("copy", i(desc_copy as *const ())),
+                ("copyWithZone:", i(desc_copy_with_zone as *const ())),
             ],
             &[("vertexDescriptor", i(desc_new as *const ()))],
         );
@@ -2945,6 +3107,8 @@ pub fn register_classes() {
                 ("setBackFaceStencil:", i(prop_set_id as *const ())),
                 ("label", i(prop_get_id as *const ())),
                 ("setLabel:", i(prop_set_id as *const ())),
+                ("copy", i(desc_copy as *const ())),
+                ("copyWithZone:", i(desc_copy_with_zone as *const ())),
             ],
             &[],
         );
@@ -2970,6 +3134,8 @@ pub fn register_classes() {
                 ("setMaxAnisotropy:", i(prop_set_usize as *const ())),
                 ("label", i(prop_get_id as *const ())),
                 ("setLabel:", i(prop_set_id as *const ())),
+                ("copy", i(desc_copy as *const ())),
+                ("copyWithZone:", i(desc_copy_with_zone as *const ())),
             ],
             &[],
         );
