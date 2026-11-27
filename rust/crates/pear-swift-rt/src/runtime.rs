@@ -171,11 +171,29 @@ extern "C" fn so_superclass(this: Id, _: Sel) -> Id {
 extern "C" fn so_c_superclass(this: Id, _: Sel) -> Id {
     objc_rt::superclass(this as *const ClassT) as Id
 }
+fn is_swift_root_instance(obj: Id) -> bool {
+    let mut c = unsafe { objc_rt::object_class(obj) };
+    while !c.is_null() {
+        if c == SWIFT_OBJECT_CLASS.ptr() {
+            return true;
+        }
+        c = objc_rt::superclass(c);
+    }
+    false
+}
 extern "C" fn so_retain(this: Id, _: Sel) -> Id {
-    swift_retain(this)
+    if is_tracked_swift_object(this as usize) {
+        swift_retain_n(this, 1)
+    } else {
+        object::retain_default(this)
+    }
 }
 extern "C" fn so_release(this: Id, _: Sel) {
-    swift_release(this);
+    if is_tracked_swift_object(this as usize) {
+        swift_release_n(this, 1);
+    } else {
+        object::release_default(this);
+    }
 }
 extern "C" fn so_retain_count(this: Id, _: Sel) -> usize {
     if this.is_null() {
@@ -490,8 +508,14 @@ pub extern "C" fn swift_retain_n(obj: Id, n: u32) -> Id {
             }
         }
     }
-    for _ in 0..n {
-        object::retain(obj);
+    if is_swift_root_instance(obj) {
+        for _ in 0..n {
+            object::retain_default(obj);
+        }
+    } else {
+        for _ in 0..n {
+            object::retain(obj);
+        }
     }
     obj
 }
@@ -543,8 +567,14 @@ pub extern "C" fn swift_release_n(obj: Id, n: u32) {
             }
         }
     }
-    for _ in 0..n {
-        object::release(obj);
+    if is_swift_root_instance(obj) {
+        for _ in 0..n {
+            object::release_default(obj);
+        }
+    } else {
+        for _ in 0..n {
+            object::release(obj);
+        }
     }
 }
 

@@ -374,4 +374,36 @@ mod tests {
         let _imp_check: Imp = std::ptr::null();
         let _ = _imp_check;
     }
+
+    #[test]
+    fn phase5_20_swift_untracked_retain_release_no_recursion() {
+        runtime::register_swift_object_class();
+        unsafe {
+            // 1. Immortal static Swift singleton not in SWIFT_OBJECTS
+            let empty_arr = &raw const runtime::EMPTY_ARRAY_STORAGE as Id;
+            assert_eq!(pear_libobjc::object::retain(empty_arr), empty_arr);
+            pear_libobjc::object::release(empty_arr);
+            assert_eq!(runtime::swift_retain(empty_arr), empty_arr);
+            runtime::swift_release(empty_arr);
+
+            // 2. Stack / static initialized Swift object
+            let mut static_buf = [0usize; 4];
+            let s_obj = runtime::swift_init_static_object(
+                runtime::swift_object_class(),
+                static_buf.as_mut_ptr() as Id,
+            );
+            assert_eq!(pear_libobjc::object::retain(s_obj), s_obj);
+            pear_libobjc::object::release(s_obj);
+            assert_eq!(runtime::swift_retain(s_obj), s_obj);
+            runtime::swift_release(s_obj);
+
+            // 3. ObjC-allocated _TtCs12_SwiftObject instance
+            let objc_alloc = pear_libobjc::object::alloc(runtime::swift_object_class());
+            assert!(!objc_alloc.is_null());
+            assert_eq!(pear_libobjc::object::retain(objc_alloc), objc_alloc);
+            assert_eq!(runtime::swift_retain(objc_alloc), objc_alloc);
+            runtime::swift_release(objc_alloc);
+            pear_libobjc::object::release(objc_alloc);
+        }
+    }
 }

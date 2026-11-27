@@ -890,6 +890,11 @@ extern "C" fn ui_application_main(
                             f_act(d_act.receiver, sel_active, app);
                         }
                     }
+                    pear_foundation::post_notification(
+                        "UIApplicationDidBecomeActiveNotification",
+                        app,
+                        std::ptr::null_mut(),
+                    );
                     let headless = cfg!(not(target_os = "linux"))
                         || std::env::var("PEAR_HEADLESS").as_deref() == Ok("1");
                     if headless {
@@ -2360,7 +2365,7 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
             "NSHashTable", "NSMapTable", "NSPointerArray", "NSIndexSet",
             "NSCountedSet", "NSAttributedString", "NSCharacterSet",
             "NSKeyedArchiver", "NSLock", "NSRecursiveLock",
-            "NSMachPort", "NSNotification", "NSNotificationQueue", "NSProgress",
+            "NSMachPort", "NSNotificationQueue", "NSProgress",
             "NSPropertyListSerialization", "NSRegularExpression", "NSScanner",
             "NSSortDescriptor", "NSTextCheckingResult", "NSURLComponents",
             "NSURLQueryItem", "NSUserActivity", "NSValue", "NSExpression",
@@ -5639,7 +5644,34 @@ extern "C" fn ns_get_executable_path(buf: *mut c_char, bufsize: *mut u32) -> i32
 
 extern "C" fn status_ok_stub() -> i32 { 0 }
 extern "C" fn ptr_null_stub() -> *mut c_void { std::ptr::null_mut() }
-extern "C" fn false_stub() -> bool { false }
+
+extern "C" fn sc_reachability_create_with_name(_alloc: *const c_void, _nodename: *const c_char) -> Id {
+    unsafe { pear_libobjc::object::alloc(pear_libobjc::object::NSOBJECT_CLASS.ptr()) }
+}
+
+extern "C" fn sc_reachability_create_with_addr(_alloc: *const c_void, _addr: *const c_void) -> Id {
+    unsafe { pear_libobjc::object::alloc(pear_libobjc::object::NSOBJECT_CLASS.ptr()) }
+}
+
+extern "C" fn sc_reachability_create_with_addr_pair(
+    _alloc: *const c_void,
+    _local: *const c_void,
+    _remote: *const c_void,
+) -> Id {
+    unsafe { pear_libobjc::object::alloc(pear_libobjc::object::NSOBJECT_CLASS.ptr()) }
+}
+
+extern "C" fn sc_reachability_get_flags(_target: Id, flags: *mut u32) -> bool {
+    if !flags.is_null() {
+        // kSCNetworkReachabilityFlagsReachable (0x02)
+        unsafe { *flags = 0x0002 };
+    }
+    true
+}
+
+extern "C" fn sc_reachability_true_stub() -> bool {
+    true
+}
 
 fn framework_const(key: &'static str) -> usize {
     static MAP: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<&'static str, usize>>> =
@@ -6555,7 +6587,9 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
             "_OBJC_METACLASS_$_UIViewController" => Some(UIVIEWCONTROLLER_META.ptr() as usize),
             "_UIApplicationMain" => Some(ui_application_main as *const () as usize),
             s if frameworks::uikit_ext_symbol(s).is_some() => frameworks::uikit_ext_symbol(s),
-            s if s.starts_with("_UI") => Some(framework_const(Box::leak(s.to_string().into_boxed_str()))),
+            s if s.starts_with("_UI") => Some(framework_const(Box::leak(
+                s.trim_start_matches('_').to_string().into_boxed_str(),
+            ))),
             _ => None,
         },
         Some(path) if path.contains("StoreKit") => match symbol {
@@ -6582,13 +6616,14 @@ pub fn resolve_symbol(library: Option<&str>, symbol: &str) -> Option<usize> {
         Some(path) if path.contains("VideoToolbox") => frameworks::videotoolbox_symbol(symbol),
         Some(path) if path.contains("JavaScriptCore") => frameworks::jsc_symbol(symbol),
         Some(path) if path.contains("SystemConfiguration") => match symbol {
-            "_SCNetworkReachabilityCreateWithName"
-            | "_SCNetworkReachabilityCreateWithAddress" => Some(ptr_null_stub as *const () as usize),
-            "_SCNetworkReachabilityGetFlags"
-            | "_SCNetworkReachabilitySetCallback"
+            "_SCNetworkReachabilityCreateWithName" => Some(sc_reachability_create_with_name as *const () as usize),
+            "_SCNetworkReachabilityCreateWithAddress" => Some(sc_reachability_create_with_addr as *const () as usize),
+            "_SCNetworkReachabilityCreateWithAddressPair" => Some(sc_reachability_create_with_addr_pair as *const () as usize),
+            "_SCNetworkReachabilityGetFlags" => Some(sc_reachability_get_flags as *const () as usize),
+            "_SCNetworkReachabilitySetCallback"
             | "_SCNetworkReachabilityScheduleWithRunLoop"
             | "_SCNetworkReachabilityUnscheduleFromRunLoop"
-            | "_SCNetworkReachabilitySetDispatchQueue" => Some(false_stub as *const () as usize),
+            | "_SCNetworkReachabilitySetDispatchQueue" => Some(sc_reachability_true_stub as *const () as usize),
             _ => frameworks::misc_framework_symbol(path, symbol),
         },
         Some(path) if path.contains("GLKit") => match symbol {
@@ -8220,6 +8255,74 @@ mod tests {
                 Some(&b"conn-async-ok"[..])
             );
             let _ = srv.join();
+        }
+    }
+
+    #[test]
+    fn phase5_20_reachability_and_ui_notification_constants() {
+        init();
+        let sc_path = Some("/System/Library/Frameworks/SystemConfiguration.framework/SystemConfiguration");
+        let ui_path = Some("/System/Library/Frameworks/UIKit.framework/UIKit");
+
+        // 1. SCNetworkReachabilityCreateWithName & GetFlags
+        let create_ptr = resolve_symbol(sc_path, "_SCNetworkReachabilityCreateWithName").unwrap();
+        let get_flags_ptr = resolve_symbol(sc_path, "_SCNetworkReachabilityGetFlags").unwrap();
+        let set_cb_ptr = resolve_symbol(sc_path, "_SCNetworkReachabilitySetCallback").unwrap();
+        let sched_ptr = resolve_symbol(sc_path, "_SCNetworkReachabilityScheduleWithRunLoop").unwrap();
+
+        unsafe {
+            let create_fn: extern "C" fn(*const c_void, *const c_char) -> Id =
+                std::mem::transmute(create_ptr);
+            let get_flags_fn: extern "C" fn(Id, *mut u32) -> bool =
+                std::mem::transmute(get_flags_ptr);
+            let set_cb_fn: extern "C" fn(Id, *const c_void, *const c_void) -> bool =
+                std::mem::transmute(set_cb_ptr);
+            let sched_fn: extern "C" fn(Id, *const c_void, *const c_void) -> bool =
+                std::mem::transmute(sched_ptr);
+
+            let host = std::ffi::CString::new("dispatchosglobal.yuanshen.com").unwrap();
+            let reach = create_fn(std::ptr::null(), host.as_ptr());
+            assert!(!reach.is_null());
+
+            let mut flags = 0u32;
+            assert!(get_flags_fn(reach, &mut flags));
+            assert_ne!(flags & 0x0002, 0);
+            assert!(set_cb_fn(reach, std::ptr::null(), std::ptr::null()));
+            assert!(sched_fn(reach, std::ptr::null(), std::ptr::null()));
+            pear_libobjc::object::release(reach);
+
+            // 2. _UIApplication* constants strip leading underscore
+            let active_slot = resolve_symbol(ui_path, "_UIApplicationDidBecomeActiveNotification").unwrap();
+            let active_id = *(active_slot as *const Id);
+            assert_eq!(
+                pear_foundation::rust_str_from_nsstring(active_id).as_deref(),
+                Some("UIApplicationDidBecomeActiveNotification")
+            );
+            let launch_slot = resolve_symbol(ui_path, "_UIApplicationDidFinishLaunchingNotification").unwrap();
+            let launch_id = *(launch_slot as *const Id);
+            assert_eq!(
+                pear_foundation::rust_str_from_nsstring(launch_id).as_deref(),
+                Some("UIApplicationDidFinishLaunchingNotification")
+            );
+
+            // 3. _OBJC_CLASS_$_NSNotification resolves to real class from pear-foundation
+            let notif_cls = resolve_symbol(
+                Some("/System/Library/Frameworks/Foundation.framework/Foundation"),
+                "_OBJC_CLASS_$_NSNotification",
+            )
+            .unwrap() as Id;
+            let n_str = pear_foundation::nsstring_from_rust("TestEvent");
+            let s_mk = objc_rt::sel("notificationWithName:object:");
+            let d_mk = pear_libobjc::message::lookup_for_send(notif_cls, s_mk);
+            let f_mk: extern "C" fn(Id, Sel, Id, Id) -> Id = std::mem::transmute(d_mk.imp);
+            let notif = f_mk(d_mk.receiver, s_mk, n_str, std::ptr::null_mut());
+            let s_nm = objc_rt::sel("name");
+            let d_nm = pear_libobjc::message::lookup_for_send(notif, s_nm);
+            let f_nm: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_nm.imp);
+            assert_eq!(
+                pear_foundation::rust_str_from_nsstring(f_nm(d_nm.receiver, s_nm)).as_deref(),
+                Some("TestEvent")
+            );
         }
     }
 }

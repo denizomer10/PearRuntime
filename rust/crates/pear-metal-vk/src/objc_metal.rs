@@ -1832,7 +1832,7 @@ fn mul_div255(x: u32) -> u32 {
 
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
-fn rasterize_textured_span<const POT: bool, const BLEND: bool, const MODULATE: bool>(
+pub(crate) fn rasterize_textured_span<const POT: bool, const BLEND: bool, const MODULATE: bool>(
     dst_span: &mut [u8],
     frag_bytes: &[u8],
     fw: usize,
@@ -1865,6 +1865,65 @@ fn rasterize_textured_span<const POT: bool, const BLEND: bool, const MODULATE: b
         } else if v_fp >= fh_fp {
             v_fp -= fh_fp;
         }
+    }
+    if !BLEND && !MODULATE && sr_i == dr_i && dv_fp == 0 && (POT || (0..fh_fp).contains(&v_fp)) {
+        let ty = if POT {
+            ((v_fp >> 16) as usize) & fh_mask
+        } else {
+            ((v_fp >> 16).max(0) as usize).min(fh - 1)
+        };
+        let row_start = ty * fw * 4;
+        let row = &frag_bytes[row_start..row_start + fw * 4];
+        if du_fp == 0 && (POT || (0..fw_fp).contains(&u_fp)) {
+            let tx = if POT {
+                ((u_fp >> 16) as usize) & fw_mask
+            } else {
+                ((u_fp >> 16).max(0) as usize).min(fw - 1)
+            };
+            let px: [u8; 4] = row[tx * 4..tx * 4 + 4].try_into().unwrap();
+            for dst in dst_span.chunks_exact_mut(4) {
+                dst.copy_from_slice(&px);
+            }
+            return;
+        }
+        if du_fp == 65536 && (POT || (0..fw_fp).contains(&u_fp)) {
+            let mut tx = if POT {
+                ((u_fp >> 16) as usize) & fw_mask
+            } else {
+                ((u_fp >> 16).max(0) as usize).min(fw - 1)
+            };
+            let mut dst_off = 0usize;
+            let mut rem_px = dst_span.len() / 4;
+            while rem_px > 0 {
+                let take = rem_px.min(fw - tx);
+                let byte_len = take * 4;
+                dst_span[dst_off..dst_off + byte_len]
+                    .copy_from_slice(&row[tx * 4..tx * 4 + byte_len]);
+                dst_off += byte_len;
+                rem_px -= take;
+                tx = 0;
+            }
+            return;
+        }
+        for dst in dst_span.chunks_exact_mut(4) {
+            let tx = if POT {
+                let tx = ((u_fp >> 16) as usize) & fw_mask;
+                u_fp = u_fp.wrapping_add(du_fp);
+                tx
+            } else {
+                let tx = ((u_fp >> 16).max(0) as usize).min(fw - 1);
+                u_fp += du_fp;
+                if u_fp >= fw_fp {
+                    u_fp -= fw_fp;
+                } else if u_fp < 0 {
+                    u_fp += fw_fp;
+                }
+                tx
+            };
+            let off_x = tx * 4;
+            dst.copy_from_slice(&row[off_x..off_x + 4]);
+        }
+        return;
     }
     for dst in dst_span.chunks_exact_mut(4) {
         let (tx, ty) = if POT {

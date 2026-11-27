@@ -167,8 +167,8 @@ extern "C" fn cf_error_get_domain(_err: Id) -> Id {
     nsstring_from_rust("NSCocoaErrorDomain")
 }
 
-extern "C" fn cf_bundle_get_identifier(_bundle: Id) -> Id {
-    nsstring_from_rust("com.pearruntime.app")
+pub(crate) extern "C" fn cf_bundle_get_identifier(bundle: Id) -> Id {
+    crate::bundle_id_for(bundle)
 }
 
 extern "C" fn cf_locale_get_identifier(_locale: Id) -> Id {

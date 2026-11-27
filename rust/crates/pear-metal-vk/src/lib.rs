@@ -1442,4 +1442,102 @@ mod tests {
             pear_libobjc::object::release(dev);
         }
     }
+
+    #[test]
+    fn phase5_20_rasterizer_constant_row_and_1to1_blit_parity() {
+        fn ref_span(
+            len_px: usize,
+            frag_bytes: &[u8],
+            fw: usize,
+            fh: usize,
+            pot: bool,
+            mut u_fp: i64,
+            mut v_fp: i64,
+            du_fp: i64,
+            dv_fp: i64,
+        ) -> Vec<u8> {
+            let mut out = vec![0u8; len_px * 4];
+            let fw_mask = fw.saturating_sub(1);
+            let fh_mask = fh.saturating_sub(1);
+            let fw_fp = (fw as i64) << 16;
+            let fh_fp = (fh as i64) << 16;
+            if !pot {
+                if u_fp < 0 {
+                    u_fp += fw_fp;
+                } else if u_fp >= fw_fp {
+                    u_fp -= fw_fp;
+                }
+                if v_fp < 0 {
+                    v_fp += fh_fp;
+                } else if v_fp >= fh_fp {
+                    v_fp -= fh_fp;
+                }
+            }
+            for dst in out.chunks_exact_mut(4) {
+                let (tx, ty) = if pot {
+                    let tx = ((u_fp >> 16) as usize) & fw_mask;
+                    let ty = ((v_fp >> 16) as usize) & fh_mask;
+                    u_fp = u_fp.wrapping_add(du_fp);
+                    v_fp = v_fp.wrapping_add(dv_fp);
+                    (tx, ty)
+                } else {
+                    let tx = ((u_fp >> 16).max(0) as usize).min(fw - 1);
+                    let ty = ((v_fp >> 16).max(0) as usize).min(fh - 1);
+                    u_fp += du_fp;
+                    if u_fp >= fw_fp {
+                        u_fp -= fw_fp;
+                    } else if u_fp < 0 {
+                        u_fp += fw_fp;
+                    }
+                    v_fp += dv_fp;
+                    if v_fp >= fh_fp {
+                        v_fp -= fh_fp;
+                    } else if v_fp < 0 {
+                        v_fp += fh_fp;
+                    }
+                    (tx, ty)
+                };
+                let off_s = (ty * fw + tx) * 4;
+                dst.copy_from_slice(&frag_bytes[off_s..off_s + 4]);
+            }
+            out
+        }
+
+        for &(pot, fw, fh) in &[(true, 8usize, 4usize), (false, 6usize, 5usize)] {
+            let mut tex = vec![0u8; fw * fh * 4];
+            for y in 0..fh {
+                for x in 0..fw {
+                    let idx = (y * fw + x) * 4;
+                    tex[idx] = (x * 31 + 10) as u8;
+                    tex[idx + 1] = (y * 47 + 20) as u8;
+                    tex[idx + 2] = ((x ^ y) * 19 + 5) as u8;
+                    tex[idx + 3] = 255;
+                }
+            }
+            for &(len_px, u_fp, v_fp, du_fp, dv_fp) in &[
+                (17usize, 3i64 << 16, 2i64 << 16, 65536i64, 0i64), // 1:1 blit wrapping multiple times
+                (11, 2 << 16, 1 << 16, 0, 0),                        // constant-texel fill
+                (15, (4 << 16) + 1234, (3 << 16) + 500, 32768, 0),   // 2x horizontal scale
+                (12, 1 << 16, 2 << 16, -24000, 0),                   // negative du wrap
+            ] {
+                let mut got = vec![0u8; len_px * 4];
+                if pot {
+                    objc_metal::rasterize_textured_span::<true, false, false>(
+                        &mut got, &tex, fw, fh, 0, 2, 0, 2, u_fp, v_fp, du_fp, dv_fp, 255, 255,
+                        255, 255,
+                    );
+                } else {
+                    objc_metal::rasterize_textured_span::<false, false, false>(
+                        &mut got, &tex, fw, fh, 0, 2, 0, 2, u_fp, v_fp, du_fp, dv_fp, 255, 255,
+                        255, 255,
+                    );
+                }
+                let expected = ref_span(len_px, &tex, fw, fh, pot, u_fp, v_fp, du_fp, dv_fp);
+                assert_eq!(
+                    got, expected,
+                    "mismatch for pot={pot} fw={fw} fh={fh} u={u_fp} v={v_fp} du={du_fp}"
+                );
+            }
+        }
+    }
 }

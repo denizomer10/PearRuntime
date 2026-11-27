@@ -65,6 +65,7 @@ foundation_class!(NSMUTABLEDATA_CLASS, NSMUTABLEDATA_META);
 foundation_class!(NSNUMBER_CLASS, NSNUMBER_META);
 foundation_class!(NSBUNDLE_CLASS, NSBUNDLE_META);
 foundation_class!(NSNOTIFICATIONCENTER_CLASS, NSNOTIFICATIONCENTER_META);
+foundation_class!(NSNOTIFICATION_CLASS, NSNOTIFICATION_META);
 foundation_class!(NSRUNLOOP_CLASS, NSRUNLOOP_META);
 foundation_class!(NSDATE_CLASS, NSDATE_META);
 foundation_class!(NSERROR_CLASS, NSERROR_META);
@@ -2061,12 +2062,171 @@ extern "C" fn data_with_file(cls: Id, _: Sel, path: Id) -> Id {
     let Ok(bytes) = std::fs::read(&p) else { return std::ptr::null_mut(); };
     unsafe { alloc_with_backing(cls as *const ClassT, Backing::Bytes(bytes)) }
 }
-extern "C" fn data_with_file_opts_err(cls: Id, sel_id: Sel, path: Id, _opts: usize, err: *mut Id) -> Id {
-    let res = data_with_file(cls, sel_id, path);
-    if res.is_null() && !err.is_null() {
-        unsafe { *err = std::ptr::null_mut(); }
+extern "C" fn data_with_file_opts_err(cls: Id, _sel_id: Sel, path: Id, _opts: usize, err: *mut Id) -> Id {
+    let Some(p) = path_from_str_or_url(path) else {
+        if !err.is_null() {
+            unsafe {
+                *err = url_session::make_nserror("NSCocoaErrorDomain", 260, "invalid path");
+            }
+        }
+        return std::ptr::null_mut();
+    };
+    match std::fs::read(&p) {
+        Ok(bytes) => {
+            if !err.is_null() {
+                unsafe { *err = std::ptr::null_mut() };
+            }
+            unsafe { alloc_with_backing(cls as *const ClassT, Backing::Bytes(bytes)) }
+        }
+        Err(e) => {
+            if !err.is_null() {
+                unsafe {
+                    *err = url_session::make_nserror("NSCocoaErrorDomain", 260, &e.to_string());
+                }
+            }
+            std::ptr::null_mut()
+        }
     }
-    res
+}
+extern "C" fn data_init_with_file_opts_err(
+    this: Id,
+    _sel_id: Sel,
+    path: Id,
+    _opts: usize,
+    err: *mut Id,
+) -> Id {
+    if this.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Some(p) = path_from_str_or_url(path) else {
+        if !err.is_null() {
+            unsafe {
+                *err = url_session::make_nserror("NSCocoaErrorDomain", 260, "invalid path");
+            }
+        }
+        return std::ptr::null_mut();
+    };
+    match std::fs::read(&p) {
+        Ok(bytes) => {
+            if !err.is_null() {
+                unsafe { *err = std::ptr::null_mut() };
+            }
+            store().lock().unwrap().insert(this as usize, Backing::Bytes(bytes));
+            this
+        }
+        Err(e) => {
+            if !err.is_null() {
+                unsafe {
+                    *err = url_session::make_nserror("NSCocoaErrorDomain", 260, &e.to_string());
+                }
+            }
+            std::ptr::null_mut()
+        }
+    }
+}
+fn read_string_parts(
+    path_or_url: Id,
+    used_enc: *mut usize,
+    err_out: *mut Id,
+) -> Option<String> {
+    let Some(p) = path_from_str_or_url(path_or_url) else {
+        if !err_out.is_null() {
+            unsafe {
+                *err_out = url_session::make_nserror("NSCocoaErrorDomain", 260, "invalid path");
+            }
+        }
+        return None;
+    };
+    match std::fs::read(&p) {
+        Ok(bytes) => {
+            let (text, enc) = if bytes.starts_with(&[0xFF, 0xFE]) {
+                let units: Vec<u16> = bytes[2..]
+                    .chunks_exact(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect();
+                (String::from_utf16_lossy(&units), 10usize)
+            } else if bytes.starts_with(&[0xFE, 0xFF]) {
+                let units: Vec<u16> = bytes[2..]
+                    .chunks_exact(2)
+                    .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                    .collect();
+                (String::from_utf16_lossy(&units), 10usize)
+            } else if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+                (String::from_utf8_lossy(&bytes[3..]).into_owned(), 4usize)
+            } else {
+                (String::from_utf8_lossy(&bytes).into_owned(), 4usize)
+            };
+            if !used_enc.is_null() {
+                unsafe { *used_enc = enc };
+            }
+            if !err_out.is_null() {
+                unsafe { *err_out = std::ptr::null_mut() };
+            }
+            Some(text)
+        }
+        Err(e) => {
+            if !err_out.is_null() {
+                unsafe {
+                    *err_out = url_session::make_nserror("NSCocoaErrorDomain", 260, &e.to_string());
+                }
+            }
+            None
+        }
+    }
+}
+extern "C" fn str_with_contents_of_file_enc(
+    _cls: Id,
+    _: Sel,
+    path: Id,
+    _enc: usize,
+    err: *mut Id,
+) -> Id {
+    read_string_parts(path, std::ptr::null_mut(), err)
+        .map(|s| nsstring_from_rust(&s))
+        .unwrap_or(std::ptr::null_mut())
+}
+extern "C" fn str_with_contents_of_file_used(
+    _cls: Id,
+    _: Sel,
+    path: Id,
+    used: *mut usize,
+    err: *mut Id,
+) -> Id {
+    read_string_parts(path, used, err)
+        .map(|s| nsstring_from_rust(&s))
+        .unwrap_or(std::ptr::null_mut())
+}
+extern "C" fn str_init_contents_of_file_enc(
+    this: Id,
+    _: Sel,
+    path: Id,
+    _enc: usize,
+    err: *mut Id,
+) -> Id {
+    if this.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Some(s) = read_string_parts(path, std::ptr::null_mut(), err) else {
+        return std::ptr::null_mut();
+    };
+    store().lock().unwrap().insert(this as usize, Backing::Str(s));
+    this
+}
+extern "C" fn str_init_contents_of_file_used(
+    this: Id,
+    _: Sel,
+    path: Id,
+    used: *mut usize,
+    err: *mut Id,
+) -> Id {
+    if this.is_null() {
+        return std::ptr::null_mut();
+    }
+    let Some(s) = read_string_parts(path, used, err) else {
+        return std::ptr::null_mut();
+    };
+    store().lock().unwrap().insert(this as usize, Backing::Str(s));
+    this
 }
 extern "C" fn data_init_with_file(this: Id, sel_id: Sel, path: Id) -> Id {
     let _ = this;
@@ -2083,112 +2243,486 @@ extern "C" fn data_write_file(this: Id, _: Sel, path: Id, _atomically: bool) -> 
 
 // ---- NSBundle / NSNotificationCenter / NSRunLoop / NSDate ------------------
 
+struct BundleState {
+    path: String,
+    info_dict: usize,
+}
+
 static MAIN_BUNDLE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static BUNDLES: OnceLock<Mutex<HashMap<usize, BundleState>>> = OnceLock::new();
+static BUNDLE_BY_PATH: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
 static DEFAULT_NC: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static MAIN_RL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn bundles() -> &'static Mutex<HashMap<usize, BundleState>> {
+    BUNDLES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn bundle_by_path() -> &'static Mutex<HashMap<String, usize>> {
+    BUNDLE_BY_PATH.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn canonical_bundle_path(raw: &str) -> String {
+    let stripped = raw.strip_prefix("file://").unwrap_or(raw);
+    let trimmed = if stripped.len() > 1 {
+        stripped.trim_end_matches('/')
+    } else {
+        stripped
+    };
+    std::fs::canonicalize(trimmed)
+        .unwrap_or_else(|_| std::path::PathBuf::from(trimmed))
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn get_or_create_bundle_for_path(raw_path: &str, require_exists: bool) -> Id {
+    let clean = raw_path.strip_prefix("file://").unwrap_or(raw_path).trim();
+    if clean.is_empty() {
+        return std::ptr::null_mut();
+    }
+    if require_exists && !std::path::Path::new(clean).exists() {
+        return std::ptr::null_mut();
+    }
+    let canon = canonical_bundle_path(clean);
+    if let Some(&existing) = bundle_by_path().lock().unwrap().get(&canon) {
+        if existing != 0 {
+            return existing as Id;
+        }
+    }
+    let b = unsafe { pear_libobjc::object::alloc(NSBUNDLE_CLASS.ptr()) };
+    let mut by_p = bundle_by_path().lock().unwrap();
+    if let Some(&existing) = by_p.get(&canon) {
+        if existing != 0 {
+            drop(by_p);
+            pear_libobjc::object::release(b);
+            return existing as Id;
+        }
+    }
+    by_p.insert(canon.clone(), b as usize);
+    bundles().lock().unwrap().insert(
+        b as usize,
+        BundleState {
+            path: canon,
+            info_dict: 0,
+        },
+    );
+    b
+}
 
 extern "C" fn bundle_main(_cls: Id, _: Sel) -> Id {
     let cur = MAIN_BUNDLE.load(std::sync::atomic::Ordering::Acquire);
     if cur != 0 {
         return cur as Id;
     }
-    let b = unsafe { pear_libobjc::object::alloc(NSBUNDLE_CLASS.ptr()) };
-    MAIN_BUNDLE.store(b as usize, std::sync::atomic::Ordering::Release);
-    b
+    let base = bundle_base_dir();
+    let canon = canonical_bundle_path(&base);
+    let b = get_or_create_bundle_for_path(&canon, false);
+    match MAIN_BUNDLE.compare_exchange(
+        0,
+        b as usize,
+        std::sync::atomic::Ordering::AcqRel,
+        std::sync::atomic::Ordering::Acquire,
+    ) {
+        Ok(_) => b,
+        Err(prev) => prev as Id,
+    }
 }
+
 fn bundle_base_dir() -> String {
     let raw = std::env::var("PEAR_BUNDLE_PATH")
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default().to_string_lossy().into_owned());
-    std::fs::canonicalize(&raw)
-        .unwrap_or_else(|_| std::path::PathBuf::from(raw))
-        .to_string_lossy()
-        .into_owned()
+    canonical_bundle_path(&raw)
 }
-extern "C" fn bundle_path(_this: Id, _: Sel) -> Id {
-    nsstring_from_rust(&bundle_base_dir())
+
+fn bundle_dir_for(this: Id) -> String {
+    if !this.is_null() {
+        if let Some(st) = bundles().lock().unwrap().get(&(this as usize)) {
+            return st.path.clone();
+        }
+    }
+    bundle_base_dir()
 }
-extern "C" fn bundle_id(_this: Id, _: Sel) -> Id {
+
+fn extract_file_path_arg(arg: Id) -> Option<String> {
+    let s = rust_str_from_nsstring(arg)?;
+    let clean = s.strip_prefix("file://").unwrap_or(&s).to_string();
+    (!clean.is_empty()).then_some(clean)
+}
+
+extern "C" fn bundle_path(this: Id, _: Sel) -> Id {
+    nsstring_from_rust(&bundle_dir_for(this))
+}
+
+pub(crate) fn bundle_id_for(this: Id) -> Id {
+    let b = if this.is_null() {
+        cf_bundle_get_main()
+    } else {
+        this
+    };
+    let info = bundle_info(b, sel("infoDictionary"));
+    if let Some(v) = nsdict_lookup_str(info, "CFBundleIdentifier") {
+        if let Some(s) = rust_str_from_nsstring(v).filter(|s| !s.is_empty()) {
+            return nsstring_from_rust(&s);
+        }
+    }
     nsstring_from_rust("com.pearruntime.app")
 }
-extern "C" fn bundle_exec_path(_this: Id, _: Sel) -> Id {
-    let p = std::path::Path::new(&bundle_base_dir()).join("App");
+
+extern "C" fn bundle_id(this: Id, _: Sel) -> Id {
+    bundle_id_for(this)
+}
+
+extern "C" fn bundle_exec_path(this: Id, _: Sel) -> Id {
+    let dir = bundle_dir_for(this);
+    let info = bundle_info(this, sel("infoDictionary"));
+    let exec_name = nsdict_lookup_str(info, "CFBundleExecutable")
+        .and_then(rust_str_from_nsstring)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "App".to_string());
+    let p = std::path::Path::new(&dir).join(exec_name);
     nsstring_from_rust(&p.to_string_lossy())
 }
-extern "C" fn bundle_url(_this: Id, _: Sel) -> Id {
-    unsafe { alloc_with_backing(NSURL_CLASS.ptr(), Backing::Str(bundle_base_dir())) }
+
+extern "C" fn bundle_exec_url(this: Id, cmd: Sel) -> Id {
+    let p_str = rust_str_from_nsstring(bundle_exec_path(this, cmd)).unwrap_or_default();
+    unsafe { alloc_with_backing(NSURL_CLASS.ptr(), Backing::Str(p_str)) }
 }
-extern "C" fn bundle_receipt_url(_this: Id, _: Sel) -> Id {
-    let p = std::path::Path::new(&bundle_base_dir()).join("StoreKit/receipt");
+
+extern "C" fn bundle_url(this: Id, _: Sel) -> Id {
+    unsafe { alloc_with_backing(NSURL_CLASS.ptr(), Backing::Str(bundle_dir_for(this))) }
+}
+
+extern "C" fn bundle_receipt_url(this: Id, _: Sel) -> Id {
+    let p = std::path::Path::new(&bundle_dir_for(this)).join("StoreKit/receipt");
     unsafe { alloc_with_backing(NSURL_CLASS.ptr(), Backing::Str(p.to_string_lossy().into_owned())) }
 }
+
 extern "C" fn bundle_localized_string(_this: Id, _: Sel, key: Id, value: Id, _table: Id) -> Id {
     if let Some(v) = rust_str_from_nsstring(value).filter(|s| !s.is_empty()) {
         return nsstring_from_rust(&v);
     }
     nsstring_from_rust(&rust_str_from_nsstring(key).unwrap_or_default())
 }
+
 extern "C" fn bundle_localizations(_this: Id, _: Sel) -> Id {
     let en = nsstring_from_rust("en");
     unsafe { alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(vec![retain(en) as usize])) }
 }
+
 extern "C" fn bundle_for_arg(cls: Id, _: Sel, _arg: Id) -> Id {
     bundle_main(cls, sel("mainBundle"))
 }
-extern "C" fn bundle_info(_this: Id, _: Sel) -> Id {
-    static INFO: OnceLock<usize> = OnceLock::new();
-    *INFO.get_or_init(|| {
-        let plist_path = std::path::Path::new(&bundle_base_dir()).join("Info.plist");
-        if let Ok(bytes) = std::fs::read(&plist_path) {
-            if let Some(d) = plist_parse_bytes(&bytes) {
-                if !d.is_null() {
-                    return retain(d) as usize;
+
+extern "C" fn bundle_with_path(_cls: Id, _: Sel, path: Id) -> Id {
+    let Some(p) = extract_file_path_arg(path) else {
+        return std::ptr::null_mut();
+    };
+    get_or_create_bundle_for_path(&p, true)
+}
+
+extern "C" fn bundle_with_url(_cls: Id, _: Sel, url: Id) -> Id {
+    let Some(p) = extract_file_path_arg(url) else {
+        return std::ptr::null_mut();
+    };
+    get_or_create_bundle_for_path(&p, true)
+}
+
+extern "C" fn bundle_init_with_path(this: Id, _: Sel, path: Id) -> Id {
+    let Some(p) = extract_file_path_arg(path) else {
+        return std::ptr::null_mut();
+    };
+    if !std::path::Path::new(&p).exists() {
+        return std::ptr::null_mut();
+    }
+    let canon = canonical_bundle_path(&p);
+    bundle_by_path()
+        .lock()
+        .unwrap()
+        .entry(canon.clone())
+        .or_insert(this as usize);
+    let old_dict = {
+        let mut g = bundles().lock().unwrap();
+        g.insert(
+            this as usize,
+            BundleState {
+                path: canon,
+                info_dict: 0,
+            },
+        )
+        .map(|s| s.info_dict)
+        .unwrap_or(0)
+    };
+    if old_dict != 0 {
+        release(old_dict as Id);
+    }
+    this
+}
+
+extern "C" fn bundle_init_with_url(this: Id, cmd: Sel, url: Id) -> Id {
+    bundle_init_with_path(this, cmd, url)
+}
+
+extern "C" fn bundle_with_identifier(cls: Id, _: Sel, ident: Id) -> Id {
+    let Some(want) = rust_str_from_nsstring(ident).filter(|s| !s.is_empty()) else {
+        return bundle_main(cls, sel("mainBundle"));
+    };
+    let main = bundle_main(cls, sel("mainBundle"));
+    if rust_str_from_nsstring(bundle_id_for(main)).as_deref() == Some(want.as_str()) {
+        return main;
+    }
+    let existing_ids: Vec<usize> = {
+        bundles().lock().unwrap().keys().copied().collect()
+    };
+    for bid in existing_ids {
+        let b = bid as Id;
+        if rust_str_from_nsstring(bundle_id_for(b)).as_deref() == Some(want.as_str()) {
+            return b;
+        }
+    }
+    // Scan `<main>/Frameworks/*.framework` and `<main>/*.bundle`
+    let main_dir = std::path::PathBuf::from(bundle_dir_for(main));
+    for scan_dir in [main_dir.clone(), main_dir.join("Frameworks")] {
+        if let Ok(entries) = std::fs::read_dir(&scan_dir) {
+            for ent in entries.flatten() {
+                let p = ent.path();
+                if p.is_dir() {
+                    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    if ext == "bundle" || ext == "framework" {
+                        let cand = get_or_create_bundle_for_path(&p.to_string_lossy(), true);
+                        if !cand.is_null()
+                            && rust_str_from_nsstring(bundle_id_for(cand)).as_deref()
+                                == Some(want.as_str())
+                        {
+                            return cand;
+                        }
+                    }
                 }
             }
         }
-        dict_new(NSDICTIONARY_CLASS.ptr() as Id, sel("dictionary")) as usize
-    }) as Id
+    }
+    main
 }
+
+extern "C" fn bundle_all_bundles(cls: Id, _: Sel) -> Id {
+    let _ = bundle_main(cls, sel("mainBundle"));
+    let ids: Vec<Id> = bundles()
+        .lock()
+        .unwrap()
+        .keys()
+        .map(|&k| k as Id)
+        .collect();
+    nsarray_from_ids(ids)
+}
+
+extern "C" fn bundle_info(this: Id, _: Sel) -> Id {
+    if !this.is_null() {
+        if let Some(st) = bundles().lock().unwrap().get(&(this as usize)) {
+            if st.info_dict != 0 {
+                return st.info_dict as Id;
+            }
+        }
+    }
+    let dir = bundle_dir_for(this);
+    let plist_path = std::path::Path::new(&dir).join("Info.plist");
+    let parsed = std::fs::read(&plist_path)
+        .ok()
+        .and_then(|bytes| plist_parse_bytes(&bytes))
+        .filter(|d| !d.is_null());
+    let dict = parsed.unwrap_or_else(|| dict_new(NSDICTIONARY_CLASS.ptr() as Id, sel("dictionary")));
+    if this.is_null() {
+        return dict;
+    }
+    let dict_ret = retain(dict) as usize;
+    let raced_existing = {
+        let mut g = bundles().lock().unwrap();
+        let entry = g.entry(this as usize).or_insert_with(|| BundleState {
+            path: dir,
+            info_dict: 0,
+        });
+        if entry.info_dict == 0 {
+            entry.info_dict = dict_ret;
+            0
+        } else {
+            entry.info_dict
+        }
+    };
+    if raced_existing != 0 {
+        release(dict_ret as Id);
+        raced_existing as Id
+    } else {
+        dict
+    }
+}
+
 extern "C" fn bundle_obj_for_info(this: Id, _: Sel, key: Id) -> Id {
     let d = bundle_info(this, sel("infoDictionary"));
     dict_get(d, sel("objectForKey:"), key)
 }
-fn resolve_bundle_file(sub: Option<&str>, name: Id, ext: Id) -> Option<String> {
-    let mut dir = std::path::PathBuf::from(bundle_base_dir());
-    if let Some(s) = sub.filter(|s| !s.is_empty()) {
-        dir = dir.join(s);
-    }
+
+fn resolve_bundle_file(
+    this: Id,
+    sub: Option<&str>,
+    name: Id,
+    ext: Id,
+    loc: Option<&str>,
+) -> Option<String> {
+    let root = std::path::PathBuf::from(bundle_dir_for(this));
     let n = rust_str_from_nsstring(name).unwrap_or_default();
-    let e = rust_str_from_nsstring(ext).unwrap_or_default();
-    let fname = if e.is_empty() { n } else { format!("{n}.{e}") };
-    let full = dir.join(fname);
-    full.exists().then(|| full.to_string_lossy().into_owned())
+    let e_raw = rust_str_from_nsstring(ext).unwrap_or_default();
+    let e = e_raw.trim_start_matches('.');
+    if n.is_empty() && e.is_empty() {
+        return None;
+    }
+    let fname = if e.is_empty() {
+        n
+    } else if n.is_empty() {
+        format!(".{e}")
+    } else if n.ends_with(&format!(".{e}")) {
+        n
+    } else {
+        format!("{n}.{e}")
+    };
+    let clean_sub = sub.map(|s| s.trim_matches('/')).filter(|s| !s.is_empty());
+    let join_sub = |base: std::path::PathBuf| -> std::path::PathBuf {
+        let d = match clean_sub {
+            Some(s) => base.join(s),
+            None => base,
+        };
+        d.join(&fname)
+    };
+    let mut candidates = Vec::with_capacity(4);
+    candidates.push(join_sub(root.clone()));
+    if let Some(l) = loc.map(str::trim).filter(|s| !s.is_empty()) {
+        candidates.push(join_sub(root.join(format!("{l}.lproj"))));
+    }
+    candidates.push(join_sub(root.join("en.lproj")));
+    candidates.push(join_sub(root.join("Base.lproj")));
+    for cand in candidates {
+        if cand.exists() {
+            return Some(cand.to_string_lossy().into_owned());
+        }
+    }
+    None
 }
-extern "C" fn bundle_path_for_res(_this: Id, _: Sel, name: Id, ext: Id) -> Id {
-    resolve_bundle_file(None, name, ext)
+
+extern "C" fn bundle_path_for_res(this: Id, _: Sel, name: Id, ext: Id) -> Id {
+    resolve_bundle_file(this, None, name, ext, None)
         .map(|s| nsstring_from_rust(&s))
         .unwrap_or(std::ptr::null_mut())
 }
-extern "C" fn bundle_path_for_res_in_dir(_this: Id, _: Sel, name: Id, ext: Id, dir: Id) -> Id {
+
+extern "C" fn bundle_path_for_res_in_dir(this: Id, _: Sel, name: Id, ext: Id, dir: Id) -> Id {
     let sub = rust_str_from_nsstring(dir);
-    resolve_bundle_file(sub.as_deref(), name, ext)
+    resolve_bundle_file(this, sub.as_deref(), name, ext, None)
         .map(|s| nsstring_from_rust(&s))
         .unwrap_or(std::ptr::null_mut())
 }
-extern "C" fn bundle_url_for_res(_this: Id, _: Sel, name: Id, ext: Id) -> Id {
-    resolve_bundle_file(None, name, ext)
-        .map(|s| unsafe { alloc_with_backing(NSURL_CLASS.ptr(), Backing::Str(s)) })
-        .unwrap_or(std::ptr::null_mut())
-}
-extern "C" fn bundle_url_for_res_in_dir(_this: Id, _: Sel, name: Id, ext: Id, dir: Id) -> Id {
+
+extern "C" fn bundle_path_for_res_in_dir_loc(
+    this: Id,
+    _: Sel,
+    name: Id,
+    ext: Id,
+    dir: Id,
+    loc: Id,
+) -> Id {
     let sub = rust_str_from_nsstring(dir);
-    resolve_bundle_file(sub.as_deref(), name, ext)
+    let l = rust_str_from_nsstring(loc);
+    resolve_bundle_file(this, sub.as_deref(), name, ext, l.as_deref())
+        .map(|s| nsstring_from_rust(&s))
+        .unwrap_or(std::ptr::null_mut())
+}
+
+extern "C" fn bundle_url_for_res(this: Id, _: Sel, name: Id, ext: Id) -> Id {
+    resolve_bundle_file(this, None, name, ext, None)
         .map(|s| unsafe { alloc_with_backing(NSURL_CLASS.ptr(), Backing::Str(s)) })
         .unwrap_or(std::ptr::null_mut())
 }
-extern "C" fn bundle_paths_for_res(_this: Id, _: Sel, _ext: Id, _dir: Id) -> Id {
-    unsafe { alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(Vec::new())) }
+
+extern "C" fn bundle_url_for_res_in_dir(this: Id, _: Sel, name: Id, ext: Id, dir: Id) -> Id {
+    let sub = rust_str_from_nsstring(dir);
+    resolve_bundle_file(this, sub.as_deref(), name, ext, None)
+        .map(|s| unsafe { alloc_with_backing(NSURL_CLASS.ptr(), Backing::Str(s)) })
+        .unwrap_or(std::ptr::null_mut())
+}
+
+extern "C" fn bundle_url_for_res_in_dir_loc(
+    this: Id,
+    _: Sel,
+    name: Id,
+    ext: Id,
+    dir: Id,
+    loc: Id,
+) -> Id {
+    let sub = rust_str_from_nsstring(dir);
+    let l = rust_str_from_nsstring(loc);
+    resolve_bundle_file(this, sub.as_deref(), name, ext, l.as_deref())
+        .map(|s| unsafe { alloc_with_backing(NSURL_CLASS.ptr(), Backing::Str(s)) })
+        .unwrap_or(std::ptr::null_mut())
+}
+
+fn collect_bundle_paths(this: Id, ext: Id, dir: Id) -> Vec<String> {
+    let mut target = std::path::PathBuf::from(bundle_dir_for(this));
+    if let Some(sub) = rust_str_from_nsstring(dir)
+        .map(|s| s.trim_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+    {
+        target = target.join(sub);
+    }
+    let want_ext = rust_str_from_nsstring(ext)
+        .map(|s| s.trim_start_matches('.').to_string())
+        .filter(|s| !s.is_empty());
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&target) {
+        for ent in entries.flatten() {
+            let p = ent.path();
+            let matched = match want_ext.as_deref() {
+                None => true,
+                Some(w) => p
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map_or(false, |e| e.eq_ignore_ascii_case(w)),
+            };
+            if matched {
+                out.push(p.to_string_lossy().into_owned());
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+extern "C" fn bundle_paths_for_res(this: Id, _: Sel, ext: Id, dir: Id) -> Id {
+    let ids: Vec<Id> = collect_bundle_paths(this, ext, dir)
+        .into_iter()
+        .map(|s| nsstring_from_rust(&s))
+        .collect();
+    nsarray_from_ids(ids)
+}
+
+extern "C" fn bundle_urls_for_res(this: Id, _: Sel, ext: Id, dir: Id) -> Id {
+    let ids: Vec<Id> = collect_bundle_paths(this, ext, dir)
+        .into_iter()
+        .map(|s| unsafe { alloc_with_backing(NSURL_CLASS.ptr(), Backing::Str(s)) })
+        .collect();
+    nsarray_from_ids(ids)
+}
+
+extern "C" fn bundle_dealloc(this: Id, cmd: Sel) {
+    let removed = bundles().lock().unwrap().remove(&(this as usize));
+    if let Some(st) = removed {
+        let mut by_p = bundle_by_path().lock().unwrap();
+        if by_p.get(&st.path).copied() == Some(this as usize) {
+            by_p.remove(&st.path);
+        }
+        drop(by_p);
+        if st.info_dict != 0 {
+            release(st.info_dict as Id);
+        }
+    }
+    f_dealloc(this, cmd);
 }
 extern "C" fn bundle_class_named(_this: Id, _: Sel, name: Id) -> Id {
     let Some(s) = rust_str_from_nsstring(name) else {
@@ -2196,30 +2730,206 @@ extern "C" fn bundle_class_named(_this: Id, _: Sel, name: Id) -> Id {
     };
     runtime::class_named(&s).unwrap_or(std::ptr::null()) as Id
 }
-extern "C" fn nc_remove_obs(_this: Id, _: Sel, _obs: Id) {}
-extern "C" fn nc_remove_obs_name_obj(_this: Id, _: Sel, _obs: Id, _name: Id, _obj: Id) {}
-extern "C" fn nc_post_no_info(this: Id, _: Sel, name: Id, obj: Id) {
-    nc_post(this, sel("postNotificationName:object:userInfo:"), name, obj, std::ptr::null_mut());
-}
-extern "C" fn nc_add_obs_block(
-    _this: Id,
-    _: Sel,
-    _name: Id,
-    _obj: Id,
-    _queue: Id,
-    _block: Id,
-) -> Id {
-    unsafe { pear_libobjc::object::alloc(NSOBJECT_CLASS.ptr()) }
+struct NotificationState {
+    name: String,
+    object: usize,
+    user_info: usize,
 }
 
-struct Observer {
-    target: usize,
-    selector: usize,
-    name: Option<String>,
+fn notifications() -> &'static Mutex<HashMap<usize, NotificationState>> {
+    static N: OnceLock<Mutex<HashMap<usize, NotificationState>>> = OnceLock::new();
+    N.get_or_init(Default::default)
 }
+
+fn make_nsnotification(name: &str, object: Id, user_info: Id) -> Id {
+    let n = unsafe { pear_libobjc::object::alloc(NSNOTIFICATION_CLASS.ptr()) };
+    let obj_id = if object.is_null() { 0 } else { retain(object) as usize };
+    let info_id = if user_info.is_null() { 0 } else { retain(user_info) as usize };
+    notifications().lock().unwrap().insert(
+        n as usize,
+        NotificationState {
+            name: name.to_string(),
+            object: obj_id,
+            user_info: info_id,
+        },
+    );
+    n
+}
+
+extern "C" fn notif_name(this: Id, _: Sel) -> Id {
+    let s = notifications()
+        .lock()
+        .unwrap()
+        .get(&(this as usize))
+        .map(|n| n.name.clone())
+        .unwrap_or_default();
+    nsstring_from_rust(&s)
+}
+
+extern "C" fn notif_object(this: Id, _: Sel) -> Id {
+    notifications()
+        .lock()
+        .unwrap()
+        .get(&(this as usize))
+        .map(|n| n.object as Id)
+        .unwrap_or(std::ptr::null_mut())
+}
+
+extern "C" fn notif_user_info(this: Id, _: Sel) -> Id {
+    notifications()
+        .lock()
+        .unwrap()
+        .get(&(this as usize))
+        .map(|n| n.user_info as Id)
+        .unwrap_or(std::ptr::null_mut())
+}
+
+extern "C" fn notif_with_name_obj(_cls: Id, _: Sel, name: Id, obj: Id) -> Id {
+    let n = rust_str_from_nsstring(name).unwrap_or_default();
+    make_nsnotification(&n, obj, std::ptr::null_mut())
+}
+
+extern "C" fn notif_with_name_obj_info(_cls: Id, _: Sel, name: Id, obj: Id, info: Id) -> Id {
+    let n = rust_str_from_nsstring(name).unwrap_or_default();
+    make_nsnotification(&n, obj, info)
+}
+
+extern "C" fn notif_dealloc(this: Id, cmd: Sel) {
+    if let Some(st) = notifications().lock().unwrap().remove(&(this as usize)) {
+        if st.object != 0 {
+            release(st.object as Id);
+        }
+        if st.user_info != 0 {
+            release(st.user_info as Id);
+        }
+    }
+    f_dealloc(this, cmd);
+}
+
+#[derive(Clone)]
+enum ObserverKind {
+    Selector { target: usize, selector: usize },
+    Block { token: usize, block: usize },
+}
+
+#[derive(Clone)]
+struct Observer {
+    kind: ObserverKind,
+    name: Option<String>,
+    filter_obj: usize,
+}
+
 fn observers() -> &'static Mutex<Vec<Observer>> {
     static O: OnceLock<Mutex<Vec<Observer>>> = OnceLock::new();
     O.get_or_init(Default::default)
+}
+
+extern "C" fn nc_remove_obs(_this: Id, _: Sel, obs: Id) {
+    if obs.is_null() {
+        return;
+    }
+    let key = obs as usize;
+    let mut blocks_to_release = Vec::new();
+    {
+        let mut g = observers().lock().unwrap();
+        g.retain(|o| {
+            let matches = match o.kind {
+                ObserverKind::Selector { target, .. } => target == key,
+                ObserverKind::Block { token, .. } => token == key,
+            };
+            if matches {
+                if let ObserverKind::Block { block, .. } = o.kind {
+                    if block != 0 {
+                        blocks_to_release.push(block);
+                    }
+                }
+                false
+            } else {
+                true
+            }
+        });
+    }
+    for blk in blocks_to_release {
+        unsafe { pear_libobjc::blocks::block_release(blk as *const c_void) };
+    }
+}
+
+extern "C" fn nc_remove_obs_name_obj(_this: Id, _: Sel, obs: Id, name: Id, obj: Id) {
+    if obs.is_null() {
+        return;
+    }
+    let key = obs as usize;
+    let want_name = rust_str_from_nsstring(name);
+    let want_obj = obj as usize;
+    let mut blocks_to_release = Vec::new();
+    {
+        let mut g = observers().lock().unwrap();
+        g.retain(|o| {
+            let id_match = match o.kind {
+                ObserverKind::Selector { target, .. } => target == key,
+                ObserverKind::Block { token, .. } => token == key,
+            };
+            let name_match = want_name.is_none() || o.name == want_name;
+            let obj_match = want_obj == 0 || o.filter_obj == want_obj;
+            if id_match && name_match && obj_match {
+                if let ObserverKind::Block { block, .. } = o.kind {
+                    if block != 0 {
+                        blocks_to_release.push(block);
+                    }
+                }
+                false
+            } else {
+                true
+            }
+        });
+    }
+    for blk in blocks_to_release {
+        unsafe { pear_libobjc::blocks::block_release(blk as *const c_void) };
+    }
+}
+
+extern "C" fn nc_post_no_info(this: Id, _: Sel, name: Id, obj: Id) {
+    nc_post(this, sel("postNotificationName:object:userInfo:"), name, obj, std::ptr::null_mut());
+}
+
+extern "C" fn nc_post_notif(this: Id, _: Sel, notif: Id) {
+    if notif.is_null() {
+        return;
+    }
+    let (n, obj, info) = {
+        if let Some(st) = notifications().lock().unwrap().get(&(notif as usize)) {
+            (Some(st.name.clone()), st.object as Id, st.user_info as Id)
+        } else {
+            (None, std::ptr::null_mut(), std::ptr::null_mut())
+        }
+    };
+    if let Some(name_str) = n {
+        let name_id = nsstring_from_rust(&name_str);
+        nc_post(this, sel("postNotificationName:object:userInfo:"), name_id, obj, info);
+    }
+}
+
+extern "C" fn nc_add_obs_block(
+    _this: Id,
+    _: Sel,
+    name: Id,
+    obj: Id,
+    _queue: Id,
+    block: Id,
+) -> Id {
+    let tok = unsafe { pear_libobjc::object::alloc(NSOBJECT_CLASS.ptr()) };
+    if !block.is_null() {
+        let copied = unsafe { pear_libobjc::blocks::block_copy(block as *const c_void) as usize };
+        observers().lock().unwrap().push(Observer {
+            kind: ObserverKind::Block {
+                token: tok as usize,
+                block: copied,
+            },
+            name: rust_str_from_nsstring(name),
+            filter_obj: obj as usize,
+        });
+    }
+    tok
 }
 
 extern "C" fn nc_default(_cls: Id, _: Sel) -> Id {
@@ -2232,34 +2942,68 @@ extern "C" fn nc_default(_cls: Id, _: Sel) -> Id {
     n
 }
 
-extern "C" fn nc_add_obs(_this: Id, _: Sel, target: Id, selector: Sel, name: Id, _obj: Id) {
+extern "C" fn nc_add_obs(_this: Id, _: Sel, target: Id, selector: Sel, name: Id, obj: Id) {
     if target.is_null() || selector.is_null() {
         return;
     }
     observers().lock().unwrap().push(Observer {
-        target: target as usize,
-        selector: selector as usize,
+        kind: ObserverKind::Selector {
+            target: target as usize,
+            selector: selector as usize,
+        },
         name: rust_str_from_nsstring(name),
+        filter_obj: obj as usize,
     });
 }
 
-extern "C" fn nc_post(_this: Id, _: Sel, name: Id, obj: Id, _info: Id) {
+extern "C" fn nc_post(_this: Id, _: Sel, name: Id, obj: Id, info: Id) {
     let n = rust_str_from_nsstring(name);
-    let targets: Vec<(usize, usize)> = observers()
+    let n_str = n.as_deref().unwrap_or("");
+    let notif = make_nsnotification(n_str, obj, info);
+    let obj_ptr = obj as usize;
+    let matches: Vec<ObserverKind> = observers()
         .lock()
         .unwrap()
         .iter()
-        .filter(|o| o.name.is_none() || o.name == n)
-        .map(|o| (o.target, o.selector))
+        .filter(|o| {
+            (o.name.is_none() || o.name == n)
+                && (o.filter_obj == 0 || o.filter_obj == obj_ptr)
+        })
+        .map(|o| o.kind.clone())
         .collect();
-    for (t, s) in targets {
-        unsafe {
-            let sl = s as Sel;
-            let d = pear_libobjc::message::lookup_for_send(t as Id, sl);
-            let f: extern "C" fn(Id, Sel, Id) = std::mem::transmute(d.imp);
-            f(d.receiver, sl, obj);
+    for k in matches {
+        match k {
+            ObserverKind::Selector { target, selector } => unsafe {
+                let sl = selector as Sel;
+                let d = pear_libobjc::message::lookup_for_send(target as Id, sl);
+                let f: extern "C" fn(Id, Sel, Id) = std::mem::transmute(d.imp);
+                f(d.receiver, sl, notif);
+            },
+            ObserverKind::Block { block, .. } if block != 0 => unsafe {
+                let blk = block as *const c_void;
+                let layout = &*(blk as *const pear_libobjc::blocks::BlockLayout);
+                if !layout.invoke.is_null() {
+                    let f: extern "C" fn(*const c_void, Id) = std::mem::transmute(layout.invoke);
+                    f(blk, notif);
+                }
+            },
+            _ => {}
         }
     }
+}
+
+/// Posts an `NSNotification` on `[NSNotificationCenter defaultCenter]`.
+pub fn post_notification(name: &str, object: Id, user_info: Id) {
+    init_foundation();
+    let nc = nc_default(NSNOTIFICATIONCENTER_CLASS.ptr() as Id, sel("defaultCenter"));
+    let name_id = nsstring_from_rust(name);
+    nc_post(
+        nc,
+        sel("postNotificationName:object:userInfo:"),
+        name_id,
+        object,
+        user_info,
+    );
 }
 
 extern "C" fn rl_main(_cls: Id, _: Sel) -> Id {
@@ -2451,6 +3195,10 @@ pub fn init_foundation() {
                 ("initWithFormat:", i(str_init_with_format as *const ())),
                 ("initWithFormat:arguments:", i(str_init_with_format_args as *const ())),
                 ("initWithFormat:locale:arguments:", i(str_init_with_format_loc_args as *const ())),
+                ("initWithContentsOfFile:encoding:error:", i(str_init_contents_of_file_enc as *const ())),
+                ("initWithContentsOfFile:usedEncoding:error:", i(str_init_contents_of_file_used as *const ())),
+                ("initWithContentsOfURL:encoding:error:", i(str_init_contents_of_file_enc as *const ())),
+                ("initWithContentsOfURL:usedEncoding:error:", i(str_init_contents_of_file_used as *const ())),
                 ("capitalizedString", i(str_capitalized as *const ())),
                 ("stringByReplacingCharactersInRange:withString:", i(str_replacing_chars_in_range as *const ())),
                 ("copyWithZone:", i(str_copy_zone as *const ())),
@@ -2464,6 +3212,10 @@ pub fn init_foundation() {
                 ("stringWithFormat:", i(str_with_format as *const ())),
                 ("localizedStringWithFormat:", i(str_with_format as *const ())),
                 ("pathWithComponents:", i(str_path_with_components as *const ())),
+                ("stringWithContentsOfFile:encoding:error:", i(str_with_contents_of_file_enc as *const ())),
+                ("stringWithContentsOfFile:usedEncoding:error:", i(str_with_contents_of_file_used as *const ())),
+                ("stringWithContentsOfURL:encoding:error:", i(str_with_contents_of_file_enc as *const ())),
+                ("stringWithContentsOfURL:usedEncoding:error:", i(str_with_contents_of_file_used as *const ())),
             ],
         );
         runtime::register_builtin(
@@ -2529,6 +3281,10 @@ pub fn init_foundation() {
                 ("initWithFormat:", i(str_init_with_format as *const ())),
                 ("initWithFormat:arguments:", i(str_init_with_format_args as *const ())),
                 ("initWithFormat:locale:arguments:", i(str_init_with_format_loc_args as *const ())),
+                ("initWithContentsOfFile:encoding:error:", i(str_init_contents_of_file_enc as *const ())),
+                ("initWithContentsOfFile:usedEncoding:error:", i(str_init_contents_of_file_used as *const ())),
+                ("initWithContentsOfURL:encoding:error:", i(str_init_contents_of_file_enc as *const ())),
+                ("initWithContentsOfURL:usedEncoding:error:", i(str_init_contents_of_file_used as *const ())),
                 ("capitalizedString", i(str_capitalized as *const ())),
                 ("stringByReplacingCharactersInRange:withString:", i(str_replacing_chars_in_range as *const ())),
                 ("copyWithZone:", i(str_copy_zone as *const ())),
@@ -2542,6 +3298,10 @@ pub fn init_foundation() {
                 ("stringWithFormat:", i(str_with_format as *const ())),
                 ("localizedStringWithFormat:", i(str_with_format as *const ())),
                 ("pathWithComponents:", i(str_path_with_components as *const ())),
+                ("stringWithContentsOfFile:encoding:error:", i(str_with_contents_of_file_enc as *const ())),
+                ("stringWithContentsOfFile:usedEncoding:error:", i(str_with_contents_of_file_used as *const ())),
+                ("stringWithContentsOfURL:encoding:error:", i(str_with_contents_of_file_enc as *const ())),
+                ("stringWithContentsOfURL:usedEncoding:error:", i(str_with_contents_of_file_used as *const ())),
             ],
         );
         runtime::register_builtin(
@@ -2736,6 +3496,8 @@ pub fn init_foundation() {
                 ("bytes", i(data_bytes as *const ())),
                 ("initWithContentsOfFile:", i(data_init_with_file as *const ())),
                 ("initWithContentsOfURL:", i(data_init_with_file as *const ())),
+                ("initWithContentsOfFile:options:error:", i(data_init_with_file_opts_err as *const ())),
+                ("initWithContentsOfURL:options:error:", i(data_init_with_file_opts_err as *const ())),
                 ("writeToFile:atomically:", i(data_write_file as *const ())),
                 ("copy", i(copy_retain as *const ())),
                 ("copyWithZone:", i(copy_zone_retain as *const ())),
@@ -2759,6 +3521,10 @@ pub fn init_foundation() {
                 ("length", i(data_length as *const ())),
                 ("bytes", i(data_bytes as *const ())),
                 ("appendBytes:length:", i(data_append as *const ())),
+                ("initWithContentsOfFile:", i(data_init_with_file as *const ())),
+                ("initWithContentsOfURL:", i(data_init_with_file as *const ())),
+                ("initWithContentsOfFile:options:error:", i(data_init_with_file_opts_err as *const ())),
+                ("initWithContentsOfURL:options:error:", i(data_init_with_file_opts_err as *const ())),
                 ("writeToFile:atomically:", i(data_write_file as *const ())),
                 ("copy", i(copy_retain as *const ())),
                 ("copyWithZone:", i(copy_zone_retain as *const ())),
@@ -2819,33 +3585,71 @@ pub fn init_foundation() {
             "NSBundle",
             16,
             &[
+                ("initWithPath:", i(bundle_init_with_path as *const ())),
+                ("initWithURL:", i(bundle_init_with_url as *const ())),
                 ("bundlePath", i(bundle_path as *const ())),
                 ("resourcePath", i(bundle_path as *const ())),
                 ("executablePath", i(bundle_exec_path as *const ())),
+                ("executableURL", i(bundle_exec_url as *const ())),
                 ("bundleIdentifier", i(bundle_id as *const ())),
                 ("bundleURL", i(bundle_url as *const ())),
                 ("resourceURL", i(bundle_url as *const ())),
                 ("appStoreReceiptURL", i(bundle_receipt_url as *const ())),
                 ("infoDictionary", i(bundle_info as *const ())),
+                ("localizedInfoDictionary", i(bundle_info as *const ())),
                 ("objectForInfoDictionaryKey:", i(bundle_obj_for_info as *const ())),
                 ("localizedStringForKey:value:table:", i(bundle_localized_string as *const ())),
                 ("preferredLocalizations", i(bundle_localizations as *const ())),
                 ("localizations", i(bundle_localizations as *const ())),
                 ("pathForResource:ofType:", i(bundle_path_for_res as *const ())),
                 ("pathForResource:ofType:inDirectory:", i(bundle_path_for_res_in_dir as *const ())),
+                (
+                    "pathForResource:ofType:inDirectory:forLocalization:",
+                    i(bundle_path_for_res_in_dir_loc as *const ()),
+                ),
                 ("URLForResource:withExtension:", i(bundle_url_for_res as *const ())),
                 ("URLForResource:withExtension:subdirectory:", i(bundle_url_for_res_in_dir as *const ())),
+                (
+                    "URLForResource:withExtension:subdirectory:localization:",
+                    i(bundle_url_for_res_in_dir_loc as *const ()),
+                ),
                 ("pathsForResourcesOfType:inDirectory:", i(bundle_paths_for_res as *const ())),
+                ("URLsForResourcesWithExtension:subdirectory:", i(bundle_urls_for_res as *const ())),
                 ("classNamed:", i(bundle_class_named as *const ())),
                 ("load", i(ret_true_fn as *const ())),
                 ("isLoaded", i(ret_true_fn as *const ())),
                 ("unload", i(ret_true_fn as *const ())),
+                ("dealloc", i(bundle_dealloc as *const ())),
             ],
             &[
                 ("mainBundle", i(bundle_main as *const ())),
                 ("bundleForClass:", i(bundle_for_arg as *const ())),
-                ("bundleWithPath:", i(bundle_for_arg as *const ())),
-                ("bundleWithIdentifier:", i(bundle_for_arg as *const ())),
+                ("bundleWithPath:", i(bundle_with_path as *const ())),
+                ("bundleWithURL:", i(bundle_with_url as *const ())),
+                ("bundleWithIdentifier:", i(bundle_with_identifier as *const ())),
+                ("allBundles", i(bundle_all_bundles as *const ())),
+                ("allFrameworks", i(bundle_all_bundles as *const ())),
+            ],
+        );
+        runtime::register_builtin(
+            NSNOTIFICATION_CLASS.ptr(),
+            NSNOTIFICATION_META.ptr(),
+            "NSNotification",
+            16,
+            &[
+                ("name", i(notif_name as *const ())),
+                ("object", i(notif_object as *const ())),
+                ("userInfo", i(notif_user_info as *const ())),
+                ("copy", i(copy_retain as *const ())),
+                ("copyWithZone:", i(copy_zone_retain as *const ())),
+                ("dealloc", i(notif_dealloc as *const ())),
+            ],
+            &[
+                ("notificationWithName:object:", i(notif_with_name_obj as *const ())),
+                (
+                    "notificationWithName:object:userInfo:",
+                    i(notif_with_name_obj_info as *const ()),
+                ),
             ],
         );
         runtime::register_builtin(
@@ -2856,6 +3660,7 @@ pub fn init_foundation() {
             &[
                 ("addObserver:selector:name:object:", i(nc_add_obs as *const ())),
                 ("addObserverForName:object:queue:usingBlock:", i(nc_add_obs_block as *const ())),
+                ("postNotification:", i(nc_post_notif as *const ())),
                 ("postNotificationName:object:", i(nc_post_no_info as *const ())),
                 ("postNotificationName:object:userInfo:", i(nc_post as *const ())),
                 ("removeObserver:", i(nc_remove_obs as *const ())),
@@ -3045,6 +3850,7 @@ pub fn init_foundation() {
             "NSUserDefaults",
             16,
             &[
+                ("initWithSuiteName:", i(ud_init_suite as *const ())),
                 ("objectForKey:", i(ud_obj_for_key as *const ())),
                 ("valueForKey:", i(ud_obj_for_key as *const ())),
                 ("stringForKey:", i(ud_string_for_key as *const ())),
@@ -3990,6 +4796,14 @@ extern "C" fn ud_standard(_self: Id, _cmd: Sel) -> Id {
     *S.get_or_init(|| unsafe { alloc_with_backing(NSUSERDEFAULTS_CLASS.ptr(), Backing::Dict(HashMap::new())) } as usize) as Id
 }
 
+extern "C" fn ud_init_suite(this: Id, _cmd: Sel, _suite: Id) -> Id {
+    if this.is_null() {
+        return std::ptr::null_mut();
+    }
+    store().lock().unwrap().insert(this as usize, Backing::Dict(HashMap::new()));
+    this
+}
+
 extern "C" fn ud_string_for_key(self_: Id, _cmd: Sel, key: Id) -> Id {
     let o = ud_obj_for_key(self_, _cmd, key);
     if o.is_null() { std::ptr::null_mut() } else { o }
@@ -4308,6 +5122,7 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_OBJC_CLASS_$_NSMutableData" => Some(NSMUTABLEDATA_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSNumber" => Some(NSNUMBER_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSBundle" => Some(NSBUNDLE_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSNotification" => Some(NSNOTIFICATION_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSNotificationCenter" => Some(NSNOTIFICATIONCENTER_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSRunLoop" => Some(NSRUNLOOP_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSDate" => Some(NSDATE_CLASS.ptr() as usize),
@@ -4466,28 +5281,71 @@ fn json_skip_ws(b: &[u8], i: &mut usize) {
     }
 }
 
+fn json_parse_hex4(b: &[u8]) -> Option<u32> {
+    if b.len() < 4 {
+        return None;
+    }
+    let s = std::str::from_utf8(&b[..4]).ok()?;
+    u32::from_str_radix(s, 16).ok()
+}
+
+fn json_push_char_utf8(out: &mut Vec<u8>, ch: char) {
+    let mut tmp = [0u8; 4];
+    out.extend_from_slice(ch.encode_utf8(&mut tmp).as_bytes());
+}
+
 fn json_parse_str(b: &[u8], i: &mut usize) -> Option<String> {
-    if b.get(*i) != Some(&b'"') { return None; }
+    if b.get(*i) != Some(&b'"') {
+        return None;
+    }
     *i += 1;
-    let mut out = String::new();
+    let mut out = Vec::new();
     while *i < b.len() {
         let c = b[*i];
         *i += 1;
-        if c == b'"' { return Some(out); }
+        if c == b'"' {
+            return Some(String::from_utf8_lossy(&out).into_owned());
+        }
         if c == b'\\' && *i < b.len() {
             let esc = b[*i];
             *i += 1;
             match esc {
-                b'"' => out.push('"'),
-                b'\\' => out.push('\\'),
-                b'/' => out.push('/'),
-                b'n' => out.push('\n'),
-                b'r' => out.push('\r'),
-                b't' => out.push('\t'),
-                _ => out.push(esc as char),
+                b'"' => out.push(b'"'),
+                b'\\' => out.push(b'\\'),
+                b'/' => out.push(b'/'),
+                b'b' => out.push(0x08),
+                b'f' => out.push(0x0C),
+                b'n' => out.push(b'\n'),
+                b'r' => out.push(b'\r'),
+                b't' => out.push(b'\t'),
+                b'u' => {
+                    if let Some(u1) = b.get(*i..).and_then(json_parse_hex4) {
+                        *i += 4;
+                        if (0xD800..=0xDBFF).contains(&u1)
+                            && b.get(*i..*i + 2) == Some(b"\\u")
+                        {
+                            if let Some(u2) = b.get(*i + 2..).and_then(json_parse_hex4) {
+                                if (0xDC00..=0xDFFF).contains(&u2) {
+                                    *i += 6;
+                                    let cp = 0x10000 + (((u1 - 0xD800) << 10) | (u2 - 0xDC00));
+                                    if let Some(ch) = char::from_u32(cp) {
+                                        json_push_char_utf8(&mut out, ch);
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                        if let Some(ch) = char::from_u32(u1) {
+                            json_push_char_utf8(&mut out, ch);
+                        }
+                    } else {
+                        out.push(b'u');
+                    }
+                }
+                _ => out.push(esc),
             }
         } else {
-            out.push(c as char);
+            out.push(c);
         }
     }
     None
@@ -6097,5 +6955,350 @@ mod tests {
             hdr_keys.sort();
             assert_eq!(hdr_keys, vec!["Content-Length", "Content-Type"]);
         }
+    }
+
+    #[test]
+    fn phase5_20_nsbundle_subbundles_info_plist_and_resource_lookup() {
+        init_foundation();
+        let pid = std::process::id();
+        let tmp_root = std::env::temp_dir().join(format!("pear_phase5_20_bundle_{pid}"));
+        let _ = std::fs::remove_dir_all(&tmp_root);
+        let sub_dir = tmp_root.join("SubAssets.bundle");
+        std::fs::create_dir_all(sub_dir.join("config")).unwrap();
+        std::fs::create_dir_all(tmp_root.join("en.lproj")).unwrap();
+
+        std::fs::write(
+            tmp_root.join("Info.plist"),
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>com.test.parent</string>
+  <key>CFBundleExecutable</key><string>ParentApp</string>
+</dict></plist>"#,
+        )
+        .unwrap();
+        std::fs::write(tmp_root.join("en.lproj/Localized.txt"), b"hello").unwrap();
+
+        std::fs::write(
+            sub_dir.join("Info.plist"),
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>com.test.sub</string>
+  <key>CFBundleExecutable</key><string>SubBin</string>
+</dict></plist>"#,
+        )
+        .unwrap();
+        std::fs::write(sub_dir.join("config/server_ios.json"), b"[{\"channel_id\":1}]").unwrap();
+
+        unsafe {
+            // 1. Distinct paths create distinct NSBundle instances; nonexistent path returns nil
+            let parent_b: Id = send1(
+                NSBUNDLE_CLASS.ptr() as Id,
+                "bundleWithPath:",
+                nsstring_from_rust(&tmp_root.to_string_lossy()),
+            );
+            assert!(!parent_b.is_null());
+
+            let sub_b: Id = send1(
+                NSBUNDLE_CLASS.ptr() as Id,
+                "bundleWithPath:",
+                nsstring_from_rust(&sub_dir.to_string_lossy()),
+            );
+            assert!(!sub_b.is_null());
+            assert_ne!(parent_b, sub_b);
+
+            let sub_url: Id = send1(
+                NSURL_CLASS.ptr() as Id,
+                "fileURLWithPath:",
+                nsstring_from_rust(&sub_dir.to_string_lossy()),
+            );
+            let sub_b2: Id = send1(NSBUNDLE_CLASS.ptr() as Id, "bundleWithURL:", sub_url);
+            assert_eq!(sub_b2, sub_b);
+
+            let missing_b: Id = send1(
+                NSBUNDLE_CLASS.ptr() as Id,
+                "bundleWithPath:",
+                nsstring_from_rust(&tmp_root.join("DoesNotExist.bundle").to_string_lossy()),
+            );
+            assert!(missing_b.is_null());
+
+            // 2. Per-instance bundleIdentifier, CFBundleGetIdentifier, executablePath, and Info.plist
+            assert_eq!(
+                rust_str_from_nsstring(send0(parent_b, "bundleIdentifier")).as_deref(),
+                Some("com.test.parent")
+            );
+            assert_eq!(
+                rust_str_from_nsstring(send0(sub_b, "bundleIdentifier")).as_deref(),
+                Some("com.test.sub")
+            );
+            assert_eq!(
+                rust_str_from_nsstring(crate::cf_ext::cf_bundle_get_identifier(sub_b)).as_deref(),
+                Some("com.test.sub")
+            );
+            let sub_exec = rust_str_from_nsstring(send0(sub_b, "executablePath")).unwrap();
+            assert!(sub_exec.ends_with("/SubAssets.bundle/SubBin"));
+
+            let p_exec_key: Id = send1(
+                parent_b,
+                "objectForInfoDictionaryKey:",
+                nsstring_from_rust("CFBundleExecutable"),
+            );
+            assert_eq!(rust_str_from_nsstring(p_exec_key).as_deref(), Some("ParentApp"));
+
+            // 3. bundleWithIdentifier: finds registered sub-bundle
+            let by_id: Id = send1(
+                NSBUNDLE_CLASS.ptr() as Id,
+                "bundleWithIdentifier:",
+                nsstring_from_rust("com.test.sub"),
+            );
+            assert_eq!(by_id, sub_b);
+
+            // 4. Resource lookup: sub-bundle finds config/server_ios.json; parent finds en.lproj/Localized.txt
+            let found_json: Id = send3(
+                sub_b,
+                "pathForResource:ofType:inDirectory:",
+                nsstring_from_rust("server_ios"),
+                nsstring_from_rust("json"),
+                nsstring_from_rust("config"),
+            );
+            assert!(!found_json.is_null());
+            assert!(rust_str_from_nsstring(found_json)
+                .unwrap()
+                .ends_with("/SubAssets.bundle/config/server_ios.json"));
+
+            let not_in_parent: Id = send3(
+                parent_b,
+                "pathForResource:ofType:inDirectory:",
+                nsstring_from_rust("server_ios"),
+                nsstring_from_rust("json"),
+                nsstring_from_rust("config"),
+            );
+            assert!(not_in_parent.is_null());
+
+            let found_loc: Id = send2(
+                parent_b,
+                "pathForResource:ofType:",
+                nsstring_from_rust("Localized"),
+                nsstring_from_rust("txt"),
+            );
+            assert!(!found_loc.is_null());
+            assert!(rust_str_from_nsstring(found_loc)
+                .unwrap()
+                .ends_with("/en.lproj/Localized.txt"));
+
+            // 5. pathsForResourcesOfType:inDirectory:
+            let arr: Id = send2(
+                sub_b,
+                "pathsForResourcesOfType:inDirectory:",
+                nsstring_from_rust("json"),
+                nsstring_from_rust("config"),
+            );
+            assert_eq!(cf_array_get_count(arr), 1);
+
+            // 6. initWithPath: on explicit alloc
+            let alloc_b: Id = send0(NSBUNDLE_CLASS.ptr() as Id, "alloc");
+            let init_b: Id = send1(
+                alloc_b,
+                "initWithPath:",
+                nsstring_from_rust(&tmp_root.to_string_lossy()),
+            );
+            assert_eq!(init_b, alloc_b);
+            assert_eq!(
+                rust_str_from_nsstring(send0(init_b, "bundleIdentifier")).as_deref(),
+                Some("com.test.parent")
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp_root);
+    }
+
+    #[test]
+    fn phase5_20_string_file_utf8_json_and_notification_blocks() {
+        use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+        init_foundation();
+        let pid = std::process::id();
+        let tmp_dir = std::env::temp_dir().join(format!("pear_phase5_20_str_{pid}"));
+        let _ = std::fs::create_dir_all(&tmp_dir);
+        let txt_path = tmp_dir.join("utf8.txt");
+        let missing_path = tmp_dir.join("missing.txt");
+        let sample_utf8 = "Türkçe / 日本語 / ok";
+        std::fs::write(&txt_path, sample_utf8.as_bytes()).unwrap();
+
+        unsafe {
+            // 1. NSString stringWithContentsOfFile:encoding:error: & initWithContentsOfFile:usedEncoding:error:
+            let p_str = nsstring_from_rust(&txt_path.to_string_lossy());
+            let mut err1: Id = 0x1usize as Id;
+            let loaded_s: Id = send3(
+                NSSTRING_CLASS.ptr() as Id,
+                "stringWithContentsOfFile:encoding:error:",
+                p_str,
+                4usize,
+                &mut err1 as *mut Id,
+            );
+            assert!(err1.is_null() && !loaded_s.is_null());
+            assert_eq!(rust_str_from_nsstring(loaded_s).as_deref(), Some(sample_utf8));
+
+            let alloc_s: Id = send0(NSSTRING_CLASS.ptr() as Id, "alloc");
+            let mut used_enc = 0usize;
+            let mut err2: Id = 0x1usize as Id;
+            let init_s: Id = send3(
+                alloc_s,
+                "initWithContentsOfFile:usedEncoding:error:",
+                p_str,
+                &mut used_enc as *mut usize,
+                &mut err2 as *mut Id,
+            );
+            assert_eq!(init_s, alloc_s);
+            assert_eq!(used_enc, 4);
+            assert!(err2.is_null());
+            assert_eq!(rust_str_from_nsstring(init_s).as_deref(), Some(sample_utf8));
+
+            // 2. NSData initWithContentsOfFile:options:error: (valid + nonexistent error path)
+            let d_alloc: Id = send0(NSDATA_CLASS.ptr() as Id, "alloc");
+            let mut err_d: Id = 0x1usize as Id;
+            let d_init: Id = send3(
+                d_alloc,
+                "initWithContentsOfFile:options:error:",
+                p_str,
+                0usize,
+                &mut err_d as *mut Id,
+            );
+            assert_eq!(d_init, d_alloc);
+            assert!(err_d.is_null());
+            assert_eq!(
+                rust_bytes_from_nsdata(d_init).as_deref(),
+                Some(sample_utf8.as_bytes())
+            );
+
+            let m_alloc: Id = send0(NSDATA_CLASS.ptr() as Id, "alloc");
+            let mut err_m: Id = std::ptr::null_mut();
+            let m_init: Id = send3(
+                m_alloc,
+                "initWithContentsOfFile:options:error:",
+                nsstring_from_rust(&missing_path.to_string_lossy()),
+                0usize,
+                &mut err_m as *mut Id,
+            );
+            assert!(m_init.is_null() && !err_m.is_null());
+
+            // 3. NSJSONSerialization multi-byte UTF-8 + \uXXXX + surrogate pair
+            let json_raw =
+                r#"{"utf8":"T\u00FCrk\u00E7e \u4E2D \uD83D\uDE00","raw":"Türkçe / 日本語"}"#
+                    .as_bytes();
+            let jdata = nsdata_from_bytes(json_raw);
+            let mut jerr: Id = std::ptr::null_mut();
+            let jobj: Id = send3(
+                NSJSONSERIALIZATION_CLASS.ptr() as Id,
+                "JSONObjectWithData:options:error:",
+                jdata,
+                0usize,
+                &mut jerr as *mut Id,
+            );
+            assert!(!jobj.is_null());
+            assert_eq!(
+                rust_str_from_nsstring(send1(jobj, "objectForKey:", nsstring_from_rust("utf8"))).as_deref(),
+                Some("Türkçe 中 😀")
+            );
+            assert_eq!(
+                rust_str_from_nsstring(send1(jobj, "objectForKey:", nsstring_from_rust("raw"))).as_deref(),
+                Some("Türkçe / 日本語")
+            );
+
+            // 4. NSNotificationCenter selector + block observers + removeObserver:
+            static SEL_HITS: AtomicUsize = AtomicUsize::new(0);
+            static SEL_LAST_NAME: AtomicUsize = AtomicUsize::new(0);
+            extern "C" fn obs_cb(_this: Id, _cmd: Sel, notif: Id) {
+                if !notif.is_null() {
+                    let s_name = sel("name");
+                    let d = lookup_for_send(notif, s_name);
+                    let f: extern "C" fn(Id, Sel) -> Id = unsafe { std::mem::transmute(d.imp) };
+                    let nm = f(d.receiver, s_name);
+                    SEL_LAST_NAME.store(retain(nm) as usize, Ordering::Release);
+                    SEL_HITS.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+
+            #[repr(C)]
+            struct NotifBlk {
+                isa: *const pear_libobjc::abi::ClassT,
+                flags: AtomicI32,
+                reserved: i32,
+                invoke: *const c_void,
+                descriptor: *const pear_libobjc::blocks::BlockDescriptor1,
+                hits: *const AtomicUsize,
+            }
+            static NB_DESC: pear_libobjc::blocks::BlockDescriptor1 =
+                pear_libobjc::blocks::BlockDescriptor1 {
+                    reserved: 0,
+                    size: std::mem::size_of::<NotifBlk>(),
+                };
+            extern "C" fn nb_inv(b: *mut c_void, notif: Id) {
+                unsafe {
+                    if !notif.is_null() {
+                        let blk = &*(b as *const NotifBlk);
+                        (*blk.hits).fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+
+            foundation_class!(OBS_CLS, OBS_META);
+            runtime::register_builtin(
+                OBS_CLS.ptr(),
+                OBS_META.ptr(),
+                "PearNotifObs520",
+                16,
+                &[("onNotif:", obs_cb as *const () as Imp)],
+                &[],
+            );
+            let obs_obj = pear_libobjc::object::alloc(OBS_CLS.ptr());
+
+            let nc: Id = send0(NSNOTIFICATIONCENTER_CLASS.ptr() as Id, "defaultCenter");
+            let ev_name = nsstring_from_rust("PearTestNotif520");
+            let sender_obj = nsstring_from_rust("sender520");
+            let info_dict = nsdict_from_pairs(vec![("k".into(), nsstring_from_rust("v"))]);
+
+            let s_add4 = sel("addObserver:selector:name:object:");
+            let d_add4 = lookup_for_send(nc, s_add4);
+            let f_add4: extern "C" fn(Id, Sel, Id, Sel, Id, Id) = std::mem::transmute(d_add4.imp);
+            f_add4(d_add4.receiver, s_add4, obs_obj, sel("onNotif:"), ev_name, std::ptr::null_mut());
+
+            let blk_hits = Box::leak(Box::new(AtomicUsize::new(0)));
+            let mut blk = NotifBlk {
+                isa: pear_libobjc::blocks::NSGLOBALBLOCK_CLASS.ptr(),
+                flags: AtomicI32::new(1 << 28),
+                reserved: 0,
+                invoke: nb_inv as *const c_void,
+                descriptor: &NB_DESC,
+                hits: blk_hits as *const AtomicUsize,
+            };
+            let s_addb = sel("addObserverForName:object:queue:usingBlock:");
+            let d_addb = lookup_for_send(nc, s_addb);
+            let f_addb: extern "C" fn(Id, Sel, Id, Id, Id, *const c_void) -> Id =
+                std::mem::transmute(d_addb.imp);
+            let tok = f_addb(
+                d_addb.receiver,
+                s_addb,
+                ev_name,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut blk as *mut NotifBlk as *const c_void,
+            );
+            assert!(!tok.is_null());
+
+            let _: () = send3(nc, "postNotificationName:object:userInfo:", ev_name, sender_obj, info_dict);
+            assert_eq!(SEL_HITS.load(Ordering::Relaxed), 1);
+            assert_eq!(blk_hits.load(Ordering::Relaxed), 1);
+            let got_name_id = SEL_LAST_NAME.load(Ordering::Acquire) as Id;
+            assert_eq!(rust_str_from_nsstring(got_name_id).as_deref(), Some("PearTestNotif520"));
+
+            let _: () = send1(nc, "removeObserver:", obs_obj);
+            let _: () = send1(nc, "removeObserver:", tok);
+            let _: () = send3(nc, "postNotificationName:object:userInfo:", ev_name, sender_obj, info_dict);
+            assert_eq!(SEL_HITS.load(Ordering::Relaxed), 1);
+            assert_eq!(blk_hits.load(Ordering::Relaxed), 1);
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
     }
 }
