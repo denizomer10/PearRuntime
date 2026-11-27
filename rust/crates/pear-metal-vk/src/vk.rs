@@ -19,7 +19,9 @@ const VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO: u32 = 1;
 const VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO: u32 = 2;
 const VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO: u32 = 3;
 const VK_STRUCTURE_TYPE_SUBMIT_INFO: u32 = 4;
+const VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO: u32 = 5;
 const VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO: u32 = 9;
+const VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO: u32 = 12;
 const VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO: u32 = 16;
 const VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO: u32 = 39;
 const VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO: u32 = 40;
@@ -29,6 +31,8 @@ const VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR: u32 = 1000001000;
 const VK_STRUCTURE_TYPE_PRESENT_INFO_KHR: u32 = 1000001001;
 const VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR: u32 = 1000004000;
 const VK_QUEUE_GRAPHICS_BIT: u32 = 0x1;
+const VK_BUFFER_USAGE_TRANSFER_SRC_BIT: u32 = 0x1;
+const VK_MEMORY_PROPERTY_HOST_VISIBLE_COHERENT: u32 = 0x6;
 const VK_FORMAT_B8G8R8A8_UNORM: u32 = 44;
 const VK_IMAGE_USAGE_COLOR_TRANSFER_DST: u32 = 0x12; // COLOR_ATTACHMENT_BIT (0x10) | TRANSFER_DST_BIT (0x02)
 const VK_IMAGE_LAYOUT_UNDEFINED: u32 = 0;
@@ -247,6 +251,103 @@ struct VkPresentInfoKHR {
     p_results: *mut i32,
 }
 
+#[repr(C)]
+struct VkBufferCreateInfo {
+    s_type: u32,
+    p_next: *const c_void,
+    flags: u32,
+    size: u64,
+    usage: u32,
+    sharing_mode: u32,
+    queue_family_index_count: u32,
+    p_queue_family_indices: *const u32,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct VkMemoryRequirements {
+    size: u64,
+    alignment: u64,
+    memory_type_bits: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+struct VkMemoryType {
+    property_flags: u32,
+    heap_index: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default)]
+struct VkMemoryHeap {
+    size: u64,
+    flags: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct VkPhysicalDeviceMemoryProperties {
+    memory_type_count: u32,
+    memory_types: [VkMemoryType; 32],
+    memory_heap_count: u32,
+    memory_heaps: [VkMemoryHeap; 16],
+}
+
+impl Default for VkPhysicalDeviceMemoryProperties {
+    fn default() -> Self {
+        Self {
+            memory_type_count: 0,
+            memory_types: [VkMemoryType::default(); 32],
+            memory_heap_count: 0,
+            memory_heaps: [VkMemoryHeap::default(); 16],
+        }
+    }
+}
+
+#[repr(C)]
+struct VkMemoryAllocateInfo {
+    s_type: u32,
+    p_next: *const c_void,
+    allocation_size: u64,
+    memory_type_index: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct VkImageSubresourceLayers {
+    aspect_mask: u32,
+    mip_level: u32,
+    base_array_layer: u32,
+    layer_count: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct VkOffset3D {
+    x: i32,
+    y: i32,
+    z: i32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct VkExtent3D {
+    width: u32,
+    height: u32,
+    depth: u32,
+}
+
+#[repr(C)]
+struct VkBufferImageCopy {
+    buffer_offset: u64,
+    buffer_row_length: u32,
+    buffer_image_height: u32,
+    image_subresource: VkImageSubresourceLayers,
+    image_offset: VkOffset3D,
+    image_extent: VkExtent3D,
+}
+
 struct VkWindowSwapchain {
     surface: u64,
     swapchain: u64,
@@ -256,6 +357,10 @@ struct VkWindowSwapchain {
     cmd_buf: *mut c_void,
     img_avail_sem: u64,
     render_done_sem: u64,
+    staging_buf: u64,
+    staging_mem: u64,
+    staging_size: usize,
+    staging_mapped: *mut u8,
 }
 
 unsafe impl Send for VkWindowSwapchain {}
@@ -326,6 +431,23 @@ pub struct VkContext {
     vk_create_semaphore:
         Option<unsafe extern "C" fn(*mut c_void, *const VkSemaphoreCreateInfo, *const c_void, *mut u64) -> i32>,
     vk_destroy_semaphore: Option<unsafe extern "C" fn(*mut c_void, u64, *const c_void)>,
+    vk_get_mem_props:
+        Option<unsafe extern "C" fn(*mut c_void, *mut VkPhysicalDeviceMemoryProperties)>,
+    vk_create_buffer:
+        Option<unsafe extern "C" fn(*mut c_void, *const VkBufferCreateInfo, *const c_void, *mut u64) -> i32>,
+    vk_destroy_buffer: Option<unsafe extern "C" fn(*mut c_void, u64, *const c_void)>,
+    vk_get_buffer_mem_reqs:
+        Option<unsafe extern "C" fn(*mut c_void, u64, *mut VkMemoryRequirements)>,
+    vk_alloc_memory:
+        Option<unsafe extern "C" fn(*mut c_void, *const VkMemoryAllocateInfo, *const c_void, *mut u64) -> i32>,
+    vk_free_memory: Option<unsafe extern "C" fn(*mut c_void, u64, *const c_void)>,
+    vk_bind_buffer_memory: Option<unsafe extern "C" fn(*mut c_void, u64, u64, u64) -> i32>,
+    vk_map_memory:
+        Option<unsafe extern "C" fn(*mut c_void, u64, u64, u64, u32, *mut *mut c_void) -> i32>,
+    vk_unmap_memory: Option<unsafe extern "C" fn(*mut c_void, u64)>,
+    vk_cmd_copy_buffer_to_image: Option<
+        unsafe extern "C" fn(*mut c_void, u64, u64, u32, u32, *const VkBufferImageCopy),
+    >,
 }
 
 unsafe impl Send for VkContext {}
@@ -557,6 +679,16 @@ impl VkContext {
                 vk_queue_wait_idle: vk_fn!(load_dev, c"vkQueueWaitIdle"),
                 vk_create_semaphore: vk_fn!(load_dev, c"vkCreateSemaphore"),
                 vk_destroy_semaphore: vk_fn!(load_dev, c"vkDestroySemaphore"),
+                vk_get_mem_props: vk_fn!(load_inst, c"vkGetPhysicalDeviceMemoryProperties"),
+                vk_create_buffer: vk_fn!(load_dev, c"vkCreateBuffer"),
+                vk_destroy_buffer: vk_fn!(load_dev, c"vkDestroyBuffer"),
+                vk_get_buffer_mem_reqs: vk_fn!(load_dev, c"vkGetBufferMemoryRequirements"),
+                vk_alloc_memory: vk_fn!(load_dev, c"vkAllocateMemory"),
+                vk_free_memory: vk_fn!(load_dev, c"vkFreeMemory"),
+                vk_bind_buffer_memory: vk_fn!(load_dev, c"vkBindBufferMemory"),
+                vk_map_memory: vk_fn!(load_dev, c"vkMapMemory"),
+                vk_unmap_memory: vk_fn!(load_dev, c"vkUnmapMemory"),
+                vk_cmd_copy_buffer_to_image: vk_fn!(load_dev, c"vkCmdCopyBufferToImage"),
             })
         }
     }
@@ -609,6 +741,21 @@ impl VkContext {
         if let Some(f) = self.vk_queue_wait_idle {
             let _ = f(self.queue);
         }
+        if !entry.staging_mapped.is_null() && entry.staging_mem != 0 {
+            if let Some(f) = self.vk_unmap_memory {
+                f(self.device, entry.staging_mem);
+            }
+        }
+        if entry.staging_buf != 0 {
+            if let Some(f) = self.vk_destroy_buffer {
+                f(self.device, entry.staging_buf, std::ptr::null());
+            }
+        }
+        if entry.staging_mem != 0 {
+            if let Some(f) = self.vk_free_memory {
+                f(self.device, entry.staging_mem, std::ptr::null());
+            }
+        }
         if !entry.cmd_buf.is_null() && self.command_pool != 0 {
             if let Some(f) = self.vk_free_command_buffers {
                 f(self.device, self.command_pool, 1, &entry.cmd_buf);
@@ -632,6 +779,85 @@ impl VkContext {
                 f(self.instance, entry.surface, std::ptr::null());
             }
         }
+    }
+
+    unsafe fn create_staging_buffer(&self, size: usize) -> (u64, u64, *mut u8) {
+        if size == 0 {
+            return (0, 0, std::ptr::null_mut());
+        }
+        let (
+            Some(get_mem_props),
+            Some(create_buf),
+            Some(destroy_buf),
+            Some(get_reqs),
+            Some(alloc_mem),
+            Some(free_mem),
+            Some(bind_mem),
+            Some(map_mem),
+        ) = (
+            self.vk_get_mem_props,
+            self.vk_create_buffer,
+            self.vk_destroy_buffer,
+            self.vk_get_buffer_mem_reqs,
+            self.vk_alloc_memory,
+            self.vk_free_memory,
+            self.vk_bind_buffer_memory,
+            self.vk_map_memory,
+        )
+        else {
+            return (0, 0, std::ptr::null_mut());
+        };
+        let bci = VkBufferCreateInfo {
+            s_type: VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: 0,
+            size: size as u64,
+            usage: VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            sharing_mode: 0,
+            queue_family_index_count: 1,
+            p_queue_family_indices: &self.q_idx,
+        };
+        let mut buf = 0u64;
+        if create_buf(self.device, &bci, std::ptr::null(), &mut buf) != VK_SUCCESS || buf == 0 {
+            return (0, 0, std::ptr::null_mut());
+        }
+        let mut reqs = VkMemoryRequirements::default();
+        get_reqs(self.device, buf, &mut reqs);
+        let mut mem_props = VkPhysicalDeviceMemoryProperties::default();
+        get_mem_props(self.physical_device, &mut mem_props);
+        let count = (mem_props.memory_type_count as usize).min(32);
+        let Some(mem_type_idx) = (0..count).find(|&idx| {
+            (reqs.memory_type_bits & (1u32 << idx)) != 0
+                && (mem_props.memory_types[idx].property_flags
+                    & VK_MEMORY_PROPERTY_HOST_VISIBLE_COHERENT)
+                    == VK_MEMORY_PROPERTY_HOST_VISIBLE_COHERENT
+        }) else {
+            destroy_buf(self.device, buf, std::ptr::null());
+            return (0, 0, std::ptr::null_mut());
+        };
+        let mai = VkMemoryAllocateInfo {
+            s_type: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            p_next: std::ptr::null(),
+            allocation_size: reqs.size.max(size as u64),
+            memory_type_index: mem_type_idx as u32,
+        };
+        let mut mem = 0u64;
+        if alloc_mem(self.device, &mai, std::ptr::null(), &mut mem) != VK_SUCCESS || mem == 0 {
+            destroy_buf(self.device, buf, std::ptr::null());
+            return (0, 0, std::ptr::null_mut());
+        }
+        if bind_mem(self.device, buf, mem, 0) != VK_SUCCESS {
+            free_mem(self.device, mem, std::ptr::null());
+            destroy_buf(self.device, buf, std::ptr::null());
+            return (0, 0, std::ptr::null_mut());
+        }
+        let mut mapped = std::ptr::null_mut();
+        if map_mem(self.device, mem, 0, size as u64, 0, &mut mapped) != VK_SUCCESS || mapped.is_null() {
+            free_mem(self.device, mem, std::ptr::null());
+            destroy_buf(self.device, buf, std::ptr::null());
+            return (0, 0, std::ptr::null_mut());
+        }
+        (buf, mem, mapped as *mut u8)
     }
 
     unsafe fn create_window_swapchain(
@@ -737,6 +963,14 @@ impl VkContext {
         {
             ok = false;
         }
+        let staging_size = (extent.width as usize)
+            .saturating_mul(extent.height as usize)
+            .saturating_mul(4);
+        let (staging_buf, staging_mem, staging_mapped) = if ok {
+            self.create_staging_buffer(staging_size)
+        } else {
+            (0, 0, std::ptr::null_mut())
+        };
         let entry = VkWindowSwapchain {
             surface,
             swapchain,
@@ -746,6 +980,10 @@ impl VkContext {
             cmd_buf,
             img_avail_sem,
             render_done_sem,
+            staging_buf,
+            staging_mem,
+            staging_size: if !staging_mapped.is_null() { staging_size } else { 0 },
+            staging_mapped,
         };
         if !ok {
             self.destroy_swapchain_entry(entry);
@@ -761,6 +999,18 @@ impl VkContext {
         width: u32,
         height: u32,
         rgba: [f32; 4],
+    ) -> bool {
+        self.present_xlib_pixels(dpy, win, width, height, &[], rgba)
+    }
+
+    pub fn present_xlib_pixels(
+        &self,
+        dpy: *mut c_void,
+        win: u64,
+        width: u32,
+        height: u32,
+        bgra: &[u8],
+        fallback_rgba: [f32; 4],
     ) -> bool {
         if dpy.is_null() || win == 0 || self.queue.is_null() {
             return false;
@@ -854,15 +1104,49 @@ impl VkContext {
                 1,
                 &to_dst,
             );
-            let clear = VkClearColorValue { float32: rgba };
-            clear_img(
-                sc.cmd_buf,
-                image,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                &clear,
-                1,
-                &range,
-            );
+            if let Some(copy_buf_img) = self.vk_cmd_copy_buffer_to_image.filter(|_| {
+                sc.staging_buf != 0
+                    && sc.staging_size > 0
+                    && !sc.staging_mapped.is_null()
+                    && bgra.len() >= sc.staging_size
+            }) {
+                std::ptr::copy_nonoverlapping(bgra.as_ptr(), sc.staging_mapped, sc.staging_size);
+                let region = VkBufferImageCopy {
+                    buffer_offset: 0,
+                    buffer_row_length: 0,
+                    buffer_image_height: 0,
+                    image_subresource: VkImageSubresourceLayers {
+                        aspect_mask: 0x1,
+                        mip_level: 0,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    },
+                    image_offset: VkOffset3D { x: 0, y: 0, z: 0 },
+                    image_extent: VkExtent3D {
+                        width: sc.width,
+                        height: sc.height,
+                        depth: 1,
+                    },
+                };
+                copy_buf_img(
+                    sc.cmd_buf,
+                    sc.staging_buf,
+                    image,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1,
+                    &region,
+                );
+            } else {
+                let clear = VkClearColorValue { float32: fallback_rgba };
+                clear_img(
+                    sc.cmd_buf,
+                    image,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    &clear,
+                    1,
+                    &range,
+                );
+            }
             let to_present = VkImageMemoryBarrier {
                 s_type: VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
                 p_next: std::ptr::null(),

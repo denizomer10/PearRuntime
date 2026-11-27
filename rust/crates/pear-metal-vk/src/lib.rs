@@ -325,4 +325,168 @@ mod tests {
             assert_eq!(ppm_bytes.len(), "P6\n4 4\n255\n".len() + 4 * 4 * 3);
         }
     }
+
+    #[test]
+    fn phase5_8_rasterizer_and_blit_texture_copy() {
+        init();
+        unsafe {
+            let dev = create_system_default_device();
+            let cq: Id = send0(dev, "newCommandQueue");
+
+            // 1. 16x16 BGRA8Unorm drawable target cleared to black
+            let layer_dummy = 0x5858usize as Id;
+            let drawable = next_drawable_for_layer(layer_dummy, 16, 16, 80);
+            let dtex: Id = send0(drawable, "texture");
+
+            // 2. Upload 2x2 solid green (RGBA8Unorm = 70) texture via texture2DDescriptorWithPixelFormat:width:height:mipmapped:
+            let tdesc_cls = objc_rt::class_named("MTLTextureDescriptor").unwrap() as Id;
+            let s_td = objc_rt::sel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
+            let d_td = lookup_for_send(tdesc_cls, s_td);
+            let f_td: unsafe extern "C" fn(Id, Sel, usize, usize, usize, bool) -> Id =
+                std::mem::transmute(d_td.imp);
+            let tdesc = f_td(d_td.receiver, s_td, 70, 2, 2, false);
+            let tex_src: Id = send1(dev, "newTextureWithDescriptor:", tdesc);
+            let green_px: [u8; 16] = [
+                0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255,
+            ];
+            let s_rr = objc_rt::sel("replaceRegion:mipmapLevel:withBytes:bytesPerRow:");
+            let d_rr = lookup_for_send(tex_src, s_rr);
+            let f_rr: unsafe extern "C" fn(Id, Sel, MTLRegion, usize, *const u8, usize) =
+                std::mem::transmute(d_rr.imp);
+            f_rr(
+                d_rr.receiver,
+                s_rr,
+                MTLRegion {
+                    origin: MTLOrigin { x: 0, y: 0, z: 0 },
+                    size: MTLSize { width: 2, height: 2, depth: 1 },
+                },
+                0,
+                green_px.as_ptr(),
+                8,
+            );
+
+            // 3. Configure MTLVertexDescriptor (Float3 pos @ 0, Float2 uv @ 12, stride 20)
+            let vdesc_cls = objc_rt::class_named("MTLVertexDescriptor").unwrap() as Id;
+            let vdesc: Id = send0(vdesc_cls, "vertexDescriptor");
+            let attrs: Id = send0(vdesc, "attributes");
+            let a0: Id = send1(attrs, "objectAtIndexedSubscript:", 0usize);
+            send1::<usize, ()>(a0, "setFormat:", 30); // Float3
+            send1::<usize, ()>(a0, "setOffset:", 0);
+            send1::<usize, ()>(a0, "setBufferIndex:", 0);
+            let a1: Id = send1(attrs, "objectAtIndexedSubscript:", 1usize);
+            send1::<usize, ()>(a1, "setFormat:", 29); // Float2
+            send1::<usize, ()>(a1, "setOffset:", 12);
+            send1::<usize, ()>(a1, "setBufferIndex:", 0);
+            let layouts: Id = send0(vdesc, "layouts");
+            let l0: Id = send1(layouts, "objectAtIndexedSubscript:", 0usize);
+            send1::<usize, ()>(l0, "setStride:", 20);
+
+            let pdesc_cls = objc_rt::class_named("MTLRenderPipelineDescriptor").unwrap() as Id;
+            let pdesc: Id = send0(send0(pdesc_cls, "alloc"), "init");
+            send1::<Id, ()>(pdesc, "setVertexDescriptor:", vdesc);
+            let mut err: Id = std::ptr::null_mut();
+            let pso: Id = send2(dev, "newRenderPipelineStateWithDescriptor:error:", pdesc, &mut err);
+            assert!(!pso.is_null());
+
+            // 4. Fullscreen quad (4 vertices * 5 f32s) + u16 indices
+            #[rustfmt::skip]
+            let verts: [f32; 20] = [
+                -1.0, -1.0, 0.0,  0.0, 0.0,
+                 1.0, -1.0, 0.0,  1.0, 0.0,
+                 1.0,  1.0, 0.0,  1.0, 1.0,
+                -1.0,  1.0, 0.0,  0.0, 1.0,
+            ];
+            let indices: [u16; 6] = [0, 1, 2, 0, 2, 3];
+            let ibuf: Id = send3(
+                dev,
+                "newBufferWithBytes:length:options:",
+                indices.as_ptr() as *const c_void,
+                indices.len() * 2,
+                0usize,
+            );
+
+            let pass_cls = objc_rt::class_named("MTLRenderPassDescriptor").unwrap() as Id;
+            let pass: Id = send0(pass_cls, "renderPassDescriptor");
+            let catts: Id = send0(pass, "colorAttachments");
+            let ca0: Id = send1(catts, "objectAtIndexedSubscript:", 0usize);
+            send1::<Id, ()>(ca0, "setTexture:", dtex);
+            send1::<usize, ()>(ca0, "setLoadAction:", 2); // MTLLoadActionClear
+            let s_cc = objc_rt::sel("setClearColor:");
+            let d_cc = lookup_for_send(ca0, s_cc);
+            let f_cc: unsafe extern "C" fn(Id, Sel, MTLClearColor) = std::mem::transmute(d_cc.imp);
+            f_cc(d_cc.receiver, s_cc, MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 });
+
+            let cb: Id = send0(cq, "commandBuffer");
+            let renc: Id = send1(cb, "renderCommandEncoderWithDescriptor:", pass);
+            send1::<Id, ()>(renc, "setRenderPipelineState:", pso);
+            send3::<*const u8, usize, usize, ()>(
+                renc,
+                "setVertexBytes:length:atIndex:",
+                verts.as_ptr() as *const u8,
+                std::mem::size_of_val(&verts),
+                0usize,
+            );
+            send2::<Id, usize, ()>(renc, "setFragmentTexture:atIndex:", tex_src, 0usize);
+            send5::<usize, usize, usize, Id, usize, ()>(
+                renc,
+                "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:",
+                3usize,
+                6usize,
+                0usize,
+                ibuf,
+                0usize,
+            );
+            send0::<()>(renc, "endEncoding");
+            send1::<Id, ()>(cb, "presentDrawable:", drawable);
+            send0::<()>(cb, "commit");
+
+            // 5. Verify center pixel (8, 8) is green [0, 255, 0, 255]
+            let (fw, fh, rgba) = last_presented_frame().expect("frame missing");
+            assert_eq!((fw, fh), (16, 16));
+            let center = (8 * 16 + 8) * 4;
+            assert_eq!(&rgba[center..center + 4], &[0, 255, 0, 255]);
+
+            // 6. Blit copyFromTexture: -> getBytes:
+            let tex_dst: Id = send1(dev, "newTextureWithDescriptor:", tdesc);
+            let cb_b: Id = send0(cq, "commandBuffer");
+            let blit: Id = send0(cb_b, "blitCommandEncoder");
+            let s_cft = objc_rt::sel("copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:");
+            let d_cft = lookup_for_send(blit, s_cft);
+            let f_cft: unsafe extern "C" fn(Id, Sel, Id, usize, usize, MTLOrigin, MTLSize, Id, usize, usize, MTLOrigin) =
+                std::mem::transmute(d_cft.imp);
+            f_cft(
+                d_cft.receiver,
+                s_cft,
+                tex_src,
+                0,
+                0,
+                MTLOrigin { x: 0, y: 0, z: 0 },
+                MTLSize { width: 2, height: 2, depth: 1 },
+                tex_dst,
+                0,
+                0,
+                MTLOrigin { x: 0, y: 0, z: 0 },
+            );
+            send0::<()>(blit, "endEncoding");
+            send0::<()>(cb_b, "commit");
+
+            let mut out_px = [0u8; 16];
+            let s_gb = objc_rt::sel("getBytes:bytesPerRow:fromRegion:mipmapLevel:");
+            let d_gb = lookup_for_send(tex_dst, s_gb);
+            let f_gb: unsafe extern "C" fn(Id, Sel, *mut u8, usize, MTLRegion, usize) =
+                std::mem::transmute(d_gb.imp);
+            f_gb(
+                d_gb.receiver,
+                s_gb,
+                out_px.as_mut_ptr(),
+                8,
+                MTLRegion {
+                    origin: MTLOrigin { x: 0, y: 0, z: 0 },
+                    size: MTLSize { width: 2, height: 2, depth: 1 },
+                },
+                0,
+            );
+            assert_eq!(out_px, green_px);
+        }
+    }
 }
