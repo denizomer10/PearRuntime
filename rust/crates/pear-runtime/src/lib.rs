@@ -129,6 +129,7 @@ guest_class!(UIBARBUTTONITEM_CLASS, UIBARBUTTONITEM_META);
 guest_class!(UITOOLBAR_CLASS, UITOOLBAR_META);
 guest_class!(MTLFXSPATIALSCALERDESCRIPTOR_CLASS, MTLFXSPATIALSCALERDESCRIPTOR_META);
 guest_class!(MTLFXTEMPORALSCALERDESCRIPTOR_CLASS, MTLFXTEMPORALSCALERDESCRIPTOR_META);
+guest_class!(NSTIMEZONE_CLASS, NSTIMEZONE_META);
 
 extern "C" fn shared_app_stub(_self: Id, _cmd: Sel) -> Id {
     static APP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
@@ -1327,7 +1328,6 @@ fn init_guest_frameworks() {
             (&UIALERTVIEW_CLASS, &UIALERTVIEW_META, "UIAlertView"),
             (&UIPASTEBOARD_CLASS, &UIPASTEBOARD_META, "UIPasteboard"),
             (&AVAUDIOSESSION_CLASS, &AVAUDIOSESSION_META, "AVAudioSession"),
-            (&AVAUDIOPLAYER_CLASS, &AVAUDIOPLAYER_META, "AVAudioPlayer"),
             (&AVPLAYER_CLASS, &AVPLAYER_META, "AVPlayer"),
             (&AVPLAYERITEM_CLASS, &AVPLAYERITEM_META, "AVPlayerItem"),
             (&AVURLASSET_CLASS, &AVURLASSET_META, "AVURLAsset"),
@@ -2125,16 +2125,64 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
             "AVAudioSession",
             32,
             &[
-                ("setCategory:error:", i(noop3 as *const ())),
+                ("setCategory:error:", i(avaudiosession_set_mode_err as *const ())),
                 ("setCategory:withOptions:error:", i(noop4 as *const ())),
                 ("setCategory:mode:options:error:", i(noop4 as *const ())),
+                ("setMode:error:", i(avaudiosession_set_mode_err as *const ())),
                 ("setActive:error:", i(noop3 as *const ())),
                 ("setActive:withOptions:error:", i(noop4 as *const ())),
                 ("isOtherAudioPlaying", i(app_false as *const ())),
                 ("secondaryAudioShouldBeSilencedHint", i(app_false as *const ())),
                 ("currentRoute", i(avaudiosession_current_route as *const ())),
+                ("sampleRate", i(avaudiosession_sample_rate as *const ())),
+                ("preferredSampleRate", i(avaudiosession_sample_rate as *const ())),
+                ("IOBufferDuration", i(avaudiosession_io_buf_dur as *const ())),
+                ("setPreferredSampleRate:error:", i(avaudiosession_set_f64_err as *const ())),
+                ("setPreferredIOBufferDuration:error:", i(avaudiosession_set_f64_err as *const ())),
             ],
             &[("sharedInstance", i(ret_singleton as *const ()))],
+        );
+        objc_rt::register_builtin(
+            AVAUDIOPLAYER_CLASS.ptr(),
+            AVAUDIOPLAYER_META.ptr(),
+            "AVAudioPlayer",
+            32,
+            &[
+                ("initWithContentsOfURL:error:", i(avaudioplayer_init_err as *const ())),
+                ("initWithData:error:", i(avaudioplayer_init_err as *const ())),
+                ("prepareToPlay", i(app_true as *const ())),
+                ("play", i(app_true as *const ())),
+                ("pause", i(noop_method as *const ())),
+                ("stop", i(noop_method as *const ())),
+                ("setVolume:", i(avaudioplayer_set_volume as *const ())),
+                ("volume", i(avaudioplayer_volume as *const ())),
+                ("setNumberOfLoops:", i(avaudioplayer_set_loops as *const ())),
+                ("numberOfLoops", i(avaudioplayer_loops as *const ())),
+                ("isPlaying", i(app_false as *const ())),
+                ("setDelegate:", i(app_noop1 as *const ())),
+            ],
+            &[],
+        );
+        objc_rt::register_builtin(
+            NSTIMEZONE_CLASS.ptr(),
+            NSTIMEZONE_META.ptr(),
+            "NSTimeZone",
+            32,
+            &[
+                ("name", i(nstimezone_utc_str as *const ())),
+                ("abbreviation", i(nstimezone_utc_str as *const ())),
+                ("secondsFromGMT", i(nstimezone_seconds as *const ())),
+                ("secondsFromGMTForDate:", i(nstimezone_seconds_date as *const ())),
+            ],
+            &[
+                ("timeZoneWithName:", i(nstimezone_shared1 as *const ())),
+                ("timeZoneWithAbbreviation:", i(nstimezone_shared1 as *const ())),
+                ("timeZoneForSecondsFromGMT:", i(nstimezone_shared1 as *const ())),
+                ("localTimeZone", i(nstimezone_shared0 as *const ())),
+                ("systemTimeZone", i(nstimezone_shared0 as *const ())),
+                ("defaultTimeZone", i(nstimezone_shared0 as *const ())),
+                ("GMTTimeZone", i(nstimezone_shared0 as *const ())),
+            ],
         );
         objc_rt::register_builtin(
             UIACCELEROMETER_CLASS.ptr(),
@@ -2256,7 +2304,7 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
             "NSMachPort", "NSNotification", "NSNotificationQueue", "NSProgress",
             "NSPropertyListSerialization", "NSRegularExpression", "NSScanner",
             "NSSortDescriptor", "NSTextCheckingResult", "NSURLComponents",
-            "NSURLQueryItem", "NSUserActivity", "NSValue", "NSExpression", "NSTimeZone",
+            "NSURLQueryItem", "NSUserActivity", "NSValue", "NSExpression",
         ] {
             register_stub_class(name, ns_obj, 32);
         }
@@ -3175,6 +3223,61 @@ extern "C" fn pthread_mach_thread_np_impl(t: usize) -> u32 {
 extern "C" fn avaudiosession_current_route(_self: Id, _cmd: Sel) -> Id {
     static ROUTE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *ROUTE.get_or_init(|| unsafe { alloc(AVAUDIOSESSIONROUTEDESCRIPTION_CLASS.ptr()) } as usize) as Id
+}
+
+extern "C" fn avaudiosession_sample_rate(_self: Id, _cmd: Sel) -> f64 {
+    48000.0
+}
+
+extern "C" fn avaudiosession_io_buf_dur(_self: Id, _cmd: Sel) -> f64 {
+    0.005
+}
+
+extern "C" fn avaudiosession_set_f64_err(_self: Id, _cmd: Sel, _val: f64, err: *mut Id) -> bool {
+    if !err.is_null() {
+        unsafe { *err = std::ptr::null_mut(); }
+    }
+    true
+}
+
+extern "C" fn avaudiosession_set_mode_err(_self: Id, _cmd: Sel, _mode: Id, err: *mut Id) -> bool {
+    if !err.is_null() {
+        unsafe { *err = std::ptr::null_mut(); }
+    }
+    true
+}
+
+extern "C" fn avaudioplayer_init_err(self_: Id, _cmd: Sel, _arg: Id, err: *mut Id) -> Id {
+    if !err.is_null() {
+        unsafe { *err = std::ptr::null_mut(); }
+    }
+    self_
+}
+
+extern "C" fn avaudioplayer_set_volume(_self: Id, _cmd: Sel, _vol: f32) {}
+extern "C" fn avaudioplayer_volume(_self: Id, _cmd: Sel) -> f32 {
+    1.0
+}
+extern "C" fn avaudioplayer_set_loops(_self: Id, _cmd: Sel, _loops: isize) {}
+extern "C" fn avaudioplayer_loops(_self: Id, _cmd: Sel) -> isize {
+    0
+}
+
+extern "C" fn nstimezone_shared0(_cls: Id, _cmd: Sel) -> Id {
+    static TZ: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *TZ.get_or_init(|| unsafe { alloc(NSTIMEZONE_CLASS.ptr()) } as usize) as Id
+}
+extern "C" fn nstimezone_shared1(cls: Id, cmd: Sel, _arg: Id) -> Id {
+    nstimezone_shared0(cls, cmd)
+}
+extern "C" fn nstimezone_utc_str(_self: Id, _cmd: Sel) -> Id {
+    pear_foundation::nsstring_from_rust("UTC")
+}
+extern "C" fn nstimezone_seconds(_self: Id, _cmd: Sel) -> isize {
+    0
+}
+extern "C" fn nstimezone_seconds_date(_self: Id, _cmd: Sel, _date: Id) -> isize {
+    0
 }
 
 unsafe fn write_sysctl_bytes(bytes: &[u8], oldp: *mut c_void, oldlenp: *mut usize) -> i32 {
@@ -7561,6 +7664,75 @@ mod tests {
             let d_nr = pear_libobjc::message::lookup_for_send(opts, s_nr);
             let f_nr: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_nr.imp);
             assert!(f_nr(d_nr.receiver, s_nr).is_null());
+        }
+    }
+
+    #[test]
+    fn phase5_11_audio_and_timezone_selectors() {
+        init();
+        unsafe {
+            let sess_cls = AVAUDIOSESSION_CLASS.ptr() as Id;
+            let s_shared = objc_rt::sel("sharedInstance");
+            let d_shared = pear_libobjc::message::lookup_for_send(sess_cls, s_shared);
+            let f_shared: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_shared.imp);
+            let sess = f_shared(d_shared.receiver, s_shared);
+            assert!(!sess.is_null());
+
+            let s_sr = objc_rt::sel("sampleRate");
+            let d_sr = pear_libobjc::message::lookup_for_send(sess, s_sr);
+            let f_sr: extern "C" fn(Id, Sel) -> f64 = std::mem::transmute(d_sr.imp);
+            assert_eq!(f_sr(d_sr.receiver, s_sr), 48000.0);
+
+            let mut err: Id = 0x1usize as Id;
+            let s_ssr = objc_rt::sel("setPreferredSampleRate:error:");
+            let d_ssr = pear_libobjc::message::lookup_for_send(sess, s_ssr);
+            let f_ssr: extern "C" fn(Id, Sel, f64, *mut Id) -> bool = std::mem::transmute(d_ssr.imp);
+            assert!(f_ssr(d_ssr.receiver, s_ssr, 44100.0, &mut err));
+            assert!(err.is_null());
+
+            let mut err2: Id = 0x1usize as Id;
+            let s_mode = objc_rt::sel("setMode:error:");
+            let d_mode = pear_libobjc::message::lookup_for_send(sess, s_mode);
+            let f_mode: extern "C" fn(Id, Sel, Id, *mut Id) -> bool = std::mem::transmute(d_mode.imp);
+            assert!(f_mode(d_mode.receiver, s_mode, std::ptr::null_mut(), &mut err2));
+            assert!(err2.is_null());
+
+            let ap = alloc(AVAUDIOPLAYER_CLASS.ptr());
+            let mut err3: Id = 0x1usize as Id;
+            let s_init = objc_rt::sel("initWithContentsOfURL:error:");
+            let d_init = pear_libobjc::message::lookup_for_send(ap, s_init);
+            let f_init: extern "C" fn(Id, Sel, Id, *mut Id) -> Id = std::mem::transmute(d_init.imp);
+            assert_eq!(f_init(d_init.receiver, s_init, std::ptr::null_mut(), &mut err3), ap);
+            assert!(err3.is_null());
+
+            let s_prep = objc_rt::sel("prepareToPlay");
+            let d_prep = pear_libobjc::message::lookup_for_send(ap, s_prep);
+            let f_prep: extern "C" fn(Id, Sel) -> bool = std::mem::transmute(d_prep.imp);
+            assert!(f_prep(d_prep.receiver, s_prep));
+
+            let s_vol = objc_rt::sel("volume");
+            let d_vol = pear_libobjc::message::lookup_for_send(ap, s_vol);
+            let f_vol: extern "C" fn(Id, Sel) -> f32 = std::mem::transmute(d_vol.imp);
+            assert_eq!(f_vol(d_vol.receiver, s_vol), 1.0);
+
+            let tz_cls = NSTIMEZONE_CLASS.ptr() as Id;
+            let s_tz = objc_rt::sel("timeZoneWithName:");
+            let d_tz = pear_libobjc::message::lookup_for_send(tz_cls, s_tz);
+            let f_tz: extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(d_tz.imp);
+            let tz = f_tz(d_tz.receiver, s_tz, pear_foundation::nsstring_from_rust("UTC"));
+            assert!(!tz.is_null());
+
+            let s_name = objc_rt::sel("name");
+            let d_name = pear_libobjc::message::lookup_for_send(tz, s_name);
+            let f_name: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_name.imp);
+            assert_eq!(
+                pear_foundation::rust_str_from_nsstring(f_name(d_name.receiver, s_name)).as_deref(),
+                Some("UTC")
+            );
+            let s_sec = objc_rt::sel("secondsFromGMT");
+            let d_sec = pear_libobjc::message::lookup_for_send(tz, s_sec);
+            let f_sec: extern "C" fn(Id, Sel) -> isize = std::mem::transmute(d_sec.imp);
+            assert_eq!(f_sec(d_sec.receiver, s_sec), 0);
         }
     }
 }

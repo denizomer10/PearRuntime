@@ -145,89 +145,53 @@ fn read_u128_bits(stream: u128, start: usize, len: usize) -> u32 {
     ((stream >> start) & mask) as u32
 }
 
-fn pack_3_trits(t0: u8, t1: u8, t2: u8) -> u8 {
-    if t2 == 2 && t1 == 2 {
-        (3 << 2) | t0
-    } else if t2 == 2 {
-        (((t1 << 2) | t0) << 2) | 3
-    } else {
-        (((t2 << 2) | t1) << 2) | t0
-    }
-}
-
-fn pack_trit_block(t: [u8; 5]) -> u8 {
-    let c = pack_3_trits(t[0], t[1], t[2]);
-    if t[4] == 2 && t[3] == 2 {
-        ((c & 0x1c) << 3) | (7 << 2) | (c & 3)
-    } else {
-        let h = if t[4] == 2 {
-            6 | t[3]
-        } else if t[3] == 2 {
-            2 | t[4]
-        } else {
-            (t[4] << 2) | t[3]
-        };
-        (h << 5) | c
-    }
-}
-
 fn unpack_trit_block(t: u8) -> [u8; 5] {
-    static TRIT_LUT: std::sync::OnceLock<[u8; 256 * 5]> = std::sync::OnceLock::new();
-    let lut = TRIT_LUT.get_or_init(|| {
-        let mut table = [0u8; 256 * 5];
-        for t0 in 0..3u8 {
-            for t1 in 0..3u8 {
-                for t2 in 0..3u8 {
-                    for t3 in 0..3u8 {
-                        for t4 in 0..3u8 {
-                            let enc = pack_trit_block([t0, t1, t2, t3, t4]);
-                            let base = (enc as usize) * 5;
-                            table[base..base + 5].copy_from_slice(&[t0, t1, t2, t3, t4]);
-                        }
-                    }
-                }
-            }
-        }
-        table
-    });
-    let base = (t as usize) * 5;
-    [lut[base], lut[base + 1], lut[base + 2], lut[base + 3], lut[base + 4]]
-}
-
-fn pack_quint_block(q: [u8; 3]) -> u8 {
-    let [m0, m1, m2] = q;
-    if m1 < 4 && m2 < 4 {
-        (m2 << 5) | (m1 << 3) | m0
-    } else if m1 == 4 && m2 == 4 {
-        ((m0 & 3) << 5) | 0x1e | (m0 >> 2)
-    } else if m1 == 4 {
-        let a = m0 >> 1;
-        let b = m0 & 1;
-        (m2 << 5) | (a << 3) | 6 | b
-    } else if m0 < 4 {
-        (m0 << 5) | (m1 << 3) | 5
+    let (c, t3, t4) = if ((t >> 2) & 0x7) == 0x7 {
+        ((((t >> 5) & 0x7) << 2) | (t & 0x3), 2u8, 2u8)
     } else {
-        (m1 << 5) | (2 << 3) | 7
-    }
+        let c = t & 0x1f;
+        let t65 = (t >> 5) & 0x3;
+        if t65 == 0x3 {
+            (c, (t >> 7) & 0x1, 2u8)
+        } else {
+            (c, t65, (t >> 7) & 0x1)
+        }
+    };
+    let (t0, t1, t2) = if (c & 0x3) == 0x3 {
+        let c3 = (c >> 3) & 0x1;
+        let c2 = (c >> 2) & 0x1;
+        ((c3 << 1) | (c2 & (1 - c3)), 1 - ((c >> 4) & 0x1), 2u8)
+    } else if ((c >> 2) & 0x3) == 0x3 {
+        (c & 0x3, 2u8, 2u8)
+    } else {
+        (c & 0x3, (c >> 2) & 0x3, (c >> 4) & 0x1)
+    };
+    [t0, t1, t2, t3, t4]
 }
 
 fn unpack_quint_block(q: u8) -> [u8; 3] {
-    static QUINT_LUT: std::sync::OnceLock<[u8; 128 * 3]> = std::sync::OnceLock::new();
-    let lut = QUINT_LUT.get_or_init(|| {
-        let mut table = [0u8; 128 * 3];
-        for m0 in 0..5u8 {
-            for m1 in 0..5u8 {
-                for m2 in 0..5u8 {
-                    let enc = pack_quint_block([m0, m1, m2]);
-                    let base = (enc as usize) * 3;
-                    table[base..base + 3].copy_from_slice(&[m0, m1, m2]);
-                }
-            }
-        }
-        table
-    });
-    let base = ((q & 0x7f) as usize) * 3;
-    [lut[base], lut[base + 1], lut[base + 2]]
+    let q = q & 0x7f;
+    let q21 = (q >> 1) & 0x3;
+    let q65 = (q >> 5) & 0x3;
+    let q43 = (q >> 3) & 0x3;
+    let q0b = q & 0x1;
+    if q21 == 0x3 && q65 == 0x0 {
+        let q2 = (q0b << 2)
+            | ((((q >> 4) & 0x1) & (1 - q0b)) << 1)
+            | (((q >> 3) & 0x1) & (1 - q0b));
+        return [4, 4, q2.min(4)];
+    }
+    let (q2, c) = if q21 == 0x3 {
+        (4u8, (q43 << 3) | (((!q65) & 0x3) << 1) | q0b)
+    } else {
+        (q65, q & 0x1f)
+    };
+    let (q0, q1) = if (c & 0x7) == 5 {
+        ((c >> 3) & 0x3, 4u8)
+    } else {
+        ((c & 0x7).min(4), (c >> 3) & 0x3)
+    };
+    [q0, q1, q2]
 }
 
 /// Decodes a BISE integer sequence from `stream` starting at `start_bit`.
@@ -604,10 +568,10 @@ fn select_partition(
     let mut c = seed5.wrapping_mul(xi).wrapping_add(seed6.wrapping_mul(yi)).wrapping_add(rnum >> 6);
     let mut d = seed7.wrapping_mul(xi).wrapping_add(seed8.wrapping_mul(yi)).wrapping_add(rnum >> 2);
 
-    a = (a & 0x3f).wrapping_mul(seed & 1 | 1);
-    b = (b & 0x3f).wrapping_mul(1);
-    c = (c & 0x3f).wrapping_mul(1);
-    d = (d & 0x3f).wrapping_mul(1);
+    a &= 0x3f;
+    b &= 0x3f;
+    c &= 0x3f;
+    d &= 0x3f;
     let _ = sh3;
 
     if partition_count <= 3 {
@@ -871,57 +835,42 @@ mod tests {
 
     #[test]
     fn astc_bise_trits_and_quints_round_trip() {
-        // Check pure trit unpacking (range_max = 2 -> Trit(0)) & 5 (Trit(1))
-        for range_max in [2usize, 5, 11] {
-            let b = match range_max {
-                2 => 0usize,
-                5 => 1,
-                _ => 2,
-            };
-            let trits = [0u8, 1, 2, 2, 1];
-            let t_packed = pack_trit_block(trits);
-            let mut vals = [0u8; 5];
-            let mut stream = 0u128;
-            let mut pos = 0usize;
-            let widths = [2usize, 2, 1, 2, 1];
-            let shifts = [0usize, 2, 4, 5, 7];
-            for j in 0..5 {
-                let lo = (j as u8) & ((1 << b) - 1);
-                vals[j] = (trits[j] << b) | lo;
-                stream |= (lo as u128) << pos;
-                pos += b;
-                let tb = ((t_packed >> shifts[j]) & ((1 << widths[j]) - 1)) as u128;
-                stream |= tb << pos;
-                pos += widths[j];
-            }
-            assert_eq!(decode_ise(stream, 0, 5, range_max), vals);
-        }
+        use std::collections::HashSet;
 
-        // Check quint unpacking (range_max = 4 -> Quint(0), 9 -> Quint(1), 19 -> Quint(2))
-        for range_max in [4usize, 9, 19] {
-            let b = match range_max {
-                4 => 0usize,
-                9 => 1,
-                _ => 2,
-            };
-            let quints = [4u8, 0, 4];
-            let q_packed = pack_quint_block(quints);
-            let mut vals = [0u8; 3];
-            let mut stream = 0u128;
-            let mut pos = 0usize;
-            let widths = [3usize, 2, 2];
-            let shifts = [0usize, 3, 5];
-            for j in 0..3 {
-                let lo = (j as u8) & ((1 << b) - 1);
-                vals[j] = (quints[j] << b) | lo;
-                stream |= (lo as u128) << pos;
-                pos += b;
-                let qb = ((q_packed >> shifts[j]) & ((1 << widths[j]) - 1)) as u128;
-                stream |= qb << pos;
-                pos += widths[j];
-            }
-            assert_eq!(decode_ise(stream, 0, 3, range_max), vals);
+        // 1. Exhaustively check Khronos §C.2.12 5-trit bijection (256 bytes -> 243 distinct valid tuples)
+        let mut trits_set = HashSet::new();
+        for t in 0u8..=255 {
+            let dec = unpack_trit_block(t);
+            assert!(dec.iter().all(|&x| x <= 2), "invalid trit in {t:#x}: {dec:?}");
+            trits_set.insert(dec);
         }
+        assert_eq!(trits_set.len(), 243);
+        // Key §C.2.12 vector: T[4:2]==7 => t4=2, t3=2
+        let vec_t = unpack_trit_block(0b111_111_00);
+        assert_eq!((vec_t[3], vec_t[4]), (2, 2));
+
+        // 2. Exhaustively check Khronos §C.2.12 3-quint bijection (128 codes -> 125 distinct valid tuples)
+        let mut quints_set = HashSet::new();
+        for q in 0u8..128 {
+            let dec = unpack_quint_block(q);
+            assert!(dec.iter().all(|&x| x <= 4), "invalid quint in {q:#x}: {dec:?}");
+            quints_set.insert(dec);
+        }
+        assert_eq!(quints_set.len(), 125);
+        // Key §C.2.12 vector: Q[6:5]==0, Q[2:1]==3, Q[0]==0 => [4, 4, 0]
+        assert_eq!(unpack_quint_block(0b00_00_11_0), [4, 4, 0]);
+
+        // 3. Test decode_ise on range_max=5 (Trit, 1 lo bit) and range_max=9 (Quint, 1 lo bit)
+        // With T=0 (all trits=0) and lo bits = [1, 0, 1, 0, 1], decoded must be [1, 0, 1, 0, 1].
+        let s_trit = 1u128 | (1u128 << 6) | (1u128 << 11);
+        assert_eq!(decode_ise(s_trit, 0, 5, 5), [1, 0, 1, 0, 1]);
+        // Partial trit block (rem=1): first trit encoded at bits [1..3], must match 5-element prefix.
+        assert_eq!(decode_ise(0b01_0u128, 0, 1, 5), [2]);
+
+        // With Q=0b00_00_11_0 ([4, 4, 0]) + lo bits [1, 0, 1]:
+        // bitpos: m0(1)=1, q0(3)=0b110, m1(1)=0, q1(2)=0b00, m2(1)=1, q2(2)=0b00
+        let s_quint = 1u128 | (0b110u128 << 1) | (1u128 << 7);
+        assert_eq!(decode_ise(s_quint, 0, 3, 9), [9, 8, 1]);
     }
 
     #[test]

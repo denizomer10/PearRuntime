@@ -2885,6 +2885,9 @@ pub fn init_foundation() {
                 ("hash", i(str_hash as *const ())),
                 ("copy", i(copy_retain as *const ())),
                 ("copyWithZone:", i(copy_zone_retain as *const ())),
+                ("initFileURLWithPath:", i(url_init_file_with_path as *const ())),
+                ("initFileURLWithPath:isDirectory:", i(url_init_file_with_path_dir as *const ())),
+                ("initWithString:", i(url_init_with_string as *const ())),
                 ("dealloc", i(f_dealloc as *const ())),
             ],
             &[
@@ -2961,6 +2964,11 @@ pub fn init_foundation() {
                 ("integerForKey:", i(ud_int_for_key as *const ())),
                 ("setObject:forKey:", i(ud_set_obj_for_key as *const ())),
                 ("setValue:forKey:", i(ud_set_obj_for_key as *const ())),
+                ("setInteger:forKey:", i(ud_set_int_for_key as *const ())),
+                ("setBool:forKey:", i(ud_set_bool_for_key as *const ())),
+                ("setFloat:forKey:", i(ud_set_float_for_key as *const ())),
+                ("setDouble:forKey:", i(ud_set_double_for_key as *const ())),
+                ("removeObjectForKey:", i(ud_remove_obj_for_key as *const ())),
                 ("synchronize", i(ud_sync as *const ())),
             ],
             &[("standardUserDefaults", i(ud_standard as *const ()))],
@@ -2974,6 +2982,7 @@ pub fn init_foundation() {
             &[
                 ("JSONObjectWithData:options:error:", i(json_decode as *const ())),
                 ("dataWithJSONObject:options:error:", i(json_encode as *const ())),
+                ("isValidJSONObject:", i(json_is_valid_object as *const ())),
             ],
         );
         runtime::register_builtin(
@@ -3407,6 +3416,23 @@ extern "C" fn url_file_with_path(_self: Id, _cmd: Sel, path: Id) -> Id {
 
 extern "C" fn url_file_with_path_dir(cls: Id, sel_id: Sel, path: Id, _is_dir: bool) -> Id {
     url_file_with_path(cls, sel_id, path)
+}
+
+extern "C" fn url_init_file_with_path(self_: Id, _cmd: Sel, path: Id) -> Id {
+    let s = rust_str_from_nsstring(path).unwrap_or_default();
+    if self_.is_null() {
+        return unsafe { alloc_with_backing(NSURL_CLASS.ptr(), Backing::Str(s)) };
+    }
+    store().lock().unwrap().insert(self_ as usize, Backing::Str(s));
+    self_
+}
+
+extern "C" fn url_init_file_with_path_dir(self_: Id, cmd: Sel, path: Id, _is_dir: bool) -> Id {
+    url_init_file_with_path(self_, cmd, path)
+}
+
+extern "C" fn url_init_with_string(self_: Id, cmd: Sel, s: Id) -> Id {
+    url_init_file_with_path(self_, cmd, s)
 }
 
 extern "C" fn url_with_str_rel(cls: Id, _cmd: Sel, s: Id, rel: Id) -> Id {
@@ -3959,6 +3985,39 @@ extern "C" fn ud_set_obj_for_key(self_: Id, _cmd: Sel, val: Id, key: Id) {
     }
 }
 
+fn ud_set_backing(self_: Id, key: Id, b: Backing) {
+    let num = unsafe { alloc_with_backing(NSNUMBER_CLASS.ptr(), b) };
+    let k = rust_str_from_nsstring(key).unwrap_or_default();
+    let mut guard = store().lock().unwrap();
+    if let Some(Backing::Dict(d)) = guard.get_mut(&(self_ as usize)) {
+        d.insert(k, num as usize);
+    }
+}
+
+extern "C" fn ud_set_int_for_key(self_: Id, _cmd: Sel, val: isize, key: Id) {
+    ud_set_backing(self_, key, Backing::NumI64(val as i64));
+}
+
+extern "C" fn ud_set_bool_for_key(self_: Id, _cmd: Sel, val: bool, key: Id) {
+    ud_set_backing(self_, key, Backing::NumBool(val));
+}
+
+extern "C" fn ud_set_float_for_key(self_: Id, _cmd: Sel, val: f32, key: Id) {
+    ud_set_backing(self_, key, Backing::NumF64(val as f64));
+}
+
+extern "C" fn ud_set_double_for_key(self_: Id, _cmd: Sel, val: f64, key: Id) {
+    ud_set_backing(self_, key, Backing::NumF64(val));
+}
+
+extern "C" fn ud_remove_obj_for_key(self_: Id, _cmd: Sel, key: Id) {
+    let k = rust_str_from_nsstring(key).unwrap_or_default();
+    let mut guard = store().lock().unwrap();
+    if let Some(Backing::Dict(d)) = guard.get_mut(&(self_ as usize)) {
+        d.remove(&k);
+    }
+}
+
 pub extern "C" fn ns_home_directory() -> Id {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     nsstring_from_rust(&home)
@@ -4378,6 +4437,16 @@ extern "C" fn json_encode(_self: Id, _cmd: Sel, obj: Id, _opts: usize, _err: *mu
     let mut out = String::new();
     json_serialize_val(obj, &mut out);
     unsafe { alloc_with_backing(NSDATA_CLASS.ptr(), Backing::Bytes(out.into_bytes())) }
+}
+
+extern "C" fn json_is_valid_object(_self: Id, _cmd: Sel, obj: Id) -> bool {
+    if obj.is_null() {
+        return false;
+    }
+    matches!(
+        store().lock().unwrap().get(&(obj as usize)),
+        Some(Backing::Dict(_)) | Some(Backing::Arr(_))
+    )
 }
 
 const CS_INV_PREFIX: &str = "\x00INV:";
@@ -5223,6 +5292,20 @@ mod tests {
             let lib_dir = cf_array_get_value_at_index(sp_arr, 0) as Id;
             let lib_path = rust_str_from_nsstring(lib_dir).unwrap();
             assert!(lib_path.ends_with("/Library") && std::path::Path::new(&lib_path).is_dir());
+
+            // Phase 5.11: NSURL initFileURLWithPath:, NSUserDefaults setInteger:forKey:, NSJSONSerialization isValidJSONObject:
+            let u_alloc: Id = send0(NSURL_CLASS.ptr() as Id, "alloc");
+            let u_init: Id = send1(u_alloc, "initFileURLWithPath:", nsstring_from_rust("/tmp/silent.caf"));
+            let u_path: Id = send0(u_init, "path");
+            assert_eq!(rust_str_from_nsstring(u_path).as_deref(), Some("/tmp/silent.caf"));
+
+            let ud: Id = send0(NSUSERDEFAULTS_CLASS.ptr() as Id, "standardUserDefaults");
+            let ud_key = nsstring_from_rust("phase5_11_int_key");
+            let _: () = send2(ud, "setInteger:forKey:", 77isize, ud_key);
+            assert_eq!(send1::<Id, isize>(ud, "integerForKey:", ud_key), 77isize);
+
+            assert!(send1::<Id, bool>(NSJSONSERIALIZATION_CLASS.ptr() as Id, "isValidJSONObject:", parsed));
+            assert!(!send1::<Id, bool>(NSJSONSERIALIZATION_CLASS.ptr() as Id, "isValidJSONObject:", ud_key));
         }
     }
 
