@@ -12,7 +12,7 @@ use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, Once, OnceLock};
+use std::sync::{Arc, Mutex, Once, OnceLock};
 
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
@@ -130,7 +130,7 @@ struct TextureState {
     texture_type: usize,
     mipmap_levels: usize,
     usage: usize,
-    pixels: Vec<u8>,
+    pixels: Arc<Vec<u8>>,
 }
 
 struct LibraryState {
@@ -592,7 +592,7 @@ fn create_texture_object(
         texture_type,
         mipmap_levels,
         usage,
-        pixels: vec![0u8; byte_len],
+        pixels: Arc::new(vec![0u8; byte_len]),
     });
     obj
 }
@@ -900,14 +900,17 @@ fn upload_texture_region_bytes(tex_id: usize, region: MTLRegion, src: &[u8], byt
     }
     let mut g = textures().lock().unwrap();
     let Some(t) = g.get_mut(&tex_id) else { return };
-    if t.pixels.is_empty() || region.origin.x >= t.width || region.origin.y >= t.height {
+    let tw = t.width;
+    let th = t.height;
+    let pf = t.pixel_format;
+    if t.pixels.is_empty() || region.origin.x >= tw || region.origin.y >= th {
         return;
     }
-    let dst_row_stride = t.width * 4;
-    let copy_cols = region.size.width.min(t.width.saturating_sub(region.origin.x));
-    let copy_rows = region.size.height.min(t.height.saturating_sub(region.origin.y));
+    let dst_row_stride = tw * 4;
+    let copy_cols = region.size.width.min(tw.saturating_sub(region.origin.x));
+    let copy_rows = region.size.height.min(th.saturating_sub(region.origin.y));
 
-    if let Some((bw, bh)) = crate::astc::astc_block_dims(t.pixel_format) {
+    if let Some((bw, bh)) = crate::astc::astc_block_dims(pf) {
         let decoded = crate::astc::decode_astc_surface(
             src,
             bytes_per_row,
@@ -917,13 +920,14 @@ fn upload_texture_region_bytes(tex_id: usize, region: MTLRegion, src: &[u8], byt
             bh,
         );
         let copy_bytes = copy_cols * 4;
+        let dst_pixels = Arc::make_mut(&mut t.pixels);
         for row in 0..copy_rows {
             let dy = region.origin.y + row;
             let s_off = row * region.size.width * 4;
             let d_off = dy * dst_row_stride + region.origin.x * 4;
             if let (Some(sr), Some(dr)) = (
                 decoded.get(s_off..s_off + copy_bytes),
-                t.pixels.get_mut(d_off..d_off + copy_bytes),
+                dst_pixels.get_mut(d_off..d_off + copy_bytes),
             ) {
                 dr.copy_from_slice(sr);
             }
@@ -931,23 +935,24 @@ fn upload_texture_region_bytes(tex_id: usize, region: MTLRegion, src: &[u8], byt
         return;
     }
 
-    let bpp = tex_src_bpp(t.pixel_format);
+    let bpp = tex_src_bpp(pf);
     let src_row_stride = if bytes_per_row >= region.size.width * bpp {
         bytes_per_row
     } else {
         region.size.width * bpp
     };
+    let dst_pixels = Arc::make_mut(&mut t.pixels);
     for row in 0..copy_rows {
         let dy = region.origin.y + row;
         for col in 0..copy_cols {
             let s_off = row * src_row_stride + col * bpp;
             let d_off = dy * dst_row_stride + (region.origin.x + col) * 4;
             let Some(s) = src.get(s_off..s_off + bpp) else { break };
-            let Some(d) = t.pixels.get_mut(d_off..d_off + 4) else { break };
+            let Some(d) = dst_pixels.get_mut(d_off..d_off + 4) else { break };
             match bpp {
                 1 => {
                     let v = s[0];
-                    if t.pixel_format == 1 {
+                    if pf == 1 {
                         d.copy_from_slice(&[255, 255, 255, v]);
                     } else {
                         d.copy_from_slice(&[v, v, v, 255]);
@@ -1182,7 +1187,8 @@ extern "C" fn cb_render_encoder(this: Id, _cmd: Sel, pass: Id) -> Id {
                             let is_bgra = t.pixel_format == 80 || t.pixel_format == 81;
                             let px = if is_bgra { [b8, g8, r8, a8] } else { [r8, g8, b8, a8] };
                             if t.pixels.len() >= 4 {
-                                for chunk in t.pixels.chunks_exact_mut(4) {
+                                let dst_px = Arc::make_mut(&mut t.pixels);
+                                for chunk in dst_px.chunks_exact_mut(4) {
                                     chunk.copy_from_slice(&px);
                                 }
                             }
@@ -1293,23 +1299,24 @@ fn present_drawable_common(drawable: Id) {
         g.get(&tex).map(|t| {
             let is_bgra = t.pixel_format == 80 || t.pixel_format == 81;
             let expected = t.width * t.height * 4;
-            let mut rgba = Vec::with_capacity(expected);
-            let mut bgra = Vec::with_capacity(expected);
-            for chunk in t.pixels.chunks_exact(4).take(t.width * t.height) {
-                if is_bgra {
-                    rgba.extend_from_slice(&[chunk[2], chunk[1], chunk[0], chunk[3]]);
-                    bgra.extend_from_slice(chunk);
-                } else {
-                    rgba.extend_from_slice(chunk);
-                    bgra.extend_from_slice(&[chunk[2], chunk[1], chunk[0], chunk[3]]);
-                }
-            }
-            if rgba.len() < expected {
-                rgba.resize(expected, 0);
-            }
-            if bgra.len() < expected {
+            let copy_len = expected.min(t.pixels.len());
+            let (rgba, bgra) = if is_bgra {
+                let mut bgra = t.pixels[..copy_len].to_vec();
                 bgra.resize(expected, 0);
-            }
+                let mut rgba = vec![0u8; expected];
+                for (dst, src) in rgba.chunks_exact_mut(4).zip(bgra.chunks_exact(4)) {
+                    dst.copy_from_slice(&[src[2], src[1], src[0], src[3]]);
+                }
+                (rgba, bgra)
+            } else {
+                let mut rgba = t.pixels[..copy_len].to_vec();
+                rgba.resize(expected, 0);
+                let mut bgra = vec![0u8; expected];
+                for (dst, src) in bgra.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
+                    dst.copy_from_slice(&[src[2], src[1], src[0], src[3]]);
+                }
+                (rgba, bgra)
+            };
             (t.width, t.height, rgba, bgra)
         })
     };
@@ -1413,13 +1420,23 @@ fn read_uv_pair(fmt: usize, buf: &[u8], off: usize) -> (f32, f32) {
     }
 }
 
-fn sample_tex_rgba(tex: &(usize, usize, usize, Vec<u8>), u: f32, v: f32) -> [f32; 4] {
+fn sample_tex_rgba(tex: &(usize, usize, usize, Arc<Vec<u8>>), u: f32, v: f32) -> [f32; 4] {
     let (w, h, pf, pixels) = tex;
     if *w == 0 || *h == 0 || pixels.is_empty() {
         return [1.0, 1.0, 1.0, 1.0];
     }
-    let tx = ((u.rem_euclid(1.0) * (*w as f32)) as usize).min(*w - 1);
-    let ty = ((v.rem_euclid(1.0) * (*h as f32)) as usize).min(*h - 1);
+    let uf = if u.is_finite() {
+        if (0.0..1.0).contains(&u) { u } else { u - u.floor() }
+    } else {
+        0.0
+    };
+    let vf = if v.is_finite() {
+        if (0.0..1.0).contains(&v) { v } else { v - v.floor() }
+    } else {
+        0.0
+    };
+    let tx = ((uf * (*w as f32)) as usize).min(*w - 1);
+    let ty = ((vf * (*h as f32)) as usize).min(*h - 1);
     let is_bgra = *pf == 80 || *pf == 81;
     let is_r8 = *pf == 10 || *pf == 11 || *pf == 12;
     if is_r8 {
@@ -1514,7 +1531,7 @@ fn is_good_ndc_transform(m: &[f32; 16], verts: &[(f32, f32, f32)]) -> bool {
 }
 
 fn resolve_draw_transform(
-    vb_data: &HashMap<usize, Vec<u8>>,
+    vb_data: &HashMap<usize, &[u8]>,
     pos_buf_idx: usize,
     sample_verts: &[(f32, f32, f32)],
     tw: usize,
@@ -1605,26 +1622,40 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
         return;
     }
 
-    // Collect vertex slices (inline vertex_bytes or backing MTLBuffer slices).
-    let mut vb_data: HashMap<usize, Vec<u8>> = st.vertex_bytes.clone();
-    let missing_bufs: Vec<(usize, usize, usize)> = st
-        .vertex_buffers
-        .iter()
-        .filter(|(idx, _)| !vb_data.contains_key(idx))
-        .map(|(&idx, &(buf_id, off))| (idx, buf_id, off))
-        .collect();
-    if !missing_bufs.is_empty() {
-        let bg = buffers().lock().unwrap();
-        for (idx, buf_id, off) in missing_bufs {
-            if let Some(b) = bg.get(&buf_id) {
-                if let Some(slice) = b.bytes.get(off..) {
-                    vb_data.insert(idx, slice.to_vec());
-                }
-            }
-        }
-    }
-    if vb_data.is_empty() {
+    let frag_tex_id = st.fragment_textures.get(&0).copied().unwrap_or(0);
+    let (tw_hint, th_hint, frag_snap) = {
+        let tg = textures().lock().unwrap();
+        let (twh, thh) = tg
+            .get(&st.color_tex)
+            .map(|t| (t.width, t.height))
+            .unwrap_or((0, 0));
+        let fs = if frag_tex_id != 0 {
+            tg.get(&frag_tex_id)
+                .map(|t| (t.width, t.height, t.pixel_format, Arc::clone(&t.pixels)))
+        } else {
+            None
+        };
+        (twh, thh, fs)
+    };
+    if tw_hint == 0 || th_hint == 0 {
         return;
+    }
+    let vp_early = st.viewport.unwrap_or(MTLViewport {
+        origin_x: 0.0,
+        origin_y: 0.0,
+        width: tw_hint as f64,
+        height: th_hint as f64,
+        znear: 0.0,
+        zfar: 1.0,
+    });
+
+    #[derive(Copy, Clone)]
+    struct Vtx {
+        sx: f32,
+        sy: f32,
+        u: f32,
+        v: f32,
+        col: [f32; 4],
     }
 
     let pos_attr = pso
@@ -1661,212 +1692,293 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
         max_end.max(12)
     };
 
-    // Guard Float4 tangent/normal attributes against being mistaken for vertex colors.
-    let col_attr = cand_col_attr.filter(|ca| {
-        if ca.format == 45 {
-            return true;
+    let tris: Vec<[Vtx; 3]> = {
+        let bg = buffers().lock().unwrap();
+        let mut vb_data: HashMap<usize, &[u8]> = HashMap::with_capacity(
+            st.vertex_bytes.len() + st.vertex_buffers.len(),
+        );
+        for (&idx, bytes) in &st.vertex_bytes {
+            vb_data.insert(idx, bytes.as_slice());
         }
-        let cs = stride_for(ca.buffer_idx);
-        let Some(cb) = vb_data.get(&ca.buffer_idx) else {
-            return false;
-        };
-        let Some(coff) = (indices[0] as usize).checked_mul(cs).and_then(|o| o.checked_add(ca.offset)) else {
-            return false;
-        };
-        let (Some(r), Some(g), Some(b), Some(a)) = (
-            read_f32_le(cb, coff),
-            read_f32_le(cb, coff + 4),
-            read_f32_le(cb, coff + 8),
-            read_f32_le(cb, coff + 12),
-        ) else {
-            return false;
-        };
-        (0.0..=1.0).contains(&r)
-            && (0.0..=1.0).contains(&g)
-            && (0.0..=1.0).contains(&b)
-            && a > 0.0
-            && a <= 1.0
-    });
+        for (&idx, &(buf_id, off)) in &st.vertex_buffers {
+            if !vb_data.contains_key(&idx) {
+                if let Some(b) = bg.get(&buf_id) {
+                    if let Some(slice) = b.bytes.get(off..) {
+                        vb_data.insert(idx, slice);
+                    }
+                }
+            }
+        }
+        if vb_data.is_empty() {
+            return;
+        }
 
-    let same_slot = |a: &VertexAttrInfo, b: &VertexAttrInfo| {
-        a.buffer_idx == b.buffer_idx && a.offset == b.offset
-    };
-    let uv_attr = pso
-        .attrs
-        .iter()
-        .find(|a| matches!(a.format, 29 | 41) && !same_slot(a, &pos_attr))
-        .or_else(|| {
-            pso.attrs.iter().find(|a| {
-                matches!(a.format, 30 | 31 | 43)
-                    && !same_slot(a, &pos_attr)
-                    && col_attr.as_ref().map_or(true, |c| !same_slot(a, c))
+        // Guard Float4 tangent/normal attributes against being mistaken for vertex colors.
+        let col_attr = cand_col_attr.filter(|ca| {
+            if ca.format == 45 {
+                return true;
+            }
+            let cs = stride_for(ca.buffer_idx);
+            let Some(cb) = vb_data.get(&ca.buffer_idx).copied() else {
+                return false;
+            };
+            let Some(coff) = (indices[0] as usize).checked_mul(cs).and_then(|o| o.checked_add(ca.offset)) else {
+                return false;
+            };
+            let (Some(r), Some(g), Some(b), Some(a)) = (
+                read_f32_le(cb, coff),
+                read_f32_le(cb, coff + 4),
+                read_f32_le(cb, coff + 8),
+                read_f32_le(cb, coff + 12),
+            ) else {
+                return false;
+            };
+            (0.0..=1.0).contains(&r)
+                && (0.0..=1.0).contains(&g)
+                && (0.0..=1.0).contains(&b)
+                && a > 0.0
+                && a <= 1.0
+        });
+
+        let same_slot = |a: &VertexAttrInfo, b: &VertexAttrInfo| {
+            a.buffer_idx == b.buffer_idx && a.offset == b.offset
+        };
+        let uv_attr = pso
+            .attrs
+            .iter()
+            .find(|a| matches!(a.format, 29 | 41) && !same_slot(a, &pos_attr))
+            .or_else(|| {
+                pso.attrs.iter().find(|a| {
+                    matches!(a.format, 30 | 31 | 43)
+                        && !same_slot(a, &pos_attr)
+                        && col_attr.as_ref().map_or(true, |c| !same_slot(a, c))
+                })
             })
-        })
-        .cloned();
+            .cloned();
 
-    let mut sample_verts: Vec<(f32, f32, f32)> = Vec::new();
-    let p_stride = stride_for(pos_attr.buffer_idx);
-    if let Some(p_buf) = vb_data.get(&pos_attr.buffer_idx) {
-        let mut seen_idx = Vec::new();
-        for &vi in indices {
-            if !seen_idx.contains(&vi) {
-                seen_idx.push(vi);
-                if let Some(p_off) = (vi as usize).checked_mul(p_stride).and_then(|o| o.checked_add(pos_attr.offset)) {
-                    if let (Some(x), Some(y)) = (read_f32_le(p_buf, p_off), read_f32_le(p_buf, p_off + 4)) {
-                        let z = if pos_attr.format >= 30 {
-                            read_f32_le(p_buf, p_off + 8).unwrap_or(0.0)
-                        } else {
-                            0.0
-                        };
-                        sample_verts.push((x, y, z));
-                        if sample_verts.len() >= 4 {
-                            break;
+        let mut sample_verts: Vec<(f32, f32, f32)> = Vec::new();
+        let p_stride = stride_for(pos_attr.buffer_idx);
+        if let Some(&p_buf) = vb_data.get(&pos_attr.buffer_idx) {
+            let mut seen_idx = Vec::new();
+            for &vi in indices {
+                if !seen_idx.contains(&vi) {
+                    seen_idx.push(vi);
+                    if let Some(p_off) = (vi as usize).checked_mul(p_stride).and_then(|o| o.checked_add(pos_attr.offset)) {
+                        if let (Some(x), Some(y)) = (read_f32_le(p_buf, p_off), read_f32_le(p_buf, p_off + 4)) {
+                            let z = if pos_attr.format >= 30 {
+                                read_f32_le(p_buf, p_off + 8).unwrap_or(0.0)
+                            } else {
+                                0.0
+                            };
+                            sample_verts.push((x, y, z));
+                            if sample_verts.len() >= 4 {
+                                break;
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    let (tw_hint, th_hint) = textures()
-        .lock()
-        .unwrap()
-        .get(&st.color_tex)
-        .map(|t| (t.width, t.height))
-        .unwrap_or((0, 0));
-    let active_mvp = resolve_draw_transform(&vb_data, pos_attr.buffer_idx, &sample_verts, tw_hint, th_hint);
+        let active_mvp = resolve_draw_transform(&vb_data, pos_attr.buffer_idx, &sample_verts, tw_hint, th_hint);
 
-    let frag_tex_id = st.fragment_textures.get(&0).copied().unwrap_or(0);
-    let frag_snap = if frag_tex_id != 0 {
-        textures()
-            .lock()
-            .unwrap()
-            .get(&frag_tex_id)
-            .map(|t| (t.width, t.height, t.pixel_format, t.pixels.clone()))
-    } else {
-        None
-    };
-
-    if metal_trace_enabled() && MTL_TRACE_COUNT.fetch_add(1, Ordering::Relaxed) < 12 {
-        let (fw, fh, fpf, fnz, tex_mid, tex_a_nz) = if let Some(ref ftex) = frag_snap {
-            let (w, h, pf, ref p) = *ftex;
-            let nz = p.chunks_exact(4).take(4096).filter(|c| c != &[0, 0, 0, 0]).count();
-            let mid = sample_tex_rgba(ftex, 0.5, 0.5);
-            let mut a_nz = 0usize;
-            for gy in 0..16 {
-                for gx in 0..16 {
-                    let s = sample_tex_rgba(ftex, (gx as f32 + 0.5) / 16.0, (gy as f32 + 0.5) / 16.0);
-                    if s[3] > 0.01 {
-                        a_nz += 1;
+        if metal_trace_enabled() && MTL_TRACE_COUNT.fetch_add(1, Ordering::Relaxed) < 12 {
+            let (fw, fh, fpf, fnz, tex_mid, tex_a_nz) = if let Some(ref ftex) = frag_snap {
+                let (w, h, pf, ref p) = *ftex;
+                let nz = p.chunks_exact(4).take(4096).filter(|c| c != &[0, 0, 0, 0]).count();
+                let mid = sample_tex_rgba(ftex, 0.5, 0.5);
+                let mut a_nz = 0usize;
+                for gy in 0..16 {
+                    for gx in 0..16 {
+                        let s = sample_tex_rgba(ftex, (gx as f32 + 0.5) / 16.0, (gy as f32 + 0.5) / 16.0);
+                        if s[3] > 0.01 {
+                            a_nz += 1;
+                        }
                     }
                 }
+                (w, h, pf, nz, mid, a_nz)
+            } else {
+                (0, 0, 0, 0, [0.0; 4], 0)
+            };
+            let i0 = indices[0] as usize;
+            let v0_uv = if let Some(ref ua) = uv_attr {
+                let us = stride_for(ua.buffer_idx);
+                let ub = vb_data.get(&ua.buffer_idx).copied();
+                let uoff = i0.checked_mul(us).and_then(|o| o.checked_add(ua.offset));
+                match (ub, uoff) {
+                    (Some(b), Some(o)) => read_uv_pair(ua.format, b, o),
+                    _ => (0.0, 0.0),
+                }
+            } else {
+                (0.0, 0.0)
+            };
+            let v0_col = if let Some(ref ca) = col_attr {
+                let cs = stride_for(ca.buffer_idx);
+                let cb = vb_data.get(&ca.buffer_idx).copied();
+                let coff = i0.checked_mul(cs).and_then(|o| o.checked_add(ca.offset));
+                match (cb, coff) {
+                    (Some(b), Some(o)) if ca.format == 45 => b
+                        .get(o..o + 4)
+                        .map(|s| [s[0] as f32 / 255.0, s[1] as f32 / 255.0, s[2] as f32 / 255.0, s[3] as f32 / 255.0])
+                        .unwrap_or([1.0; 4]),
+                    (Some(b), Some(o)) if ca.format == 31 => [
+                        read_f32_le(b, o).unwrap_or(1.0),
+                        read_f32_le(b, o + 4).unwrap_or(1.0),
+                        read_f32_le(b, o + 8).unwrap_or(1.0),
+                        read_f32_le(b, o + 12).unwrap_or(1.0),
+                    ],
+                    _ => [1.0; 4],
+                }
+            } else {
+                [1.0; 4]
+            };
+            let mut s_min_x = f32::INFINITY;
+            let mut s_max_x = f32::NEG_INFINITY;
+            let mut s_min_y = f32::INFINITY;
+            let mut s_max_y = f32::NEG_INFINITY;
+            for &(vx, vy, vz) in &sample_verts {
+                let (nx, ny) = active_mvp
+                    .and_then(|m| apply_mvp_to_ndc(&m, vx, vy, vz))
+                    .unwrap_or((vx, vy));
+                let sx = (vp_early.origin_x + (nx as f64 * 0.5 + 0.5) * vp_early.width) as f32;
+                let sy = (vp_early.origin_y + (0.5 - ny as f64 * 0.5) * vp_early.height) as f32;
+                s_min_x = s_min_x.min(sx);
+                s_max_x = s_max_x.max(sx);
+                s_min_y = s_min_y.min(sy);
+                s_max_y = s_max_y.max(sy);
             }
-            (w, h, pf, nz, mid, a_nz)
-        } else {
-            (0, 0, 0, 0, [0.0; 4], 0)
-        };
-        let i0 = indices[0] as usize;
-        let v0_uv = if let Some(ref ua) = uv_attr {
-            let us = stride_for(ua.buffer_idx);
-            let ub = vb_data.get(&ua.buffer_idx);
-            let uoff = i0.checked_mul(us).and_then(|o| o.checked_add(ua.offset));
-            match (ub, uoff) {
-                (Some(b), Some(o)) => read_uv_pair(ua.format, b, o),
-                _ => (0.0, 0.0),
-            }
-        } else {
-            (0.0, 0.0)
-        };
-        let v0_col = if let Some(ref ca) = col_attr {
-            let cs = stride_for(ca.buffer_idx);
-            let cb = vb_data.get(&ca.buffer_idx);
-            let coff = i0.checked_mul(cs).and_then(|o| o.checked_add(ca.offset));
-            match (cb, coff) {
-                (Some(b), Some(o)) if ca.format == 45 => b
-                    .get(o..o + 4)
-                    .map(|s| [s[0] as f32 / 255.0, s[1] as f32 / 255.0, s[2] as f32 / 255.0, s[3] as f32 / 255.0])
-                    .unwrap_or([1.0; 4]),
-                (Some(b), Some(o)) if ca.format == 31 => [
-                    read_f32_le(b, o).unwrap_or(1.0),
-                    read_f32_le(b, o + 4).unwrap_or(1.0),
-                    read_f32_le(b, o + 8).unwrap_or(1.0),
-                    read_f32_le(b, o + 12).unwrap_or(1.0),
-                ],
-                _ => [1.0; 4],
-            }
-        } else {
-            [1.0; 4]
-        };
-        let vp_dbg = st.viewport.unwrap_or(MTLViewport {
-            origin_x: 0.0,
-            origin_y: 0.0,
-            width: tw_hint as f64,
-            height: th_hint as f64,
-            znear: 0.0,
-            zfar: 1.0,
-        });
-        let mut s_min_x = f32::INFINITY;
-        let mut s_max_x = f32::NEG_INFINITY;
-        let mut s_min_y = f32::INFINITY;
-        let mut s_max_y = f32::NEG_INFINITY;
-        for &(vx, vy, vz) in &sample_verts {
-            let (nx, ny) = active_mvp
-                .and_then(|m| apply_mvp_to_ndc(&m, vx, vy, vz))
-                .unwrap_or((vx, vy));
-            let sx = (vp_dbg.origin_x + (nx as f64 * 0.5 + 0.5) * vp_dbg.width) as f32;
-            let sy = (vp_dbg.origin_y + (0.5 - ny as f64 * 0.5) * vp_dbg.height) as f32;
-            s_min_x = s_min_x.min(sx);
-            s_max_x = s_max_x.max(sx);
-            s_min_y = s_min_y.min(sy);
-            s_max_y = s_max_y.max(sy);
+            let mut vb_lens: Vec<(usize, usize)> =
+                vb_data.iter().map(|(&k, v)| (k, v.len())).collect();
+            vb_lens.sort_by_key(|&(k, _)| k);
+            let fmt_attr = |a: Option<&VertexAttrInfo>| -> String {
+                match a {
+                    Some(x) => format!("({},{},{})", x.format, x.offset, x.buffer_idx),
+                    None => "none".to_string(),
+                }
+            };
+            let all_attrs: Vec<(usize, usize, usize)> = pso
+                .attrs
+                .iter()
+                .map(|a| (a.format, a.offset, a.buffer_idx))
+                .collect();
+            eprintln!(
+                "[PearRuntime][metal][draw] tex={:#x} ptype={} indices={} frag=({},{},{},{}) tex_mid=({:.2},{:.2},{:.2},{:.2}) tex_a_nz={}/256 blend={} mvp={} vb_lens={:?} bbox=({:.1},{:.1})..({:.1},{:.1}) v0_uv=({:.3},{:.3}) v0_col=({:.2},{:.2},{:.2},{:.2}) attrs=[pos={},uv={},col={}] all_attrs={:?}",
+                st.color_tex, ptype, indices.len(), fw, fh, fpf, fnz,
+                tex_mid[0], tex_mid[1], tex_mid[2], tex_mid[3], tex_a_nz,
+                pso.blend_enabled, active_mvp.is_some(), vb_lens,
+                s_min_x, s_min_y, s_max_x, s_max_y,
+                v0_uv.0, v0_uv.1, v0_col[0], v0_col[1], v0_col[2], v0_col[3],
+                fmt_attr(Some(&pos_attr)), fmt_attr(uv_attr.as_ref()), fmt_attr(col_attr.as_ref()),
+                all_attrs,
+            );
         }
-        let mut vb_lens: Vec<(usize, usize)> =
-            vb_data.iter().map(|(&k, v)| (k, v.len())).collect();
-        vb_lens.sort_by_key(|&(k, _)| k);
-        let fmt_attr = |a: Option<&VertexAttrInfo>| -> String {
-            match a {
-                Some(x) => format!("({},{},{})", x.format, x.offset, x.buffer_idx),
-                None => "none".to_string(),
-            }
+
+        let load_vtx = |vi: u32| -> Option<Vtx> {
+            let p_buf = vb_data.get(&pos_attr.buffer_idx).copied()?;
+            let p_off = (vi as usize).checked_mul(p_stride)?.checked_add(pos_attr.offset)?;
+            let x = read_f32_le(p_buf, p_off)?;
+            let y = read_f32_le(p_buf, p_off + 4)?;
+            let (nx_f, ny_f) = if let Some(ref m) = active_mvp {
+                let z = if pos_attr.format >= 30 {
+                    read_f32_le(p_buf, p_off + 8).unwrap_or(0.0)
+                } else {
+                    0.0
+                };
+                apply_mvp_to_ndc(m, x, y, z).unwrap_or((x, y))
+            } else {
+                let w = if pos_attr.format == 31 {
+                    read_f32_le(p_buf, p_off + 12).unwrap_or(1.0)
+                } else {
+                    1.0
+                };
+                let inv_w = if w.abs() > 1e-6 { 1.0 / w } else { 1.0 };
+                (x * inv_w, y * inv_w)
+            };
+            let nx = nx_f as f64;
+            let ny = ny_f as f64;
+            let sx = (vp_early.origin_x + (nx * 0.5 + 0.5) * vp_early.width) as f32;
+            let sy = (vp_early.origin_y + (0.5 - ny * 0.5) * vp_early.height) as f32;
+
+            let (u, v) = if let Some(ref ua) = uv_attr {
+                let us = stride_for(ua.buffer_idx);
+                let ub = vb_data.get(&ua.buffer_idx).copied();
+                let uoff = (vi as usize).checked_mul(us).and_then(|o| o.checked_add(ua.offset));
+                match (ub, uoff) {
+                    (Some(b), Some(o)) => read_uv_pair(ua.format, b, o),
+                    _ => (0.0, 0.0),
+                }
+            } else {
+                (0.0, 0.0)
+            };
+
+            let col = if let Some(ref ca) = col_attr {
+                let cs = stride_for(ca.buffer_idx);
+                let cb = vb_data.get(&ca.buffer_idx).copied();
+                let coff = (vi as usize).checked_mul(cs).and_then(|o| o.checked_add(ca.offset));
+                match (cb, coff) {
+                    (Some(b), Some(o)) if ca.format == 45 => b
+                        .get(o..o + 4)
+                        .map(|s| [s[0] as f32 / 255.0, s[1] as f32 / 255.0, s[2] as f32 / 255.0, s[3] as f32 / 255.0])
+                        .unwrap_or([1.0, 1.0, 1.0, 1.0]),
+                    (Some(b), Some(o)) if ca.format == 31 => [
+                        read_f32_le(b, o).unwrap_or(1.0),
+                        read_f32_le(b, o + 4).unwrap_or(1.0),
+                        read_f32_le(b, o + 8).unwrap_or(1.0),
+                        read_f32_le(b, o + 12).unwrap_or(1.0),
+                    ],
+                    _ => [1.0, 1.0, 1.0, 1.0],
+                }
+            } else {
+                [1.0, 1.0, 1.0, 1.0]
+            };
+
+            Some(Vtx { sx, sy, u, v, col })
         };
-        let all_attrs: Vec<(usize, usize, usize)> = pso
-            .attrs
-            .iter()
-            .map(|a| (a.format, a.offset, a.buffer_idx))
-            .collect();
-        eprintln!(
-            "[PearRuntime][metal][draw] tex={:#x} ptype={} indices={} frag=({},{},{},{}) tex_mid=({:.2},{:.2},{:.2},{:.2}) tex_a_nz={}/256 blend={} mvp={} vb_lens={:?} bbox=({:.1},{:.1})..({:.1},{:.1}) v0_uv=({:.3},{:.3}) v0_col=({:.2},{:.2},{:.2},{:.2}) attrs=[pos={},uv={},col={}] all_attrs={:?}",
-            st.color_tex,
-            ptype,
-            indices.len(),
-            fw,
-            fh,
-            fpf,
-            fnz,
-            tex_mid[0],
-            tex_mid[1],
-            tex_mid[2],
-            tex_mid[3],
-            tex_a_nz,
-            pso.blend_enabled,
-            active_mvp.is_some(),
-            vb_lens,
-            s_min_x,
-            s_min_y,
-            s_max_x,
-            s_max_y,
-            v0_uv.0,
-            v0_uv.1,
-            v0_col[0],
-            v0_col[1],
-            v0_col[2],
-            v0_col[3],
-            fmt_attr(Some(&pos_attr)),
-            fmt_attr(uv_attr.as_ref()),
-            fmt_attr(col_attr.as_ref()),
-            all_attrs,
-        );
+
+        let tri_count = if ptype == 3 {
+            (indices.len() / 3).min(4096)
+        } else {
+            indices.len().saturating_sub(2).min(4096)
+        };
+        let mut out_tris = Vec::with_capacity(tri_count);
+        for t_idx in 0..tri_count {
+            let (i0, i1, i2) = if ptype == 3 {
+                (indices[t_idx * 3], indices[t_idx * 3 + 1], indices[t_idx * 3 + 2])
+            } else if t_idx % 2 == 0 {
+                (indices[t_idx], indices[t_idx + 1], indices[t_idx + 2])
+            } else {
+                (indices[t_idx], indices[t_idx + 2], indices[t_idx + 1])
+            };
+            if let (Some(v0), Some(v1), Some(v2)) = (load_vtx(i0), load_vtx(i1), load_vtx(i2)) {
+                let area = (v1.sx - v0.sx) * (v2.sy - v0.sy) - (v1.sy - v0.sy) * (v2.sx - v0.sx);
+                if area.abs() >= 1e-4 {
+                    out_tris.push([v0, v1, v2]);
+                }
+            }
+        }
+        out_tris
+    };
+    if tris.is_empty() {
+        return;
     }
+
+    let tex_uniform: Option<[f32; 4]> = match frag_snap {
+        None => Some([1.0, 1.0, 1.0, 1.0]),
+        Some(ref ftex) if ftex.0 > 0 && ftex.1 > 0 && ftex.0 <= 4 && ftex.1 <= 4 => {
+            let first = sample_tex_rgba(ftex, 0.0, 0.0);
+            let px_count = ftex.0 * ftex.1;
+            let is_r8 = ftex.2 == 10 || ftex.2 == 11 || ftex.2 == 12;
+            let all_eq = if is_r8 {
+                ftex.3.get(..px_count).map_or(false, |s| s.iter().all(|&b| b == s[0]))
+            } else {
+                ftex.3
+                    .get(..px_count * 4)
+                    .map_or(false, |s| s.chunks_exact(4).all(|c| c == &s[..4]))
+            };
+            if all_eq { Some(first) } else { None }
+        }
+        _ => None,
+    };
 
     let mut tg = textures().lock().unwrap();
     let Some(target) = tg.get_mut(&st.color_tex) else {
@@ -1878,114 +1990,10 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
         return;
     }
     let target_is_bgra = target.pixel_format == 80 || target.pixel_format == 81;
-    let vp = st.viewport.unwrap_or(MTLViewport {
-        origin_x: 0.0,
-        origin_y: 0.0,
-        width: tw as f64,
-        height: th as f64,
-        znear: 0.0,
-        zfar: 1.0,
-    });
+    let dst_pixels = Arc::make_mut(&mut target.pixels);
 
-    #[derive(Copy, Clone)]
-    struct Vtx {
-        sx: f32,
-        sy: f32,
-        u: f32,
-        v: f32,
-        col: [f32; 4],
-    }
-
-    let load_vtx = |vi: u32| -> Option<Vtx> {
-        let p_stride = stride_for(pos_attr.buffer_idx);
-        let p_buf = vb_data.get(&pos_attr.buffer_idx)?;
-        let p_off = (vi as usize).checked_mul(p_stride)?.checked_add(pos_attr.offset)?;
-        let x = read_f32_le(p_buf, p_off)?;
-        let y = read_f32_le(p_buf, p_off + 4)?;
-        let (nx_f, ny_f) = if let Some(ref m) = active_mvp {
-            let z = if pos_attr.format >= 30 {
-                read_f32_le(p_buf, p_off + 8).unwrap_or(0.0)
-            } else {
-                0.0
-            };
-            apply_mvp_to_ndc(m, x, y, z).unwrap_or((x, y))
-        } else {
-            let w = if pos_attr.format == 31 {
-                read_f32_le(p_buf, p_off + 12).unwrap_or(1.0)
-            } else {
-                1.0
-            };
-            let inv_w = if w.abs() > 1e-6 { 1.0 / w } else { 1.0 };
-            (x * inv_w, y * inv_w)
-        };
-        let nx = nx_f as f64;
-        let ny = ny_f as f64;
-        let sx = (vp.origin_x + (nx * 0.5 + 0.5) * vp.width) as f32;
-        let sy = (vp.origin_y + (0.5 - ny * 0.5) * vp.height) as f32;
-
-        let (u, v) = if let Some(ref ua) = uv_attr {
-            let us = stride_for(ua.buffer_idx);
-            let ub = vb_data.get(&ua.buffer_idx);
-            let uoff = (vi as usize).checked_mul(us).and_then(|o| o.checked_add(ua.offset));
-            match (ub, uoff) {
-                (Some(b), Some(o)) => read_uv_pair(ua.format, b, o),
-                _ => (0.0, 0.0),
-            }
-        } else {
-            (0.0, 0.0)
-        };
-
-        let col = if let Some(ref ca) = col_attr {
-            let cs = stride_for(ca.buffer_idx);
-            let cb = vb_data.get(&ca.buffer_idx);
-            let coff = (vi as usize).checked_mul(cs).and_then(|o| o.checked_add(ca.offset));
-            match (cb, coff) {
-                (Some(b), Some(o)) if ca.format == 45 => b
-                    .get(o..o + 4)
-                    .map(|s| {
-                        [
-                            s[0] as f32 / 255.0,
-                            s[1] as f32 / 255.0,
-                            s[2] as f32 / 255.0,
-                            s[3] as f32 / 255.0,
-                        ]
-                    })
-                    .unwrap_or([1.0, 1.0, 1.0, 1.0]),
-                (Some(b), Some(o)) if ca.format == 31 => [
-                    read_f32_le(b, o).unwrap_or(1.0),
-                    read_f32_le(b, o + 4).unwrap_or(1.0),
-                    read_f32_le(b, o + 8).unwrap_or(1.0),
-                    read_f32_le(b, o + 12).unwrap_or(1.0),
-                ],
-                _ => [1.0, 1.0, 1.0, 1.0],
-            }
-        } else {
-            [1.0, 1.0, 1.0, 1.0]
-        };
-
-        Some(Vtx { sx, sy, u, v, col })
-    };
-
-    let tri_count = if ptype == 3 {
-        (indices.len() / 3).min(4096)
-    } else {
-        indices.len().saturating_sub(2).min(4096)
-    };
-    for t_idx in 0..tri_count {
-        let (i0, i1, i2) = if ptype == 3 {
-            (indices[t_idx * 3], indices[t_idx * 3 + 1], indices[t_idx * 3 + 2])
-        } else if t_idx % 2 == 0 {
-            (indices[t_idx], indices[t_idx + 1], indices[t_idx + 2])
-        } else {
-            (indices[t_idx], indices[t_idx + 2], indices[t_idx + 1])
-        };
-        let (Some(v0), Some(v1), Some(v2)) = (load_vtx(i0), load_vtx(i1), load_vtx(i2)) else {
-            continue;
-        };
+    for [v0, v1, v2] in tris {
         let area = (v1.sx - v0.sx) * (v2.sy - v0.sy) - (v1.sy - v0.sy) * (v2.sx - v0.sx);
-        if area.abs() < 1e-4 {
-            continue;
-        }
         let inv_area = 1.0 / area;
         let min_x = v0.sx.min(v1.sx).min(v2.sx).floor().max(0.0) as isize;
         let max_x = v0.sx.max(v1.sx).max(v2.sx).ceil().min((tw - 1) as f32) as isize;
@@ -1995,57 +2003,130 @@ fn rasterize_draw(enc_id: usize, ptype: usize, indices: &[u32]) {
             continue;
         }
 
-        for py in min_y..=max_y {
-            let cy = py as f32 + 0.5;
-            for px in min_x..=max_x {
-                let cx = px as f32 + 0.5;
-                let w0 = ((v2.sx - v1.sx) * (cy - v1.sy) - (v2.sy - v1.sy) * (cx - v1.sx)) * inv_area;
-                let w1 = ((v0.sx - v2.sx) * (cy - v2.sy) - (v0.sy - v2.sy) * (cx - v2.sx)) * inv_area;
-                let w2 = 1.0 - w0 - w1;
-                if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+        let dw0_dx = -(v2.sy - v1.sy) * inv_area;
+        let dw0_dy = (v2.sx - v1.sx) * inv_area;
+        let dw1_dx = -(v0.sy - v2.sy) * inv_area;
+        let dw1_dy = (v0.sx - v2.sx) * inv_area;
+        let start_cx = min_x as f32 + 0.5;
+        let start_cy = min_y as f32 + 0.5;
+        let mut w0_row =
+            ((v2.sx - v1.sx) * (start_cy - v1.sy) - (v2.sy - v1.sy) * (start_cx - v1.sx)) * inv_area;
+        let mut w1_row =
+            ((v0.sx - v2.sx) * (start_cy - v2.sy) - (v0.sy - v2.sy) * (start_cx - v2.sx)) * inv_area;
+
+        let uniform_col = v0.col == v1.col && v1.col == v2.col;
+        if uniform_col {
+            if let Some(tc) = tex_uniform {
+                let sr = ((tc[0] * v0.col[0]).clamp(0.0, 1.0) * 255.0).round() as u32;
+                let sg = ((tc[1] * v0.col[1]).clamp(0.0, 1.0) * 255.0).round() as u32;
+                let sb = ((tc[2] * v0.col[2]).clamp(0.0, 1.0) * 255.0).round() as u32;
+                let sa = ((tc[3] * v0.col[3]).clamp(0.0, 1.0) * 255.0).round() as u32;
+                if pso.blend_enabled && sa == 0 {
                     continue;
                 }
-                let tu = v0.u * w0 + v1.u * w1 + v2.u * w2;
-                let tv = v0.v * w0 + v1.v * w1 + v2.v * w2;
-                let mut src = if let Some(ref ftex) = frag_snap {
-                    sample_tex_rgba(ftex, tu, tv)
+                let solid_px = if target_is_bgra {
+                    [sb as u8, sg as u8, sr as u8, sa as u8]
                 } else {
-                    [1.0, 1.0, 1.0, 1.0]
+                    [sr as u8, sg as u8, sb as u8, sa as u8]
                 };
-                for c in 0..4 {
-                    src[c] *= (v0.col[c] * w0 + v1.col[c] * w1 + v2.col[c] * w2).clamp(0.0, 1.0);
-                }
-                let off = ((py as usize) * tw + (px as usize)) * 4;
-                if pso.blend_enabled {
-                    let a = src[3].clamp(0.0, 1.0);
-                    let inv_a = 1.0 - a;
-                    let dst = &mut target.pixels[off..off + 4];
-                    let (dr, dg, db) = if target_is_bgra {
-                        (dst[2] as f32 / 255.0, dst[1] as f32 / 255.0, dst[0] as f32 / 255.0)
-                    } else {
-                        (dst[0] as f32 / 255.0, dst[1] as f32 / 255.0, dst[2] as f32 / 255.0)
-                    };
-                    let r = ((src[0] * a + dr * inv_a).clamp(0.0, 1.0) * 255.0).round() as u8;
-                    let g = ((src[1] * a + dg * inv_a).clamp(0.0, 1.0) * 255.0).round() as u8;
-                    let b = ((src[2] * a + db * inv_a).clamp(0.0, 1.0) * 255.0).round() as u8;
-                    let oa = ((a + (dst[3] as f32 / 255.0) * inv_a).clamp(0.0, 1.0) * 255.0).round() as u8;
-                    if target_is_bgra {
-                        dst.copy_from_slice(&[b, g, r, oa]);
-                    } else {
-                        dst.copy_from_slice(&[r, g, b, oa]);
+                let do_blend = pso.blend_enabled && sa < 255;
+                let inv_a = 255 - sa;
+                for py in min_y..=max_y {
+                    let mut w0 = w0_row;
+                    let mut w1 = w1_row;
+                    let row_off = (py as usize) * tw;
+                    for px in min_x..=max_x {
+                        let w2 = 1.0 - w0 - w1;
+                        if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
+                            let off = (row_off + (px as usize)) * 4;
+                            let dst = &mut dst_pixels[off..off + 4];
+                            if !do_blend {
+                                dst.copy_from_slice(&solid_px);
+                            } else {
+                                let (dr, dg, db) = if target_is_bgra {
+                                    (dst[2] as u32, dst[1] as u32, dst[0] as u32)
+                                } else {
+                                    (dst[0] as u32, dst[1] as u32, dst[2] as u32)
+                                };
+                                let r = ((sr * sa + dr * inv_a + 127) / 255) as u8;
+                                let g = ((sg * sa + dg * inv_a + 127) / 255) as u8;
+                                let b = ((sb * sa + db * inv_a + 127) / 255) as u8;
+                                let oa = ((sa * 255 + (dst[3] as u32) * inv_a + 127) / 255).min(255) as u8;
+                                if target_is_bgra {
+                                    dst.copy_from_slice(&[b, g, r, oa]);
+                                } else {
+                                    dst.copy_from_slice(&[r, g, b, oa]);
+                                }
+                            }
+                        }
+                        w0 += dw0_dx;
+                        w1 += dw1_dx;
                     }
-                } else {
-                    let r = (src[0].clamp(0.0, 1.0) * 255.0).round() as u8;
-                    let g = (src[1].clamp(0.0, 1.0) * 255.0).round() as u8;
-                    let b = (src[2].clamp(0.0, 1.0) * 255.0).round() as u8;
-                    let a = (src[3].clamp(0.0, 1.0) * 255.0).round() as u8;
-                    if target_is_bgra {
-                        target.pixels[off..off + 4].copy_from_slice(&[b, g, r, a]);
-                    } else {
-                        target.pixels[off..off + 4].copy_from_slice(&[r, g, b, a]);
-                    }
+                    w0_row += dw0_dy;
+                    w1_row += dw1_dy;
                 }
+                continue;
             }
+        }
+
+        for py in min_y..=max_y {
+            let mut w0 = w0_row;
+            let mut w1 = w1_row;
+            let row_off = (py as usize) * tw;
+            for px in min_x..=max_x {
+                let w2 = 1.0 - w0 - w1;
+                if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
+                    let tu = v0.u * w0 + v1.u * w1 + v2.u * w2;
+                    let tv = v0.v * w0 + v1.v * w1 + v2.v * w2;
+                    let mut src = if let Some(ref ftex) = frag_snap {
+                        sample_tex_rgba(ftex, tu, tv)
+                    } else {
+                        [1.0, 1.0, 1.0, 1.0]
+                    };
+                    if uniform_col {
+                        for c in 0..4 {
+                            src[c] *= v0.col[c];
+                        }
+                    } else {
+                        for c in 0..4 {
+                            src[c] *= (v0.col[c] * w0 + v1.col[c] * w1 + v2.col[c] * w2).clamp(0.0, 1.0);
+                        }
+                    }
+                    let sa = (src[3].clamp(0.0, 1.0) * 255.0).round() as u32;
+                    if !(pso.blend_enabled && sa == 0) {
+                        let sr = (src[0].clamp(0.0, 1.0) * 255.0).round() as u32;
+                        let sg = (src[1].clamp(0.0, 1.0) * 255.0).round() as u32;
+                        let sb = (src[2].clamp(0.0, 1.0) * 255.0).round() as u32;
+                        let off = (row_off + (px as usize)) * 4;
+                        let dst = &mut dst_pixels[off..off + 4];
+                        if pso.blend_enabled && sa < 255 {
+                            let inv_a = 255 - sa;
+                            let (dr, dg, db) = if target_is_bgra {
+                                (dst[2] as u32, dst[1] as u32, dst[0] as u32)
+                            } else {
+                                (dst[0] as u32, dst[1] as u32, dst[2] as u32)
+                            };
+                            let r = ((sr * sa + dr * inv_a + 127) / 255) as u8;
+                            let g = ((sg * sa + dg * inv_a + 127) / 255) as u8;
+                            let b = ((sb * sa + db * inv_a + 127) / 255) as u8;
+                            let oa = ((sa * 255 + (dst[3] as u32) * inv_a + 127) / 255).min(255) as u8;
+                            if target_is_bgra {
+                                dst.copy_from_slice(&[b, g, r, oa]);
+                            } else {
+                                dst.copy_from_slice(&[r, g, b, oa]);
+                            }
+                        } else if target_is_bgra {
+                            dst.copy_from_slice(&[sb as u8, sg as u8, sr as u8, sa as u8]);
+                        } else {
+                            dst.copy_from_slice(&[sr as u8, sg as u8, sb as u8, sa as u8]);
+                        }
+                    }
+                }
+                w0 += dw0_dx;
+                w1 += dw1_dx;
+            }
+            w0_row += dw0_dy;
+            w1_row += dw1_dy;
         }
     }
 }
@@ -2216,7 +2297,7 @@ extern "C" fn blit_copy_texture(
     let src_snap = {
         let g = textures().lock().unwrap();
         g.get(&(src_tex as usize))
-            .map(|t| (t.width, t.height, t.pixels.clone()))
+            .map(|t| (t.width, t.height, Arc::clone(&t.pixels)))
     };
     let Some((sw, sh, spixels)) = src_snap else {
         return;
@@ -2234,12 +2315,14 @@ extern "C" fn blit_copy_texture(
         .min(sh.saturating_sub(src_origin.y))
         .min(dst.height.saturating_sub(dst_origin.y));
     let copy_bytes = cols * 4;
+    let dst_w = dst.width;
+    let dst_pixels = Arc::make_mut(&mut dst.pixels);
     for r in 0..rows {
         let s_off = ((src_origin.y + r) * sw + src_origin.x) * 4;
-        let d_off = ((dst_origin.y + r) * dst.width + dst_origin.x) * 4;
+        let d_off = ((dst_origin.y + r) * dst_w + dst_origin.x) * 4;
         if let (Some(src_row), Some(dst_row)) = (
             spixels.get(s_off..s_off + copy_bytes),
-            dst.pixels.get_mut(d_off..d_off + copy_bytes),
+            dst_pixels.get_mut(d_off..d_off + copy_bytes),
         ) {
             dst_row.copy_from_slice(src_row);
         }
@@ -2311,7 +2394,7 @@ extern "C" fn blit_copy_texture_to_buffer(
     let src_snap = {
         let g = textures().lock().unwrap();
         g.get(&(src_tex as usize))
-            .map(|t| (t.width, t.height, t.pixels.clone()))
+            .map(|t| (t.width, t.height, Arc::clone(&t.pixels)))
     };
     let Some((sw, sh, spixels)) = src_snap else {
         return;
@@ -2460,7 +2543,7 @@ extern "C" fn desc_copy_with_zone(this: Id, _cmd: Sel, _zone: *mut c_void) -> Id
             .collect();
         for (k, v) in cloned {
             if v != 0 {
-                unsafe { pear_libobjc::object::retain(v as Id) };
+                pear_libobjc::object::retain(v as Id);
             }
             g.insert((dst, k), v);
         }

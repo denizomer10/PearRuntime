@@ -942,4 +942,149 @@ mod tests {
             assert_eq!(send0::<usize>(td, "width"), 64);
         }
     }
+
+    #[test]
+    fn phase5_14_zero_copy_cow_and_incremental_rasterizer() {
+        let _present_guard = PRESENT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        init();
+        unsafe {
+            let dev = create_system_default_device();
+            let cq: Id = send0(dev, "newCommandQueue");
+
+            // Large 64 KB vertex MTLBuffer (drawn at offset 4096) to exercise borrowed slice path.
+            let mut big_vb = vec![0u8; 65536];
+            #[rustfmt::skip]
+            let quad_verts: [f32; 20] = [
+                -1.0, -1.0, 0.0,  0.0, 0.0,
+                 1.0, -1.0, 0.0,  1.0, 0.0,
+                 1.0,  1.0, 0.0,  1.0, 1.0,
+                -1.0,  1.0, 0.0,  0.0, 1.0,
+            ];
+            for (i, &f) in quad_verts.iter().enumerate() {
+                let off = 4096 + i * 4;
+                big_vb[off..off + 4].copy_from_slice(&f.to_le_bytes());
+            }
+            let vbuf: Id = send3(
+                dev,
+                "newBufferWithBytes:length:options:",
+                big_vb.as_ptr() as *const c_void,
+                big_vb.len(),
+                0usize,
+            );
+            let indices: [u16; 6] = [0, 1, 2, 0, 2, 3];
+            let ibuf: Id = send3(
+                dev,
+                "newBufferWithBytes:length:options:",
+                indices.as_ptr() as *const c_void,
+                indices.len() * 2,
+                0usize,
+            );
+
+            // 2x2 uniform texture [200, 100, 50, 128] blended over clear [0, 0, 0, 255]
+            let td_cls = objc_rt::class_named("MTLTextureDescriptor").unwrap() as Id;
+            let s_td = objc_rt::sel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
+            let d_td = lookup_for_send(td_cls, s_td);
+            let f_td: unsafe extern "C" fn(Id, Sel, usize, usize, usize, bool) -> Id =
+                std::mem::transmute(d_td.imp);
+            let tdesc = f_td(d_td.receiver, s_td, 70, 2, 2, false);
+            let ftex: Id = send1(dev, "newTextureWithDescriptor:", tdesc);
+            let tex_px: [u8; 16] = [
+                200, 100, 50, 128, 200, 100, 50, 128, 200, 100, 50, 128, 200, 100, 50, 128,
+            ];
+            let s_rr = objc_rt::sel("replaceRegion:mipmapLevel:withBytes:bytesPerRow:");
+            let d_rr = lookup_for_send(ftex, s_rr);
+            let f_rr: unsafe extern "C" fn(Id, Sel, MTLRegion, usize, *const u8, usize) =
+                std::mem::transmute(d_rr.imp);
+            let rgn2 = MTLRegion {
+                origin: MTLOrigin { x: 0, y: 0, z: 0 },
+                size: MTLSize { width: 2, height: 2, depth: 1 },
+            };
+            f_rr(d_rr.receiver, s_rr, rgn2, 0, tex_px.as_ptr(), 8);
+
+            let vdesc_cls = objc_rt::class_named("MTLVertexDescriptor").unwrap() as Id;
+            let vdesc: Id = send0(vdesc_cls, "vertexDescriptor");
+            let attrs: Id = send0(vdesc, "attributes");
+            let a0: Id = send1(attrs, "objectAtIndexedSubscript:", 0usize);
+            send1::<usize, ()>(a0, "setFormat:", 30);
+            send1::<usize, ()>(a0, "setOffset:", 0);
+            send1::<usize, ()>(a0, "setBufferIndex:", 1);
+            let a1: Id = send1(attrs, "objectAtIndexedSubscript:", 1usize);
+            send1::<usize, ()>(a1, "setFormat:", 29);
+            send1::<usize, ()>(a1, "setOffset:", 12);
+            send1::<usize, ()>(a1, "setBufferIndex:", 1);
+            let layouts: Id = send0(vdesc, "layouts");
+            let l1: Id = send1(layouts, "objectAtIndexedSubscript:", 1usize);
+            send1::<usize, ()>(l1, "setStride:", 20);
+
+            let pd_cls = objc_rt::class_named("MTLRenderPipelineDescriptor").unwrap() as Id;
+            let pdesc: Id = send0(send0(pd_cls, "alloc"), "init");
+            send1::<Id, ()>(pdesc, "setVertexDescriptor:", vdesc);
+            let p_catts: Id = send0(pdesc, "colorAttachments");
+            let p_ca0: Id = send1(p_catts, "objectAtIndexedSubscript:", 0usize);
+            send1::<usize, ()>(p_ca0, "setBlendingEnabled:", 1);
+            let mut err: Id = std::ptr::null_mut();
+            let pso: Id = send2(dev, "newRenderPipelineStateWithDescriptor:error:", pdesc, &mut err);
+
+            let layer_dummy = 0x5E14usize as Id;
+            let drawable = next_drawable_for_layer(layer_dummy, 8, 8, 70);
+            let dtex: Id = send0(drawable, "texture");
+            let pass_cls = objc_rt::class_named("MTLRenderPassDescriptor").unwrap() as Id;
+            let pass: Id = send0(pass_cls, "renderPassDescriptor");
+            let catts: Id = send0(pass, "colorAttachments");
+            let ca0: Id = send1(catts, "objectAtIndexedSubscript:", 0usize);
+            send1::<Id, ()>(ca0, "setTexture:", dtex);
+            send1::<usize, ()>(ca0, "setLoadAction:", 2);
+            let s_cc = objc_rt::sel("setClearColor:");
+            let d_cc = lookup_for_send(ca0, s_cc);
+            let f_cc: unsafe extern "C" fn(Id, Sel, MTLClearColor) = std::mem::transmute(d_cc.imp);
+            f_cc(
+                d_cc.receiver,
+                s_cc,
+                MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0 },
+            );
+
+            let cb: Id = send0(cq, "commandBuffer");
+            let renc: Id = send1(cb, "renderCommandEncoderWithDescriptor:", pass);
+            send1::<Id, ()>(renc, "setRenderPipelineState:", pso);
+            send3::<Id, usize, usize, ()>(renc, "setVertexBuffer:offset:atIndex:", vbuf, 4096usize, 1usize);
+            send2::<Id, usize, ()>(renc, "setFragmentTexture:atIndex:", ftex, 0usize);
+            send5::<usize, usize, usize, Id, usize, ()>(
+                renc,
+                "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:",
+                3usize,
+                6usize,
+                0usize,
+                ibuf,
+                0usize,
+            );
+            send0::<()>(renc, "endEncoding");
+            send1::<Id, ()>(cb, "presentDrawable:", drawable);
+            send0::<()>(cb, "commit");
+
+            // Check blended RGBA output: (200*128 + 0*127 + 127)/255 = 100, (100*128 + 127)/255 = 50, (50*128 + 127)/255 = 25
+            let mut out = [0u8; 8 * 8 * 4];
+            let s_gb = objc_rt::sel("getBytes:bytesPerRow:fromRegion:mipmapLevel:");
+            let d_gb = lookup_for_send(dtex, s_gb);
+            let f_gb: unsafe extern "C" fn(Id, Sel, *mut u8, usize, MTLRegion, usize) =
+                std::mem::transmute(d_gb.imp);
+            let rgn8 = MTLRegion {
+                origin: MTLOrigin { x: 0, y: 0, z: 0 },
+                size: MTLSize { width: 8, height: 8, depth: 1 },
+            };
+            f_gb(d_gb.receiver, s_gb, out.as_mut_ptr(), 32, rgn8, 0);
+            assert_eq!(&out[0..4], &[100, 50, 25, 255]);
+            let mid = (4 * 8 + 4) * 4;
+            assert_eq!(&out[mid..mid + 4], &[100, 50, 25, 255]);
+
+            // Verify Arc COW mutation on ftex works after draw
+            let new_px = [10u8; 16];
+            f_rr(d_rr.receiver, s_rr, rgn2, 0, new_px.as_ptr(), 8);
+            let mut rb_ftex = [0u8; 16];
+            let d_gb2 = lookup_for_send(ftex, s_gb);
+            let f_gb2: unsafe extern "C" fn(Id, Sel, *mut u8, usize, MTLRegion, usize) =
+                std::mem::transmute(d_gb2.imp);
+            f_gb2(d_gb2.receiver, s_gb, rb_ftex.as_mut_ptr(), 8, rgn2, 0);
+            assert_eq!(rb_ftex, new_px);
+        }
+    }
 }
