@@ -1087,4 +1087,87 @@ mod tests {
             assert_eq!(rb_ftex, new_px);
         }
     }
+
+    #[test]
+    fn phase5_15_texture_view_arc_ownership_and_sharing() {
+        #[repr(C)]
+        #[derive(Copy, Clone)]
+        struct TestRange {
+            location: usize,
+            length: usize,
+        }
+
+        let _g = PRESENT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        objc_metal::init();
+        unsafe {
+            let dev = objc_metal::create_system_default_device();
+            let td_cls = objc_rt::class_named("MTLTextureDescriptor").unwrap() as Id;
+            let s_td = objc_rt::sel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:");
+            let d_td = lookup_for_send(td_cls, s_td);
+            let f_td: unsafe extern "C" fn(Id, Sel, usize, usize, usize, bool) -> Id =
+                std::mem::transmute(d_td.imp);
+            let tdesc = f_td(d_td.receiver, s_td, 70, 4, 4, false);
+            let parent: Id = send1(dev, "newTextureWithDescriptor:", tdesc);
+            assert!(!parent.is_null());
+
+            let mut src_px = [0u8; 4 * 4 * 4];
+            for chunk in src_px.chunks_exact_mut(4) {
+                chunk.copy_from_slice(&[10, 20, 30, 40]);
+            }
+            let rgn4 = MTLRegion {
+                origin: MTLOrigin { x: 0, y: 0, z: 0 },
+                size: MTLSize { width: 4, height: 4, depth: 1 },
+            };
+            let s_rr = objc_rt::sel("replaceRegion:mipmapLevel:withBytes:bytesPerRow:");
+            let d_rr = lookup_for_send(parent, s_rr);
+            let f_rr: unsafe extern "C" fn(Id, Sel, MTLRegion, usize, *const u8, usize) =
+                std::mem::transmute(d_rr.imp);
+            f_rr(d_rr.receiver, s_rr, rgn4, 0, src_px.as_ptr(), 16);
+
+            let view: Id = send1(parent, "newTextureViewWithPixelFormat:", 71usize);
+            assert!(!view.is_null());
+            assert_ne!(view, parent);
+            assert_eq!(send0::<usize>(view, "pixelFormat"), 71);
+            assert_eq!(send0::<usize>(parent, "pixelFormat"), 70);
+            assert_eq!(send0::<Id>(view, "parentTexture"), parent);
+
+            let s_gb = objc_rt::sel("getBytes:bytesPerRow:fromRegion:mipmapLevel:");
+            let mut rb1 = [0u8; 4 * 4 * 4];
+            let d_gb1 = lookup_for_send(view, s_gb);
+            let f_gb1: unsafe extern "C" fn(Id, Sel, *mut u8, usize, MTLRegion, usize) =
+                std::mem::transmute(d_gb1.imp);
+            f_gb1(d_gb1.receiver, s_gb, rb1.as_mut_ptr(), 16, rgn4, 0);
+            assert_eq!(&rb1[0..4], &[10, 20, 30, 40]);
+            assert_eq!(rb1, src_px);
+
+            pear_libobjc::object::release(view);
+
+            let view2: Id = send1(parent, "newTextureViewWithPixelFormat:", 71usize);
+            assert!(!view2.is_null());
+            assert_ne!(view2, parent);
+            let mut rb2 = [0u8; 4 * 4 * 4];
+            let d_gb2 = lookup_for_send(view2, s_gb);
+            let f_gb2: unsafe extern "C" fn(Id, Sel, *mut u8, usize, MTLRegion, usize) =
+                std::mem::transmute(d_gb2.imp);
+            f_gb2(d_gb2.receiver, s_gb, rb2.as_mut_ptr(), 16, rgn4, 0);
+            assert_eq!(rb2, src_px);
+            pear_libobjc::object::release(view2);
+
+            let s_nvf = objc_rt::sel("newTextureViewWithPixelFormat:textureType:levels:slices:");
+            let d_nvf = lookup_for_send(parent, s_nvf);
+            let f_nvf: unsafe extern "C" fn(Id, Sel, usize, usize, TestRange, TestRange) -> Id =
+                std::mem::transmute(d_nvf.imp);
+            let rng = TestRange { location: 0, length: 1 };
+            let view3 = f_nvf(d_nvf.receiver, s_nvf, 72, 3, rng, rng);
+            assert!(!view3.is_null());
+            assert_ne!(view3, parent);
+            assert_eq!(send0::<usize>(view3, "pixelFormat"), 72);
+            assert_eq!(send0::<usize>(view3, "textureType"), 3);
+            assert_eq!(send0::<Id>(view3, "parentTexture"), parent);
+
+            pear_libobjc::object::release(view3);
+            pear_libobjc::object::release(parent);
+            pear_libobjc::object::release(dev);
+        }
+    }
 }

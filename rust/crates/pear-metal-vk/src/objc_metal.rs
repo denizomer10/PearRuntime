@@ -6,7 +6,9 @@ use crate::spirv;
 use crate::vk::VkContext;
 use pear_libobjc::abi::{ClassT, Id, Imp, Sel};
 use pear_libobjc::message::lookup_for_send;
-use pear_libobjc::object::{alloc, EMPTY_CACHE, NSOBJECT_CLASS, NSOBJECT_META, StaticClass};
+use pear_libobjc::object::{
+    alloc, dispose, release, retain, EMPTY_CACHE, NSOBJECT_CLASS, NSOBJECT_META, StaticClass,
+};
 use pear_libobjc::runtime as objc_rt;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
@@ -131,6 +133,7 @@ struct TextureState {
     mipmap_levels: usize,
     usage: usize,
     pixels: Arc<Vec<u8>>,
+    parent_tex: usize,
 }
 
 struct LibraryState {
@@ -484,7 +487,7 @@ extern "C" fn mtl_one(_this: Id, _cmd: Sel) -> usize { 1 }
 extern "C" fn mtl_zero(_this: Id, _cmd: Sel) -> usize { 0 }
 
 // ---- MTLDevice ----
-pub extern "C" fn create_system_default_device() -> Id {
+fn default_device_singleton() -> Id {
     init();
     *DEFAULT_DEVICE.get_or_init(|| {
         let _ = vk_context();
@@ -492,9 +495,19 @@ pub extern "C" fn create_system_default_device() -> Id {
     }) as Id
 }
 
+pub extern "C" fn create_system_default_device() -> Id {
+    let dev = default_device_singleton();
+    unsafe { retain(dev); }
+    dev
+}
+
 pub extern "C" fn copy_all_devices() -> Id {
-    let dev = create_system_default_device();
+    let dev = default_device_singleton();
     unsafe { make_nsarray(&[dev]) }
+}
+
+extern "C" fn cq_device(_this: Id, _cmd: Sel) -> Id {
+    default_device_singleton()
 }
 
 extern "C" fn dev_name(_this: Id, _cmd: Sel) -> Id {
@@ -593,6 +606,7 @@ fn create_texture_object(
         mipmap_levels,
         usage,
         pixels: Arc::new(vec![0u8; byte_len]),
+        parent_tex: 0,
     });
     obj
 }
@@ -861,8 +875,86 @@ extern "C" fn tex_mips(this: Id, _cmd: Sel) -> usize {
 extern "C" fn tex_usage(this: Id, _cmd: Sel) -> usize {
     textures().lock().unwrap().get(&(this as usize)).map(|t| t.usage).unwrap_or(1)
 }
-extern "C" fn tex_new_view(this: Id, _cmd: Sel, _pf: usize) -> Id {
-    this
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct MtlRange {
+    location: usize,
+    length: usize,
+}
+
+fn make_texture_view(this: Id, pf: usize, tex_type: Option<usize>) -> Id {
+    if this.is_null() {
+        return std::ptr::null_mut();
+    }
+    let state = {
+        let map = textures().lock().unwrap();
+        let Some(parent) = map.get(&(this as usize)) else {
+            return std::ptr::null_mut();
+        };
+        TextureState {
+            width: parent.width,
+            height: parent.height,
+            depth: parent.depth,
+            pixel_format: if pf != 0 { pf } else { parent.pixel_format },
+            texture_type: tex_type.unwrap_or(parent.texture_type),
+            mipmap_levels: parent.mipmap_levels,
+            usage: parent.usage,
+            pixels: Arc::clone(&parent.pixels),
+            parent_tex: this as usize,
+        }
+    };
+    unsafe { retain(this); }
+    let obj = unsafe { alloc(MTLTEXTURE_CLASS.ptr()) };
+    textures().lock().unwrap().insert(obj as usize, state);
+    obj
+}
+
+extern "C" fn tex_new_view(this: Id, _cmd: Sel, pf: usize) -> Id {
+    make_texture_view(this, pf, None)
+}
+
+extern "C" fn tex_new_view_full(
+    this: Id,
+    _cmd: Sel,
+    pf: usize,
+    tex_type: usize,
+    _levels: MtlRange,
+    _slices: MtlRange,
+) -> Id {
+    make_texture_view(this, pf, Some(tex_type))
+}
+
+extern "C" fn tex_new_view_swizzle(
+    this: Id,
+    _cmd: Sel,
+    pf: usize,
+    tex_type: usize,
+    _levels: MtlRange,
+    _slices: MtlRange,
+    _swizzle: u32,
+) -> Id {
+    make_texture_view(this, pf, Some(tex_type))
+}
+
+extern "C" fn tex_parent_texture(this: Id, _cmd: Sel) -> Id {
+    textures()
+        .lock()
+        .unwrap()
+        .get(&(this as usize))
+        .map(|t| t.parent_tex as Id)
+        .unwrap_or(std::ptr::null_mut())
+}
+
+extern "C" fn tex_dealloc(this: Id, _cmd: Sel) {
+    let parent_tex = {
+        let mut map = textures().lock().unwrap();
+        map.remove(&(this as usize)).map(|t| t.parent_tex).unwrap_or(0)
+    };
+    tex_clear_color().lock().unwrap().remove(&(this as usize));
+    if parent_tex != 0 {
+        unsafe { release(parent_tex as Id); }
+    }
+    unsafe { dispose(this); }
 }
 fn f16_to_f32(bits: u16) -> f32 {
     let sign = ((bits as u32) & 0x8000) << 16;
@@ -2692,7 +2784,7 @@ pub fn register_classes() {
             &[
                 ("commandBuffer", i(cq_command_buffer as *const ())),
                 ("commandBufferWithUnretainedReferences", i(cq_command_buffer as *const ())),
-                ("device", i(create_system_default_device as *const ())),
+                ("device", i(cq_device as *const ())),
                 ("label", i(prop_get_id as *const ())),
                 ("setLabel:", i(prop_set_id as *const ())),
             ],
@@ -2838,6 +2930,10 @@ pub fn register_classes() {
                 ("storageMode", i(mtl_zero as *const ())),
                 ("usage", i(tex_usage as *const ())),
                 ("newTextureViewWithPixelFormat:", i(tex_new_view as *const ())),
+                ("newTextureViewWithPixelFormat:textureType:levels:slices:", i(tex_new_view_full as *const ())),
+                ("newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:", i(tex_new_view_swizzle as *const ())),
+                ("parentTexture", i(tex_parent_texture as *const ())),
+                ("dealloc", i(tex_dealloc as *const ())),
                 ("replaceRegion:mipmapLevel:withBytes:bytesPerRow:", i(tex_replace_region as *const ())),
                 ("replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:", i(tex_replace_region_slice as *const ())),
                 ("getBytes:bytesPerRow:fromRegion:mipmapLevel:", i(tex_get_bytes as *const ())),
