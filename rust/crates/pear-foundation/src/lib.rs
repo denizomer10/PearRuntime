@@ -13,6 +13,7 @@ use std::ffi::{c_char, c_void, CStr, CString};
 use std::sync::{Mutex, Once, OnceLock};
 
 mod cf_ext;
+mod url_session;
 
 macro_rules! foundation_class {
     ($cls:ident, $meta:ident) => {
@@ -26,6 +27,22 @@ macro_rules! foundation_class {
         pub static $cls: StaticClass = StaticClass(UnsafeCell::new(ClassT {
             isa: &raw const $meta as *const ClassT,
             superclass: &raw const NSOBJECT_CLASS as *const ClassT,
+            cache: &raw const EMPTY_CACHE as *const c_void,
+            vtable: std::ptr::null(),
+            bits: 0,
+        }));
+    };
+    ($cls:ident, $meta:ident : $super_cls:ident, $super_meta:ident) => {
+        pub static $meta: StaticClass = StaticClass(UnsafeCell::new(ClassT {
+            isa: &raw const NSOBJECT_META as *const ClassT,
+            superclass: &raw const $super_meta as *const ClassT,
+            cache: &raw const EMPTY_CACHE as *const c_void,
+            vtable: std::ptr::null(),
+            bits: 0,
+        }));
+        pub static $cls: StaticClass = StaticClass(UnsafeCell::new(ClassT {
+            isa: &raw const $meta as *const ClassT,
+            superclass: &raw const $super_cls as *const ClassT,
             cache: &raw const EMPTY_CACHE as *const c_void,
             vtable: std::ptr::null(),
             bits: 0,
@@ -77,6 +94,12 @@ foundation_class!(NSOPERATIONQUEUE_CLASS, NSOPERATIONQUEUE_META);
 foundation_class!(NSKEYEDUNARCHIVER_CLASS, NSKEYEDUNARCHIVER_META);
 foundation_class!(NSASSERTIONHANDLER_CLASS, NSASSERTIONHANDLER_META);
 foundation_class!(NSNULL_CLASS, NSNULL_META);
+foundation_class!(NSURLRESPONSE_CLASS, NSURLRESPONSE_META);
+foundation_class!(NSHTTPURLRESPONSE_CLASS, NSHTTPURLRESPONSE_META : NSURLRESPONSE_CLASS, NSURLRESPONSE_META);
+foundation_class!(NSURLSESSIONTASK_CLASS, NSURLSESSIONTASK_META);
+foundation_class!(NSURLSESSIONDATATASK_CLASS, NSURLSESSIONDATATASK_META : NSURLSESSIONTASK_CLASS, NSURLSESSIONTASK_META);
+foundation_class!(NSURLSESSIONUPLOADTASK_CLASS, NSURLSESSIONUPLOADTASK_META : NSURLSESSIONDATATASK_CLASS, NSURLSESSIONDATATASK_META);
+foundation_class!(NSURLSESSIONDOWNLOADTASK_CLASS, NSURLSESSIONDOWNLOADTASK_META : NSURLSESSIONTASK_CLASS, NSURLSESSIONTASK_META);
 
 #[repr(C)]
 struct ObjcEhType {
@@ -129,7 +152,7 @@ unsafe fn alloc_with_backing(cls: *const ClassT, b: Backing) -> Id {
     obj
 }
 
-extern "C" fn f_dealloc(this: Id, _: Sel) {
+pub(crate) extern "C" fn f_dealloc(this: Id, _: Sel) {
     let removed = store().lock().unwrap().remove(&(this as usize));
     if let Some(b) = removed {
         match b {
@@ -2878,8 +2901,19 @@ pub fn init_foundation() {
             NSERROR_META.ptr(),
             "NSError",
             16,
-            &[("dealloc", i(f_dealloc as *const ()))],
-            &[],
+            &[
+                ("initWithDomain:code:userInfo:", i(url_session::err_init_domain_code_userinfo as *const ())),
+                ("domain", i(url_session::err_domain as *const ())),
+                ("code", i(url_session::err_code as *const ())),
+                ("userInfo", i(url_session::err_userinfo as *const ())),
+                ("localizedDescription", i(url_session::err_localized_desc as *const ())),
+                ("description", i(url_session::err_localized_desc as *const ())),
+                ("dealloc", i(url_session::err_dealloc as *const ())),
+            ],
+            &[(
+                "errorWithDomain:code:userInfo:",
+                i(url_session::err_with_domain_code_userinfo as *const ()),
+            )],
         );
         runtime::register_builtin(
             NSFILEMANAGER_CLASS.ptr(),
@@ -3109,6 +3143,7 @@ pub fn init_foundation() {
                 ("HTTPMethod", i(req_method as *const ())),
                 ("HTTPBody", i(req_body as *const ())),
                 ("allHTTPHeaderFields", i(req_all_headers as *const ())),
+                ("valueForHTTPHeaderField:", i(req_value_for_header as *const ())),
                 ("timeoutInterval", i(req_timeout as *const ())),
                 ("cachePolicy", i(req_cache_policy as *const ())),
                 ("initWithURL:", i(req_init_with_url as *const ())),
@@ -3133,6 +3168,7 @@ pub fn init_foundation() {
                 ("setValue:forHTTPHeaderField:", i(req_set_header as *const ())),
                 ("addValue:forHTTPHeaderField:", i(req_add_header as *const ())),
                 ("allHTTPHeaderFields", i(req_all_headers as *const ())),
+                ("valueForHTTPHeaderField:", i(req_value_for_header as *const ())),
                 ("setAllHTTPHeaderFields:", i(req_set_all_headers as *const ())),
                 ("HTTPBody", i(req_body as *const ())),
                 ("setHTTPBody:", i(req_set_body as *const ())),
@@ -3252,7 +3288,8 @@ pub fn init_foundation() {
             &[
                 ("setTimeoutIntervalForRequest:", i(noop_f64 as *const ())),
                 ("setTimeoutIntervalForResource:", i(noop_f64 as *const ())),
-                ("setHTTPAdditionalHeaders:", i(noop_arg1 as *const ())),
+                ("setHTTPAdditionalHeaders:", i(sess_cfg_set_headers as *const ())),
+                ("HTTPAdditionalHeaders", i(sess_cfg_headers as *const ())),
                 ("setRequestCachePolicy:", i(noop_arg1 as *const ())),
                 ("setURLCache:", i(noop_arg1 as *const ())),
                 ("setAllowsCellularAccess:", i(noop_arg1 as *const ())),
@@ -3286,18 +3323,30 @@ pub fn init_foundation() {
             "NSURLSession",
             16,
             &[
-                ("dataTaskWithRequest:", i(sess_task as *const ())),
-                ("dataTaskWithRequest:completionHandler:", i(sess_task2 as *const ())),
-                ("dataTaskWithURL:", i(sess_task as *const ())),
-                ("dataTaskWithURL:completionHandler:", i(sess_task2 as *const ())),
-                ("invalidateAndCancel", i(timer_invalidate as *const ())),
-                ("finishTasksAndInvalidate", i(timer_invalidate as *const ())),
-                ("dealloc", i(f_dealloc as *const ())),
+                ("dataTaskWithRequest:", i(url_session::sess_data_task as *const ())),
+                ("dataTaskWithRequest:completionHandler:", i(url_session::sess_data_task_cb as *const ())),
+                ("dataTaskWithURL:", i(url_session::sess_data_task as *const ())),
+                ("dataTaskWithURL:completionHandler:", i(url_session::sess_data_task_cb as *const ())),
+                ("uploadTaskWithRequest:fromData:", i(url_session::sess_upload_data as *const ())),
+                ("uploadTaskWithRequest:fromData:completionHandler:", i(url_session::sess_upload_data_cb as *const ())),
+                ("uploadTaskWithRequest:fromFile:", i(url_session::sess_upload_file as *const ())),
+                ("downloadTaskWithRequest:", i(url_session::sess_download_task as *const ())),
+                ("downloadTaskWithRequest:completionHandler:", i(url_session::sess_download_task_cb as *const ())),
+                ("downloadTaskWithURL:", i(url_session::sess_download_task as *const ())),
+                ("downloadTaskWithURL:completionHandler:", i(url_session::sess_download_task_cb as *const ())),
+                ("delegate", i(url_session::sess_delegate as *const ())),
+                ("delegateQueue", i(url_session::sess_delegate_queue as *const ())),
+                ("configuration", i(url_session::sess_configuration as *const ())),
+                ("sessionDescription", i(url_session::sess_description as *const ())),
+                ("setSessionDescription:", i(url_session::sess_set_description as *const ())),
+                ("invalidateAndCancel", i(url_session::sess_invalidate as *const ())),
+                ("finishTasksAndInvalidate", i(url_session::sess_invalidate as *const ())),
+                ("dealloc", i(url_session::sess_dealloc as *const ())),
             ],
             &[
-                ("sharedSession", i(sess_shared as *const ())),
-                ("sessionWithConfiguration:", i(sess_with_cfg as *const ())),
-                ("sessionWithConfiguration:delegate:delegateQueue:", i(sess_with_cfg3 as *const ())),
+                ("sharedSession", i(url_session::sess_shared as *const ())),
+                ("sessionWithConfiguration:", i(url_session::sess_with_cfg as *const ())),
+                ("sessionWithConfiguration:delegate:delegateQueue:", i(url_session::sess_with_cfg3 as *const ())),
             ],
         );
         for (cls, meta, name) in [
@@ -3356,6 +3405,7 @@ pub fn init_foundation() {
             ],
             &[("null", i(ns_null_singleton as *const ()))],
         );
+        url_session::register_classes();
     });
 }
 
@@ -3452,18 +3502,13 @@ extern "C" fn sess_cfg_default(_self: Id, _cmd: Sel) -> Id {
 extern "C" fn sess_cfg_bg(_self: Id, _cmd: Sel, _ident: Id) -> Id {
     sess_cfg_default(_self, _cmd)
 }
-extern "C" fn sess_shared(_self: Id, _cmd: Sel) -> Id {
-    static S: OnceLock<usize> = OnceLock::new();
-    *S.get_or_init(|| unsafe { alloc_with_backing(NSURLSESSION_CLASS.ptr(), Backing::Dict(HashMap::new())) } as usize) as Id
+extern "C" fn sess_cfg_set_headers(self_: Id, _cmd: Sel, hdrs: Id) {
+    let v = if hdrs.is_null() { 0 } else { retain(hdrs) as usize };
+    req_dict_insert(self_, "additional_headers", v);
 }
-extern "C" fn sess_with_cfg(_self: Id, _cmd: Sel, _cfg: Id) -> Id {
-    unsafe { alloc_with_backing(NSURLSESSION_CLASS.ptr(), Backing::Dict(HashMap::new())) }
+extern "C" fn sess_cfg_headers(self_: Id, _cmd: Sel) -> Id {
+    nsdict_lookup_str(self_, "additional_headers").unwrap_or(std::ptr::null_mut())
 }
-extern "C" fn sess_with_cfg3(_self: Id, _cmd: Sel, _cfg: Id, _del: Id, _q: Id) -> Id {
-    sess_with_cfg(_self, _cmd, _cfg)
-}
-extern "C" fn sess_task(_self: Id, _cmd: Sel, _arg: Id) -> Id { std::ptr::null_mut() }
-extern "C" fn sess_task2(_self: Id, _cmd: Sel, _arg: Id, _cb: Id) -> Id { std::ptr::null_mut() }
 
 extern "C" fn timer_sched(
     _self: Id,
@@ -4284,6 +4329,12 @@ pub fn symbol(name: &str) -> Option<usize> {
         "_OBJC_CLASS_$_NSConstantDictionary" => Some(NSDICTIONARY_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSURLSession" => Some(NSURLSESSION_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSURLSessionConfiguration" => Some(NSURLSESSIONCONFIGURATION_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSURLResponse" => Some(NSURLRESPONSE_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSHTTPURLResponse" => Some(NSHTTPURLRESPONSE_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSURLSessionTask" => Some(NSURLSESSIONTASK_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSURLSessionDataTask" => Some(NSURLSESSIONDATATASK_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSURLSessionUploadTask" => Some(NSURLSESSIONUPLOADTASK_CLASS.ptr() as usize),
+        "_OBJC_CLASS_$_NSURLSessionDownloadTask" => Some(NSURLSESSIONDOWNLOADTASK_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSOperationQueue" => Some(NSOPERATIONQUEUE_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSKeyedUnarchiver" => Some(NSKEYEDUNARCHIVER_CLASS.ptr() as usize),
         "_OBJC_CLASS_$_NSAssertionHandler" => Some(NSASSERTIONHANDLER_CLASS.ptr() as usize),
@@ -4735,7 +4786,7 @@ fn req_dict_insert(self_: Id, key: &str, val: usize) {
     }
 }
 
-extern "C" fn req_with_url(_self: Id, _cmd: Sel, url: Id) -> Id {
+pub(crate) extern "C" fn req_with_url(_self: Id, _cmd: Sel, url: Id) -> Id {
     let mut map = HashMap::new();
     map.insert("url".into(), retain(url) as usize);
     map.insert("method".into(), retain(nsstring_from_rust("GET")) as usize);
@@ -4776,7 +4827,7 @@ extern "C" fn req_init_with_url_policy_timeout(
     req_set_timeout(self_, _cmd, timeout);
     self_
 }
-extern "C" fn req_url(self_: Id, _cmd: Sel) -> Id {
+pub(crate) extern "C" fn req_url(self_: Id, _cmd: Sel) -> Id {
     if let Some(Backing::Dict(d)) = store().lock().unwrap().get(&(self_ as usize)) {
         return d.get("url").copied().unwrap_or(0) as Id;
     }
@@ -4785,7 +4836,7 @@ extern "C" fn req_url(self_: Id, _cmd: Sel) -> Id {
 extern "C" fn req_set_url(self_: Id, _cmd: Sel, url: Id) {
     req_dict_insert(self_, "url", retain(url) as usize);
 }
-extern "C" fn req_method(self_: Id, _cmd: Sel) -> Id {
+pub(crate) extern "C" fn req_method(self_: Id, _cmd: Sel) -> Id {
     if let Some(Backing::Dict(d)) = store().lock().unwrap().get(&(self_ as usize)) {
         return d.get("method").copied().unwrap_or(0) as Id;
     }
@@ -4801,19 +4852,93 @@ extern "C" fn req_set_header(self_: Id, _cmd: Sel, v: Id, field: Id) {
 extern "C" fn req_add_header(self_: Id, cmd: Sel, v: Id, field: Id) {
     req_set_header(self_, cmd, v, field);
 }
-extern "C" fn req_all_headers(self_: Id, _cmd: Sel) -> Id {
-    if let Some(Backing::Dict(d)) = store().lock().unwrap().get(&(self_ as usize)) {
-        if let Some(&h) = d.get("all_headers") {
-            return h as Id;
+pub(crate) fn extract_request_headers(req: Id) -> Vec<(String, String)> {
+    let entries: Option<(Option<Id>, Vec<(String, Id)>)> = {
+        let g = store().lock().unwrap();
+        if let Some(Backing::Dict(d)) = g.get(&(req as usize)) {
+            let base = d.get("all_headers").copied().map(|p| p as Id);
+            let extra: Vec<(String, Id)> = d
+                .iter()
+                .filter_map(|(k, &v)| k.strip_prefix("hdr:").map(|hk| (hk.to_string(), v as Id)))
+                .collect();
+            Some((base, extra))
+        } else {
+            None
+        }
+    };
+    let Some((base, extra)) = entries else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, String)> = Vec::new();
+    if let Some(map) = base.and_then(nsdict_entries) {
+        for (k, v) in map {
+            if let Some(vs) = rust_str_from_nsstring(v) {
+                out.push((k, vs));
+            }
         }
     }
-    std::ptr::null_mut()
+    for (k, v) in extra {
+        if let Some(vs) = rust_str_from_nsstring(v) {
+            if let Some(existing) = out.iter_mut().find(|(ek, _)| ek.eq_ignore_ascii_case(&k)) {
+                existing.1 = vs;
+            } else {
+                out.push((k, vs));
+            }
+        }
+    }
+    out
+}
+extern "C" fn req_all_headers(self_: Id, _cmd: Sel) -> Id {
+    let entries: Option<(Option<Id>, Vec<(String, Id)>)> = {
+        let g = store().lock().unwrap();
+        if let Some(Backing::Dict(d)) = g.get(&(self_ as usize)) {
+            let base = d.get("all_headers").copied().map(|p| p as Id);
+            let extra: Vec<(String, Id)> = d
+                .iter()
+                .filter_map(|(k, &v)| k.strip_prefix("hdr:").map(|hk| (hk.to_string(), v as Id)))
+                .collect();
+            Some((base, extra))
+        } else {
+            None
+        }
+    };
+    let Some((base, extra)) = entries else {
+        return std::ptr::null_mut();
+    };
+    if extra.is_empty() {
+        return base.unwrap_or(std::ptr::null_mut());
+    }
+    let mut merged: Vec<(String, Id)> = base
+        .and_then(nsdict_entries)
+        .map(|m| m.into_iter().collect())
+        .unwrap_or_default();
+    for (k, v) in extra {
+        if let Some(existing) = merged.iter_mut().find(|(ek, _)| ek.eq_ignore_ascii_case(&k)) {
+            existing.1 = v;
+        } else {
+            merged.push((k, v));
+        }
+    }
+    nsdict_from_pairs(merged)
+}
+extern "C" fn req_value_for_header(self_: Id, _cmd: Sel, field: Id) -> Id {
+    let Some(name) = rust_str_from_nsstring(field) else {
+        return std::ptr::null_mut();
+    };
+    if let Some((_, v)) = extract_request_headers(self_)
+        .into_iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(&name))
+    {
+        nsstring_from_rust(&v)
+    } else {
+        std::ptr::null_mut()
+    }
 }
 extern "C" fn req_set_all_headers(self_: Id, _cmd: Sel, dict: Id) {
     let v = if dict.is_null() { 0 } else { retain(dict) as usize };
     req_dict_insert(self_, "all_headers", v);
 }
-extern "C" fn req_body(self_: Id, _cmd: Sel) -> Id {
+pub(crate) extern "C" fn req_body(self_: Id, _cmd: Sel) -> Id {
     if let Some(Backing::Dict(d)) = store().lock().unwrap().get(&(self_ as usize)) {
         return d.get("body").copied().unwrap_or(0) as Id;
     }
@@ -4826,7 +4951,7 @@ extern "C" fn req_set_timeout(self_: Id, _cmd: Sel, timeout: f64) {
     let num = unsafe { alloc_with_backing(NSNUMBER_CLASS.ptr(), Backing::NumF64(timeout)) };
     req_dict_insert(self_, "timeout", num as usize);
 }
-extern "C" fn req_timeout(self_: Id, _cmd: Sel) -> f64 {
+pub(crate) extern "C" fn req_timeout(self_: Id, _cmd: Sel) -> f64 {
     let g = store().lock().unwrap();
     if let Some(Backing::Dict(d)) = g.get(&(self_ as usize)) {
         if let Some(&id) = d.get("timeout") {
@@ -5579,5 +5704,317 @@ mod tests {
         let d = lookup_for_send(obj, s);
         let f: extern "C" fn(Id, Sel, A1, A2) -> R = std::mem::transmute(d.imp);
         f(d.receiver, s, a1, a2)
+    }
+
+    #[test]
+    fn phase5_17_nsurlsession_http_completion_delegate_and_error() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::atomic::AtomicI32;
+        use std::sync::{Arc, Condvar, Mutex};
+        use std::time::Duration;
+
+        init_foundation();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let srv = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 1024];
+                loop {
+                    let n = stream.read(&mut buf).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    raw.extend_from_slice(&buf[..n]);
+                    if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let hdr_str = String::from_utf8_lossy(&raw[..pos]).to_string();
+                        let mut cl = 0usize;
+                        for line in hdr_str.lines() {
+                            if let Some((k, v)) = line.split_once(':') {
+                                if k.trim().eq_ignore_ascii_case("content-length") {
+                                    cl = v.trim().parse().unwrap_or(0);
+                                }
+                            }
+                        }
+                        while raw.len() < pos + 4 + cl {
+                            let m = stream.read(&mut buf).unwrap();
+                            if m == 0 {
+                                break;
+                            }
+                            raw.extend_from_slice(&buf[..m]);
+                        }
+                        let req_line = hdr_str.lines().next().unwrap_or("");
+                        if req_line.starts_with("GET /hello") {
+                            let body = b"{\"ok\":true}";
+                            let resp = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nX-Pear-Test: ok123\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            stream.write_all(resp.as_bytes()).unwrap();
+                            stream.write_all(body).unwrap();
+                        } else {
+                            let req_body = &raw[pos + 4..pos + 4 + cl];
+                            let hdr_val = hdr_str
+                                .lines()
+                                .find_map(|l| {
+                                    let (k, v) = l.split_once(':')?;
+                                    if k.trim().eq_ignore_ascii_case("x-custom-hdr") {
+                                        Some(v.trim().to_string())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or_default();
+                            let out_body = format!("{}|{}", hdr_val, String::from_utf8_lossy(req_body));
+                            let resp = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                out_body.len(),
+                                out_body
+                            );
+                            stream.write_all(resp.as_bytes()).unwrap();
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+
+        #[repr(C)]
+        struct CompletionBlock {
+            isa: *const ClassT,
+            flags: AtomicI32,
+            reserved: i32,
+            invoke: *const c_void,
+            descriptor: *const pear_libobjc::blocks::BlockDescriptor1,
+            state: *const Mutex<(bool, usize, usize, usize)>,
+            cv: *const Condvar,
+        }
+        static CB_DESC: pear_libobjc::blocks::BlockDescriptor1 =
+            pear_libobjc::blocks::BlockDescriptor1 {
+                reserved: 0,
+                size: std::mem::size_of::<CompletionBlock>(),
+            };
+        extern "C" fn cb_invoke(blk: *mut c_void, data: Id, resp: Id, err: Id) {
+            unsafe {
+                let b = &*(blk as *const CompletionBlock);
+                let mut g = (*b.state).lock().unwrap();
+                *g = (true, data as usize, resp as usize, err as usize);
+                (*b.cv).notify_all();
+            }
+        }
+
+        unsafe {
+            // 1. Completion-handler GET
+            let shared: Id = send0(NSURLSESSION_CLASS.ptr() as Id, "sharedSession");
+            let u1: Id = send1(
+                NSURL_CLASS.ptr() as Id,
+                "URLWithString:",
+                nsstring_from_rust(&format!("http://127.0.0.1:{port}/hello")),
+            );
+            let req1: Id = send1(NSURLREQUEST_CLASS.ptr() as Id, "requestWithURL:", u1);
+            let st1 = Arc::new(Mutex::new((false, 0usize, 0usize, 0usize)));
+            let cv1 = Arc::new(Condvar::new());
+            let mut blk1 = CompletionBlock {
+                isa: pear_libobjc::blocks::NSGLOBALBLOCK_CLASS.ptr(),
+                flags: AtomicI32::new(1 << 28),
+                reserved: 0,
+                invoke: cb_invoke as *const c_void,
+                descriptor: &CB_DESC,
+                state: Arc::as_ptr(&st1),
+                cv: Arc::as_ptr(&cv1),
+            };
+            let task1: Id = send2(
+                shared,
+                "dataTaskWithRequest:completionHandler:",
+                req1,
+                &mut blk1 as *mut CompletionBlock as *const c_void,
+            );
+            assert!(!task1.is_null());
+            assert_eq!(send0::<usize>(task1, "state"), 1);
+            let _: () = send0(task1, "resume");
+
+            let (done, data_p, resp_p, err_p) = {
+                let g = st1.lock().unwrap();
+                let (g2, _) = cv1
+                    .wait_timeout_while(g, Duration::from_secs(5), |s| !s.0)
+                    .unwrap();
+                *g2
+            };
+            assert!(done && err_p == 0);
+            let resp1 = resp_p as Id;
+            assert_eq!(send0::<isize>(resp1, "statusCode"), 200);
+            assert!(send1::<Id, bool>(resp1, "isKindOfClass:", NSHTTPURLRESPONSE_CLASS.ptr() as Id));
+            assert!(send1::<Id, bool>(resp1, "isKindOfClass:", NSURLRESPONSE_CLASS.ptr() as Id));
+            assert_eq!(
+                rust_str_from_nsstring(send1(resp1, "valueForHTTPHeaderField:", nsstring_from_rust("x-pear-test"))).as_deref(),
+                Some("ok123")
+            );
+            assert_eq!(
+                rust_str_from_nsstring(send0(resp1, "MIMEType")).as_deref(),
+                Some("application/json")
+            );
+            assert_eq!(rust_bytes_from_nsdata(data_p as Id).as_deref(), Some(&b"{\"ok\":true}"[..]));
+            assert_eq!(send0::<usize>(task1, "state"), 3);
+
+            // 2. Delegate-based POST with custom header & body
+            #[derive(Default)]
+            struct DelState {
+                got_resp: bool,
+                got_data: Vec<u8>,
+                completed: bool,
+                err: usize,
+            }
+            static DEL_STATE: OnceLock<(Mutex<DelState>, Condvar)> = OnceLock::new();
+            let (dl_m, dl_cv) = DEL_STATE.get_or_init(|| (Mutex::new(DelState::default()), Condvar::new()));
+            *dl_m.lock().unwrap() = DelState::default();
+
+            extern "C" fn test_did_recv_resp(
+                _self: Id,
+                _cmd: Sel,
+                _sess: Id,
+                _task: Id,
+                _resp: Id,
+                cb: *const c_void,
+            ) {
+                unsafe {
+                    if let Some((m, _)) = DEL_STATE.get() {
+                        m.lock().unwrap().got_resp = true;
+                    }
+                    let layout = &*(cb as *const pear_libobjc::blocks::BlockLayout);
+                    let f: extern "C" fn(*const c_void, isize) = std::mem::transmute(layout.invoke);
+                    f(cb, 1);
+                }
+            }
+            extern "C" fn test_did_recv_data(_self: Id, _cmd: Sel, _sess: Id, _task: Id, data: Id) {
+                if let Some((m, _)) = DEL_STATE.get() {
+                    if let Some(b) = rust_bytes_from_nsdata(data) {
+                        m.lock().unwrap().got_data.extend_from_slice(&b);
+                    }
+                }
+            }
+            extern "C" fn test_did_complete(_self: Id, _cmd: Sel, _sess: Id, _task: Id, err: Id) {
+                if let Some((m, cv)) = DEL_STATE.get() {
+                    let mut g = m.lock().unwrap();
+                    g.err = err as usize;
+                    g.completed = true;
+                    cv.notify_all();
+                }
+            }
+
+            static DEL_META: StaticClass = StaticClass(UnsafeCell::new(ClassT {
+                isa: &raw const NSOBJECT_META as *const ClassT,
+                superclass: &raw const NSOBJECT_META as *const ClassT,
+                cache: &raw const EMPTY_CACHE as *const c_void,
+                vtable: std::ptr::null(),
+                bits: 0,
+            }));
+            static DEL_CLS: StaticClass = StaticClass(UnsafeCell::new(ClassT {
+                isa: &raw const DEL_META as *const ClassT,
+                superclass: &raw const NSOBJECT_CLASS as *const ClassT,
+                cache: &raw const EMPTY_CACHE as *const c_void,
+                vtable: std::ptr::null(),
+                bits: 0,
+            }));
+            static REG_ONCE: Once = Once::new();
+            REG_ONCE.call_once(|| {
+                let imp_fn = |p: *const ()| -> Imp { std::mem::transmute(p) };
+                runtime::register_builtin(
+                    DEL_CLS.ptr(),
+                    DEL_META.ptr(),
+                    "PearTestURLDelegate517",
+                    16,
+                    &[
+                        ("URLSession:dataTask:didReceiveResponse:completionHandler:", imp_fn(test_did_recv_resp as *const ())),
+                        ("URLSession:dataTask:didReceiveData:", imp_fn(test_did_recv_data as *const ())),
+                        ("URLSession:task:didCompleteWithError:", imp_fn(test_did_complete as *const ())),
+                    ],
+                    &[],
+                );
+            });
+            let delegate: Id = send0(send0(DEL_CLS.ptr() as Id, "alloc"), "init");
+            let cfg: Id = send0(NSURLSESSIONCONFIGURATION_CLASS.ptr() as Id, "defaultSessionConfiguration");
+            let sess2: Id = send3(
+                NSURLSESSION_CLASS.ptr() as Id,
+                "sessionWithConfiguration:delegate:delegateQueue:",
+                cfg,
+                delegate,
+                std::ptr::null_mut::<c_void>(),
+            );
+            let u2: Id = send1(
+                NSURL_CLASS.ptr() as Id,
+                "URLWithString:",
+                nsstring_from_rust(&format!("http://127.0.0.1:{port}/echo")),
+            );
+            let mreq: Id = send1(NSMUTABLEURLREQUEST_CLASS.ptr() as Id, "requestWithURL:", u2);
+            let _: () = send1(mreq, "setHTTPMethod:", nsstring_from_rust("POST"));
+            let _: () = send2(
+                mreq,
+                "setValue:forHTTPHeaderField:",
+                nsstring_from_rust("hdr-val-9"),
+                nsstring_from_rust("X-Custom-Hdr"),
+            );
+            let _: () = send1(mreq, "setHTTPBody:", nsdata_from_bytes(b"payload517"));
+            let task2: Id = send1(sess2, "dataTaskWithRequest:", mreq);
+            let _: () = send0(task2, "resume");
+
+            {
+                let g = dl_m.lock().unwrap();
+                let (g2, _) = dl_cv
+                    .wait_timeout_while(g, Duration::from_secs(5), |s| !s.completed)
+                    .unwrap();
+                assert!(g2.completed && g2.got_resp && g2.err == 0);
+                assert_eq!(g2.got_data, b"hdr-val-9|payload517");
+            }
+            let _ = srv.join();
+
+            // 3. Unreachable port error path
+            let closed_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let closed_port = closed_listener.local_addr().unwrap().port();
+            drop(closed_listener);
+
+            let u3: Id = send1(
+                NSURL_CLASS.ptr() as Id,
+                "URLWithString:",
+                nsstring_from_rust(&format!("http://127.0.0.1:{closed_port}/fail")),
+            );
+            let st3 = Arc::new(Mutex::new((false, 0usize, 0usize, 0usize)));
+            let cv3 = Arc::new(Condvar::new());
+            let mut blk3 = CompletionBlock {
+                isa: pear_libobjc::blocks::NSGLOBALBLOCK_CLASS.ptr(),
+                flags: AtomicI32::new(1 << 28),
+                reserved: 0,
+                invoke: cb_invoke as *const c_void,
+                descriptor: &CB_DESC,
+                state: Arc::as_ptr(&st3),
+                cv: Arc::as_ptr(&cv3),
+            };
+            let task3: Id = send2(
+                shared,
+                "dataTaskWithURL:completionHandler:",
+                u3,
+                &mut blk3 as *mut CompletionBlock as *const c_void,
+            );
+            let _: () = send0(task3, "resume");
+            let (done3, _d3, _r3, err3_p) = {
+                let g = st3.lock().unwrap();
+                let (g2, _) = cv3
+                    .wait_timeout_while(g, Duration::from_secs(5), |s| !s.0)
+                    .unwrap();
+                *g2
+            };
+            assert!(done3 && err3_p != 0);
+            let err3 = err3_p as Id;
+            assert_eq!(
+                rust_str_from_nsstring(send0(err3, "domain")).as_deref(),
+                Some("NSURLErrorDomain")
+            );
+            assert!(send0::<isize>(err3, "code") < 0);
+            assert!(!rust_str_from_nsstring(send0(err3, "localizedDescription"))
+                .unwrap_or_default()
+                .is_empty());
+        }
     }
 }
