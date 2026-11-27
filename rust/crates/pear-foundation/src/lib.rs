@@ -14,6 +14,10 @@ use std::sync::{Mutex, Once, OnceLock};
 
 mod cf_ext;
 mod url_session;
+pub use url_session::{
+    net_trace_enabled, url_conn_cancel, url_conn_dealloc, url_conn_init, url_conn_send_async,
+    url_conn_send_sync, url_conn_start,
+};
 
 macro_rules! foundation_class {
     ($cls:ident, $meta:ident) => {

@@ -50,13 +50,18 @@ pub extern "C" fn cf_http_msg_create_request(
     url: Id,
     version: Id,
 ) -> *mut c_void {
+    let m_str = rust_str_from_nsstring(method).unwrap_or_else(|| "GET".into());
+    let u_str = rust_str_from_nsstring(url).unwrap_or_default();
+    if pear_foundation::net_trace_enabled() {
+        eprintln!("[PearRuntime][net][CFHTTP] create_request method={} url={}", m_str, u_str);
+    }
     let h = Box::into_raw(Box::new(0usize)) as *mut c_void;
     HTTP_MSGS.lock().unwrap().insert(
         h as usize,
         HttpMessageState {
             is_request: true,
-            method: rust_str_from_nsstring(method).unwrap_or_else(|| "GET".into()),
-            url: rust_str_from_nsstring(url).unwrap_or_default(),
+            method: m_str,
+            url: u_str,
             version: rust_str_from_nsstring(version).unwrap_or_else(|| "HTTP/1.1".into()),
             header_complete: true,
             ..Default::default()
@@ -287,6 +292,17 @@ pub fn cfnetwork_ext_symbol(name: &str) -> Option<usize> {
 static NW_DEFAULT_STUB: usize = 0;
 
 extern "C" fn nw_ret_handle() -> *mut c_void { Box::into_raw(Box::new(0usize)) as *mut c_void }
+extern "C" fn nw_conn_create() -> *mut c_void {
+    if pear_foundation::net_trace_enabled() {
+        eprintln!("[PearRuntime][net][nw] nw_connection_create");
+    }
+    Box::into_raw(Box::new(0usize)) as *mut c_void
+}
+extern "C" fn nw_conn_start(_a: *mut c_void) {
+    if pear_foundation::net_trace_enabled() {
+        eprintln!("[PearRuntime][net][nw] nw_connection_start");
+    }
+}
 extern "C" fn nw_noop_1(_a: *mut c_void) {}
 extern "C" fn nw_noop_2(_a: *mut c_void, _b: *mut c_void) {}
 extern "C" fn nw_recv(_c: *mut c_void, _min: u32, _max: u32, _cb: *const c_void) {}
@@ -301,9 +317,10 @@ pub fn network_symbol(name: &str) -> Option<usize> {
         | "__nw_parameters_configure_protocol_default_configuration"
         | "__nw_parameters_configure_protocol_disable" => Some(&raw const NW_DEFAULT_STUB as usize),
         "_nw_endpoint_create_host"
-        | "_nw_parameters_create_secure_tcp"
-        | "_nw_connection_create" => f(nw_ret_handle as *const ()),
-        "_nw_connection_cancel" | "_nw_connection_start" => f(nw_noop_1 as *const ()),
+        | "_nw_parameters_create_secure_tcp" => f(nw_ret_handle as *const ()),
+        "_nw_connection_create" => f(nw_conn_create as *const ()),
+        "_nw_connection_cancel" => f(nw_noop_1 as *const ()),
+        "_nw_connection_start" => f(nw_conn_start as *const ()),
         "_nw_connection_set_queue"
         | "_nw_connection_set_state_changed_handler"
         | "_nw_parameters_set_required_interface_type" => f(nw_noop_2 as *const ()),

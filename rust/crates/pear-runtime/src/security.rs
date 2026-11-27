@@ -395,7 +395,10 @@ extern "C" fn sec_trust_copy_public_key(_trust: *mut c_void) -> *mut c_void {
 
 // ---- SecureTransport (SSL*) ------------------------------------------------
 
-extern "C" fn ssl_create_context(_alloc: *const c_void, _proto_side: i32, _conn_type: i32) -> *mut c_void {
+extern "C" fn ssl_create_context(_alloc: *const c_void, proto_side: i32, conn_type: i32) -> *mut c_void {
+    if pear_foundation::net_trace_enabled() {
+        eprintln!("[PearRuntime][net][ssl] SSLCreateContext side={} type={}", proto_side, conn_type);
+    }
     let h = Box::into_raw(Box::new(0usize)) as *mut c_void;
     SSL_CTXS.lock().unwrap().insert(h as usize, 0);
     h
@@ -405,6 +408,9 @@ extern "C" fn ssl_close(ctx: *mut c_void) -> i32 {
     ERR_SEC_SUCCESS
 }
 extern "C" fn ssl_handshake(_ctx: *mut c_void) -> i32 {
+    if pear_foundation::net_trace_enabled() {
+        eprintln!("[PearRuntime][net][ssl] SSLHandshake");
+    }
     ERR_SEC_SUCCESS
 }
 extern "C" fn ssl_copy_peer_trust(_ctx: *mut c_void, trust_out: *mut *mut c_void) -> i32 {
@@ -416,13 +422,19 @@ unsafe extern "C" fn ssl_get_buffered_read_size(_ctx: *mut c_void, buf_size: *mu
     }
     ERR_SEC_SUCCESS
 }
-unsafe extern "C" fn ssl_read(_ctx: *mut c_void, _data: *mut u8, _len: usize, processed: *mut usize) -> i32 {
+unsafe extern "C" fn ssl_read(_ctx: *mut c_void, _data: *mut u8, len: usize, processed: *mut usize) -> i32 {
+    if pear_foundation::net_trace_enabled() {
+        eprintln!("[PearRuntime][net][ssl] SSLRead len={}", len);
+    }
     if !processed.is_null() {
         *processed = 0;
     }
     ERR_SSL_CLOSED_GRACEFUL
 }
 unsafe extern "C" fn ssl_write(_ctx: *mut c_void, _data: *const u8, len: usize, processed: *mut usize) -> i32 {
+    if pear_foundation::net_trace_enabled() {
+        eprintln!("[PearRuntime][net][ssl] SSLWrite len={}", len);
+    }
     if !processed.is_null() {
         *processed = len;
     }
@@ -430,7 +442,15 @@ unsafe extern "C" fn ssl_write(_ctx: *mut c_void, _data: *const u8, len: usize, 
 }
 extern "C" fn ssl_set_ok1(_ctx: *mut c_void, _a: usize) -> i32 { ERR_SEC_SUCCESS }
 extern "C" fn ssl_set_ok2(_ctx: *mut c_void, _a: usize, _b: usize) -> i32 { ERR_SEC_SUCCESS }
-extern "C" fn ssl_set_peer_domain(_ctx: *mut c_void, _name: *const c_char, _len: usize) -> i32 { ERR_SEC_SUCCESS }
+extern "C" fn ssl_set_peer_domain(_ctx: *mut c_void, name: *const c_char, len: usize) -> i32 {
+    if pear_foundation::net_trace_enabled() && !name.is_null() && len > 0 {
+        let s = unsafe {
+            String::from_utf8_lossy(std::slice::from_raw_parts(name as *const u8, len.min(256)))
+        };
+        eprintln!("[PearRuntime][net][ssl] SSLSetPeerDomainName domain={}", s);
+    }
+    ERR_SEC_SUCCESS
+}
 
 pub fn symbol(name: &str) -> Option<usize> {
     let f = |p: *const ()| Some(p as usize);

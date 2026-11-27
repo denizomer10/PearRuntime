@@ -23,6 +23,12 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicI32, AtomicIsize, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+static NET_TRACE_ENABLED: OnceLock<bool> = OnceLock::new();
+
+pub fn net_trace_enabled() -> bool {
+    *NET_TRACE_ENABLED.get_or_init(|| std::env::var("PEAR_NET_TRACE").as_deref() == Ok("1"))
+}
+
 #[inline]
 fn i(p: *const ()) -> Imp {
     unsafe { std::mem::transmute(p) }
@@ -774,6 +780,17 @@ fn create_task_common(
         unsafe { pear_libobjc::blocks::block_copy(cb) as usize }
     };
 
+    if net_trace_enabled() {
+        eprintln!(
+            "[PearRuntime][net][NSURLSession] create method={} url={} has_cb={} has_delegate={} dl={}",
+            method,
+            url_str,
+            completion_block != 0,
+            delegate_id != 0,
+            is_download
+        );
+    }
+
     let task_id = TASK_ID_SEQ.fetch_add(1, Ordering::Relaxed);
     let task_obj = unsafe { alloc_with_backing(task_cls, Backing::Arr(Vec::new())) };
     let st = Arc::new(Mutex::new(UrlTaskState {
@@ -1105,6 +1122,14 @@ fn task_worker(task_ptr: usize, task_arc: Arc<Mutex<UrlTaskState>>) {
         };
         let (r_id, e_id, b_vec) = match final_res {
             Ok((status, hdrs, bytes)) => {
+                if net_trace_enabled() {
+                    eprintln!(
+                        "[PearRuntime][net][NSURLSession] done status={} bytes={} url={}",
+                        status,
+                        bytes.len(),
+                        url
+                    );
+                }
                 let u_for_resp = if url_obj != 0 {
                     url_obj as Id
                 } else {
@@ -1119,6 +1144,12 @@ fn task_worker(task_ptr: usize, task_arc: Arc<Mutex<UrlTaskState>>) {
                 (r, std::ptr::null_mut(), bytes)
             }
             Err((code, msg)) => {
+                if net_trace_enabled() {
+                    eprintln!(
+                        "[PearRuntime][net][NSURLSession] err code={} msg={:?} url={}",
+                        code, msg, url
+                    );
+                }
                 let e = make_nserror("NSURLErrorDomain", code, &msg);
                 g.error = retain(e) as usize;
                 (std::ptr::null_mut(), e, Vec::new())
@@ -1531,4 +1562,411 @@ pub(crate) fn register_classes() {
         &[],
         &[],
     );
+}
+
+// ---- NSURLConnection Backend Helpers ---------------------------------------
+
+struct ExtractedRequest {
+    req_obj: usize,
+    url_obj: usize,
+    url: String,
+    method: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+    timeout_secs: u64,
+}
+
+fn extract_request_parts(req: Id) -> ExtractedRequest {
+    let req_obj = if is_request_instance(req) {
+        retain(req) as usize
+    } else if !req.is_null() {
+        req_with_url(NSURLREQUEST_CLASS.ptr() as Id, sel("requestWithURL:"), req) as usize
+    } else {
+        0
+    };
+    let r = req_obj as Id;
+    let url_obj = if !r.is_null() {
+        let u = req_url(r, sel("URL"));
+        if !u.is_null() {
+            retain(u) as usize
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+    let url = extract_url_string(url_obj as Id);
+    let method = if !r.is_null() {
+        rust_str_from_nsstring(req_method(r, sel("HTTPMethod")))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "GET".to_string())
+    } else {
+        "GET".to_string()
+    };
+    let headers = if !r.is_null() {
+        crate::extract_request_headers(r)
+    } else {
+        Vec::new()
+    };
+    let body = if !r.is_null() {
+        rust_bytes_from_nsdata(req_body(r, sel("HTTPBody"))).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let timeout_secs = if !r.is_null() {
+        let t = req_timeout(r, sel("timeoutInterval"));
+        if t.is_finite() && t > 0.0 {
+            (t.round() as u64).clamp(3, 25)
+        } else {
+            15
+        }
+    } else {
+        15
+    };
+    ExtractedRequest {
+        req_obj,
+        url_obj,
+        url,
+        method,
+        headers,
+        body,
+        timeout_secs,
+    }
+}
+
+struct UrlConnState {
+    conn_id: usize,
+    req_obj: usize,
+    url_obj: usize,
+    delegate: usize,
+    url: String,
+    method: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+    timeout_secs: u64,
+    started: bool,
+    cancelled: bool,
+}
+
+static URL_CONNECTIONS: OnceLock<Mutex<HashMap<usize, Arc<Mutex<UrlConnState>>>>> = OnceLock::new();
+
+fn url_connections() -> &'static Mutex<HashMap<usize, Arc<Mutex<UrlConnState>>>> {
+    URL_CONNECTIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Initializes backing state for an `NSURLConnection` instance and optionally starts immediately.
+pub fn url_conn_init(conn: Id, req: Id, del: Id, start_immediately: bool) {
+    if conn.is_null() {
+        return;
+    }
+    let parts = extract_request_parts(req);
+    let del_id = if del.is_null() { 0 } else { retain(del) as usize };
+    if net_trace_enabled() && !parts.url.is_empty() {
+        eprintln!(
+            "[PearRuntime][net][NSURLConnection] init method={} url={} start={} has_del={}",
+            parts.method,
+            parts.url,
+            start_immediately,
+            del_id != 0
+        );
+    }
+    let conn_id = TASK_ID_SEQ.fetch_add(1, Ordering::Relaxed);
+    let st = Arc::new(Mutex::new(UrlConnState {
+        conn_id,
+        req_obj: parts.req_obj,
+        url_obj: parts.url_obj,
+        delegate: del_id,
+        url: parts.url,
+        method: parts.method,
+        headers: parts.headers,
+        body: parts.body,
+        timeout_secs: parts.timeout_secs,
+        started: false,
+        cancelled: false,
+    }));
+    let prev = url_connections().lock().unwrap().insert(conn as usize, st);
+    if let Some(old_arc) = prev {
+        let mut old = old_arc.lock().unwrap();
+        let ids = [old.req_obj, old.url_obj, old.delegate];
+        old.req_obj = 0;
+        old.url_obj = 0;
+        old.delegate = 0;
+        drop(old);
+        for id in ids {
+            if id != 0 {
+                release(id as Id);
+            }
+        }
+    }
+    if start_immediately && !req.is_null() {
+        url_conn_start(conn);
+    }
+}
+
+fn url_conn_worker(conn_ptr: usize, st_arc: Arc<Mutex<UrlConnState>>) {
+    let (conn_id, url, method, headers, body, timeout_secs, url_obj, delegate) = {
+        let g = st_arc.lock().unwrap();
+        (
+            g.conn_id,
+            g.url.clone(),
+            g.method.clone(),
+            g.headers.clone(),
+            g.body.clone(),
+            g.timeout_secs,
+            g.url_obj,
+            g.delegate,
+        )
+    };
+    let result = if st_arc.lock().unwrap().cancelled {
+        Err((-999isize, "cancelled".to_string()))
+    } else {
+        execute_http_via_curl(conn_id, &url, &method, &headers, &body, timeout_secs)
+    };
+    let cancelled = st_arc.lock().unwrap().cancelled;
+    let final_res = if cancelled {
+        Err((-999isize, "cancelled".to_string()))
+    } else {
+        result
+    };
+    if delegate != 0 {
+        let del = delegate as Id;
+        let del_cls = unsafe { object_class(del) };
+        let conn = conn_ptr as Id;
+        match final_res {
+            Ok((status, hdrs, bytes)) => {
+                if net_trace_enabled() {
+                    eprintln!(
+                        "[PearRuntime][net][NSURLConnection] done status={} bytes={} url={}",
+                        status,
+                        bytes.len(),
+                        url
+                    );
+                }
+                let u_for_resp = if url_obj != 0 {
+                    url_obj as Id
+                } else {
+                    nsstring_from_rust(&url)
+                };
+                let resp = make_http_response(u_for_resp, status, hdrs, bytes.len());
+                let s_resp = sel("connection:didReceiveResponse:");
+                if !del_cls.is_null() && runtime::lookup(del_cls, s_resp).is_some() {
+                    unsafe {
+                        let d = lookup_for_send(del, s_resp);
+                        let f: extern "C" fn(Id, Sel, Id, Id) = std::mem::transmute(d.imp);
+                        f(d.receiver, s_resp, conn, resp);
+                    }
+                }
+                if !bytes.is_empty() {
+                    let s_data = sel("connection:didReceiveData:");
+                    if !del_cls.is_null() && runtime::lookup(del_cls, s_data).is_some() {
+                        let data_obj = nsdata_from_bytes(&bytes);
+                        unsafe {
+                            let d = lookup_for_send(del, s_data);
+                            let f: extern "C" fn(Id, Sel, Id, Id) = std::mem::transmute(d.imp);
+                            f(d.receiver, s_data, conn, data_obj);
+                        }
+                    }
+                }
+                let s_fin = sel("connectionDidFinishLoading:");
+                if !del_cls.is_null() && runtime::lookup(del_cls, s_fin).is_some() {
+                    unsafe {
+                        let d = lookup_for_send(del, s_fin);
+                        let f: extern "C" fn(Id, Sel, Id) = std::mem::transmute(d.imp);
+                        f(d.receiver, s_fin, conn);
+                    }
+                }
+            }
+            Err((code, msg)) => {
+                if net_trace_enabled() {
+                    eprintln!(
+                        "[PearRuntime][net][NSURLConnection] err code={} msg={:?} url={}",
+                        code, msg, url
+                    );
+                }
+                let err = make_nserror("NSURLErrorDomain", code, &msg);
+                let s_fail = sel("connection:didFailWithError:");
+                if !del_cls.is_null() && runtime::lookup(del_cls, s_fail).is_some() {
+                    unsafe {
+                        let d = lookup_for_send(del, s_fail);
+                        let f: extern "C" fn(Id, Sel, Id, Id) = std::mem::transmute(d.imp);
+                        f(d.receiver, s_fail, conn, err);
+                    }
+                }
+            }
+        }
+    }
+    release(conn_ptr as Id);
+}
+
+/// Starts a previously initialized `NSURLConnection` on a background worker thread.
+pub fn url_conn_start(conn: Id) {
+    let st_arc = url_connections().lock().unwrap().get(&(conn as usize)).cloned();
+    let Some(arc) = st_arc else { return };
+    let should_spawn = {
+        let mut g = arc.lock().unwrap();
+        if g.started || g.cancelled || g.req_obj == 0 || g.url.is_empty() {
+            false
+        } else {
+            g.started = true;
+            true
+        }
+    };
+    if should_spawn {
+        let conn_ptr = retain(conn) as usize;
+        std::thread::spawn(move || url_conn_worker(conn_ptr, arc));
+    }
+}
+
+/// Marks an `NSURLConnection` as cancelled.
+pub fn url_conn_cancel(conn: Id) {
+    if let Some(arc) = url_connections().lock().unwrap().get(&(conn as usize)).cloned() {
+        arc.lock().unwrap().cancelled = true;
+    }
+}
+
+/// Releases retained request/delegate references for an `NSURLConnection` during dealloc.
+pub fn url_conn_dealloc(conn: Id) {
+    if let Some(arc) = url_connections().lock().unwrap().remove(&(conn as usize)) {
+        let mut g = arc.lock().unwrap();
+        let ids = [g.req_obj, g.url_obj, g.delegate];
+        g.req_obj = 0;
+        g.url_obj = 0;
+        g.delegate = 0;
+        drop(g);
+        for id in ids {
+            if id != 0 {
+                release(id as Id);
+            }
+        }
+    }
+}
+
+/// Executes an `NSURLConnection` synchronous HTTP/HTTPS request.
+pub fn url_conn_send_sync(req: Id, resp_out: *mut Id, err_out: *mut Id) -> Id {
+    let parts = extract_request_parts(req);
+    let task_id = TASK_ID_SEQ.fetch_add(1, Ordering::Relaxed);
+    if net_trace_enabled() {
+        eprintln!(
+            "[PearRuntime][net][NSURLConnection] sync method={} url={}",
+            parts.method, parts.url
+        );
+    }
+    let res = execute_http_via_curl(
+        task_id,
+        &parts.url,
+        &parts.method,
+        &parts.headers,
+        &parts.body,
+        parts.timeout_secs,
+    );
+    let ret = match res {
+        Ok((status, hdrs, bytes)) => {
+            if net_trace_enabled() {
+                eprintln!(
+                    "[PearRuntime][net][NSURLConnection] sync done status={} bytes={} url={}",
+                    status,
+                    bytes.len(),
+                    parts.url
+                );
+            }
+            let u_for_resp = if parts.url_obj != 0 {
+                parts.url_obj as Id
+            } else {
+                nsstring_from_rust(&parts.url)
+            };
+            let resp = make_http_response(u_for_resp, status, hdrs, bytes.len());
+            if !resp_out.is_null() {
+                unsafe { *resp_out = resp };
+            }
+            if !err_out.is_null() {
+                unsafe { *err_out = std::ptr::null_mut() };
+            }
+            nsdata_from_bytes(&bytes)
+        }
+        Err((code, msg)) => {
+            if net_trace_enabled() {
+                eprintln!(
+                    "[PearRuntime][net][NSURLConnection] sync err code={} msg={:?} url={}",
+                    code, msg, parts.url
+                );
+            }
+            if !resp_out.is_null() {
+                unsafe { *resp_out = std::ptr::null_mut() };
+            }
+            if !err_out.is_null() {
+                unsafe { *err_out = make_nserror("NSURLErrorDomain", code, &msg) };
+            }
+            std::ptr::null_mut()
+        }
+    };
+    if parts.req_obj != 0 {
+        release(parts.req_obj as Id);
+    }
+    if parts.url_obj != 0 {
+        release(parts.url_obj as Id);
+    }
+    ret
+}
+
+/// Executes `NSURLConnection +sendAsynchronousRequest:queue:completionHandler:`.
+/// Block receives `(NSURLResponse *response, NSData *data, NSError *error)`.
+pub fn url_conn_send_async(req: Id, _queue: Id, cb: *const c_void) {
+    let parts = extract_request_parts(req);
+    let task_id = TASK_ID_SEQ.fetch_add(1, Ordering::Relaxed);
+    let cb_ptr = if cb.is_null() {
+        0
+    } else {
+        unsafe { pear_libobjc::blocks::block_copy(cb) as usize }
+    };
+    if net_trace_enabled() {
+        eprintln!(
+            "[PearRuntime][net][NSURLConnection] async method={} url={} has_cb={}",
+            parts.method,
+            parts.url,
+            cb_ptr != 0
+        );
+    }
+    std::thread::spawn(move || {
+        let res = execute_http_via_curl(
+            task_id,
+            &parts.url,
+            &parts.method,
+            &parts.headers,
+            &parts.body,
+            parts.timeout_secs,
+        );
+        let (resp, data, err) = match res {
+            Ok((status, hdrs, bytes)) => {
+                let u_for_resp = if parts.url_obj != 0 {
+                    parts.url_obj as Id
+                } else {
+                    nsstring_from_rust(&parts.url)
+                };
+                let r = make_http_response(u_for_resp, status, hdrs, bytes.len());
+                (r, nsdata_from_bytes(&bytes), std::ptr::null_mut())
+            }
+            Err((code, msg)) => (
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                make_nserror("NSURLErrorDomain", code, &msg),
+            ),
+        };
+        if cb_ptr != 0 {
+            unsafe {
+                let blk = cb_ptr as *const c_void;
+                let layout = &*(blk as *const pear_libobjc::blocks::BlockLayout);
+                if !layout.invoke.is_null() {
+                    let f: extern "C" fn(*const c_void, Id, Id, Id) = std::mem::transmute(layout.invoke);
+                    f(blk, resp, data, err);
+                }
+                pear_libobjc::blocks::block_release(blk);
+            }
+        }
+        if parts.req_obj != 0 {
+            release(parts.req_obj as Id);
+        }
+        if parts.url_obj != 0 {
+            release(parts.url_obj as Id);
+        }
+    });
 }

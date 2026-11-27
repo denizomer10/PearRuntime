@@ -2232,12 +2232,15 @@ extern "C" fn noop4(_self: Id, _cmd: Sel, _a: isize, _b: isize, _c: isize, _d: i
                 ("setDelegateQueue:", i(app_noop1 as *const ())),
                 ("scheduleInRunLoop:forMode:", i(app_noop2 as *const ())),
                 ("unscheduleFromRunLoop:forMode:", i(app_noop2 as *const ())),
-                ("start", i(noop_method as *const ())),
-                ("cancel", i(noop_method as *const ())),
+                ("start", i(url_conn_start_impl as *const ())),
+                ("cancel", i(url_conn_cancel_impl as *const ())),
+                ("dealloc", i(url_conn_dealloc_impl as *const ())),
             ],
             &[
                 ("connectionWithRequest:delegate:", i(url_conn_with_req_del as *const ())),
                 ("canHandleRequest:", i(app_true1 as *const ())),
+                ("sendSynchronousRequest:returningResponse:error:", i(url_conn_send_sync_impl as *const ())),
+                ("sendAsynchronousRequest:queue:completionHandler:", i(url_conn_send_async_impl as *const ())),
             ],
         );
         objc_rt::register_builtin(
@@ -3326,19 +3329,54 @@ extern "C" fn avaudiosession_set_channels_err(
 extern "C" fn url_conn_init_req_del_start(
     self_: Id,
     _cmd: Sel,
-    _req: Id,
-    _del: Id,
-    _start: bool,
+    req: Id,
+    del: Id,
+    start: bool,
 ) -> Id {
+    pear_foundation::url_conn_init(self_, req, del, start);
     self_
 }
 
-extern "C" fn url_conn_init_req_del(self_: Id, _cmd: Sel, _req: Id, _del: Id) -> Id {
-    self_
+extern "C" fn url_conn_init_req_del(self_: Id, cmd: Sel, req: Id, del: Id) -> Id {
+    url_conn_init_req_del_start(self_, cmd, req, del, true)
 }
 
-extern "C" fn url_conn_with_req_del(_cls: Id, _cmd: Sel, _req: Id, _del: Id) -> Id {
-    unsafe { alloc(NSURLCONNECTION_CLASS.ptr()) }
+extern "C" fn url_conn_with_req_del(_cls: Id, cmd: Sel, req: Id, del: Id) -> Id {
+    let obj = unsafe { alloc(NSURLCONNECTION_CLASS.ptr()) };
+    url_conn_init_req_del_start(obj, cmd, req, del, true)
+}
+
+extern "C" fn url_conn_start_impl(self_: Id, _cmd: Sel) {
+    pear_foundation::url_conn_start(self_);
+}
+
+extern "C" fn url_conn_cancel_impl(self_: Id, _cmd: Sel) {
+    pear_foundation::url_conn_cancel(self_);
+}
+
+extern "C" fn url_conn_dealloc_impl(self_: Id, _cmd: Sel) {
+    pear_foundation::url_conn_dealloc(self_);
+    unsafe { pear_libobjc::object::dispose(self_) };
+}
+
+extern "C" fn url_conn_send_sync_impl(
+    _cls: Id,
+    _cmd: Sel,
+    req: Id,
+    resp_out: *mut Id,
+    err_out: *mut Id,
+) -> Id {
+    pear_foundation::url_conn_send_sync(req, resp_out, err_out)
+}
+
+extern "C" fn url_conn_send_async_impl(
+    _cls: Id,
+    _cmd: Sel,
+    req: Id,
+    queue: Id,
+    cb: *const std::ffi::c_void,
+) {
+    pear_foundation::url_conn_send_async(req, queue, cb);
 }
 
 extern "C" fn app_noop2(_self: Id, _cmd: Sel, _a: Id, _b: Id) {}
@@ -5673,6 +5711,16 @@ fn audiotoolbox_symbol(symbol: &str) -> Option<usize> {
     }
 }
 
+extern "C" fn cf_read_stream_for_http_stub(
+    _alloc: *const std::ffi::c_void,
+    _req: *const std::ffi::c_void,
+) -> *mut std::ffi::c_void {
+    if pear_foundation::net_trace_enabled() {
+        eprintln!("[PearRuntime][net] CFReadStreamCreateForHTTPRequest");
+    }
+    std::ptr::null_mut()
+}
+
 fn cfnetwork_symbol(symbol: &str) -> Option<usize> {
     let null = ptr_null_stub as *const () as usize;
     let ok = status_ok_stub as *const () as usize;
@@ -5680,10 +5728,10 @@ fn cfnetwork_symbol(symbol: &str) -> Option<usize> {
         "_CFHTTPMessageCreateRequest"
         | "_CFHTTPMessageCopySerializedMessage"
         | "_CFNetworkCopySystemProxySettings"
-        | "_CFReadStreamCreateForHTTPRequest"
         | "_CFReadStreamCreateWithFTPURL"
         | "_CFHostCreateWithName"
         | "_CFHostGetAddressing" => Some(null),
+        "_CFReadStreamCreateForHTTPRequest" => Some(cf_read_stream_for_http_stub as *const () as usize),
         "_CFHTTPMessageAddAuthentication"
         | "_CFHTTPMessageAppendBytes"
         | "_CFHTTPMessageSetHeaderFieldValue"
@@ -7928,6 +7976,250 @@ mod tests {
             let d_cur = pear_libobjc::message::lookup_for_send(gc_cls, s_cur);
             let f_cur: extern "C" fn(Id, Sel) -> Id = std::mem::transmute(d_cur.imp);
             assert!(f_cur(d_cur.receiver, s_cur).is_null());
+        }
+    }
+
+    #[test]
+    fn phase5_18_nsurlconnection_delegate_sync_and_async() {
+        use std::ffi::c_void;
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::atomic::AtomicI32;
+        use std::sync::{Arc, Condvar, Mutex, Once, OnceLock};
+        use std::time::Duration;
+
+        init();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let srv = std::thread::spawn(move || {
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 1024];
+                loop {
+                    let n = stream.read(&mut buf).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    raw.extend_from_slice(&buf[..n]);
+                    if raw.windows(4).any(|w| w == b"\r\n\r\n") {
+                        let req_str = String::from_utf8_lossy(&raw);
+                        let req_line = req_str.lines().next().unwrap_or("");
+                        let body = if req_line.starts_with("GET /del") {
+                            b"conn-del-ok".as_slice()
+                        } else if req_line.starts_with("GET /sync") {
+                            b"conn-sync-ok".as_slice()
+                        } else {
+                            b"conn-async-ok".as_slice()
+                        };
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        stream.write_all(resp.as_bytes()).unwrap();
+                        stream.write_all(body).unwrap();
+                        break;
+                    }
+                }
+            }
+        });
+
+        unsafe {
+            let url_cls = objc_rt::class_named("NSURL").unwrap() as Id;
+            let req_cls = objc_rt::class_named("NSURLRequest").unwrap() as Id;
+            let conn_cls = NSURLCONNECTION_CLASS.ptr() as Id;
+
+            let mk_req = |path: &str| -> Id {
+                let u_str = pear_foundation::nsstring_from_rust(&format!("http://127.0.0.1:{port}{path}"));
+                let s_u = objc_rt::sel("URLWithString:");
+                let d_u = pear_libobjc::message::lookup_for_send(url_cls, s_u);
+                let f_u: extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(d_u.imp);
+                let u = f_u(d_u.receiver, s_u, u_str);
+                let s_r = objc_rt::sel("requestWithURL:");
+                let d_r = pear_libobjc::message::lookup_for_send(req_cls, s_r);
+                let f_r: extern "C" fn(Id, Sel, Id) -> Id = std::mem::transmute(d_r.imp);
+                f_r(d_r.receiver, s_r, u)
+            };
+
+            // 1. Delegate mode (startImmediately = false, then explicit start)
+            #[derive(Default)]
+            struct DelSt {
+                status: isize,
+                data: Vec<u8>,
+                done: bool,
+                err: usize,
+            }
+            static DEL_ST: OnceLock<(Mutex<DelSt>, Condvar)> = OnceLock::new();
+            let (dl_m, dl_cv) = DEL_ST.get_or_init(|| (Mutex::new(DelSt::default()), Condvar::new()));
+            *dl_m.lock().unwrap() = DelSt::default();
+
+            extern "C" fn conn_did_resp(_s: Id, _c: Sel, _conn: Id, resp: Id) {
+                unsafe {
+                    let s_sc = objc_rt::sel("statusCode");
+                    let d = pear_libobjc::message::lookup_for_send(resp, s_sc);
+                    let f: extern "C" fn(Id, Sel) -> isize = std::mem::transmute(d.imp);
+                    let sc = f(d.receiver, s_sc);
+                    if let Some((m, _)) = DEL_ST.get() {
+                        m.lock().unwrap().status = sc;
+                    }
+                }
+            }
+            extern "C" fn conn_did_data(_s: Id, _c: Sel, _conn: Id, data: Id) {
+                if let Some(b) = pear_foundation::rust_bytes_from_nsdata(data) {
+                    if let Some((m, _)) = DEL_ST.get() {
+                        m.lock().unwrap().data.extend_from_slice(&b);
+                    }
+                }
+            }
+            extern "C" fn conn_did_finish(_s: Id, _c: Sel, _conn: Id) {
+                if let Some((m, cv)) = DEL_ST.get() {
+                    m.lock().unwrap().done = true;
+                    cv.notify_all();
+                }
+            }
+            extern "C" fn conn_did_fail(_s: Id, _c: Sel, _conn: Id, err: Id) {
+                if let Some((m, cv)) = DEL_ST.get() {
+                    let mut g = m.lock().unwrap();
+                    g.err = err as usize;
+                    g.done = true;
+                    cv.notify_all();
+                }
+            }
+            static DEL_META: pear_libobjc::object::StaticClass =
+                pear_libobjc::object::StaticClass(std::cell::UnsafeCell::new(pear_libobjc::abi::ClassT {
+                    isa: &raw const NSOBJECT_META as *const pear_libobjc::abi::ClassT,
+                    superclass: &raw const NSOBJECT_META as *const pear_libobjc::abi::ClassT,
+                    cache: &raw const EMPTY_CACHE as *const c_void,
+                    vtable: std::ptr::null(),
+                    bits: 0,
+                }));
+            static DEL_CLS: pear_libobjc::object::StaticClass =
+                pear_libobjc::object::StaticClass(std::cell::UnsafeCell::new(pear_libobjc::abi::ClassT {
+                    isa: &raw const DEL_META as *const pear_libobjc::abi::ClassT,
+                    superclass: &raw const NSOBJECT_CLASS as *const pear_libobjc::abi::ClassT,
+                    cache: &raw const EMPTY_CACHE as *const c_void,
+                    vtable: std::ptr::null(),
+                    bits: 0,
+                }));
+            static ONCE: Once = Once::new();
+            ONCE.call_once(|| {
+                let imp_fn = |p: *const ()| -> pear_libobjc::abi::Imp { std::mem::transmute(p) };
+                objc_rt::register_builtin(
+                    DEL_CLS.ptr(),
+                    DEL_META.ptr(),
+                    "PearTestConnDelegate518",
+                    16,
+                    &[
+                        ("connection:didReceiveResponse:", imp_fn(conn_did_resp as *const ())),
+                        ("connection:didReceiveData:", imp_fn(conn_did_data as *const ())),
+                        ("connectionDidFinishLoading:", imp_fn(conn_did_finish as *const ())),
+                        ("connection:didFailWithError:", imp_fn(conn_did_fail as *const ())),
+                    ],
+                    &[],
+                );
+            });
+
+            let del = alloc(DEL_CLS.ptr());
+            let conn = alloc(NSURLCONNECTION_CLASS.ptr());
+            let req1 = mk_req("/del");
+            let s_init = objc_rt::sel("initWithRequest:delegate:startImmediately:");
+            let d_init = pear_libobjc::message::lookup_for_send(conn, s_init);
+            let f_init: extern "C" fn(Id, Sel, Id, Id, bool) -> Id = std::mem::transmute(d_init.imp);
+            assert_eq!(f_init(d_init.receiver, s_init, req1, del, false), conn);
+
+            let s_start = objc_rt::sel("start");
+            let d_start = pear_libobjc::message::lookup_for_send(conn, s_start);
+            let f_start: extern "C" fn(Id, Sel) = std::mem::transmute(d_start.imp);
+            f_start(d_start.receiver, s_start);
+
+            {
+                let g = dl_m.lock().unwrap();
+                let (g2, _) = dl_cv
+                    .wait_timeout_while(g, Duration::from_secs(5), |s| !s.done)
+                    .unwrap();
+                assert!(g2.done && g2.err == 0);
+                assert_eq!(g2.status, 200);
+                assert_eq!(g2.data, b"conn-del-ok");
+            }
+
+            // 2. Synchronous request
+            let req2 = mk_req("/sync");
+            let mut sync_resp: Id = std::ptr::null_mut();
+            let mut sync_err: Id = 0x1usize as Id;
+            let s_sync = objc_rt::sel("sendSynchronousRequest:returningResponse:error:");
+            let d_sync = pear_libobjc::message::lookup_for_send(conn_cls, s_sync);
+            let f_sync: extern "C" fn(Id, Sel, Id, *mut Id, *mut Id) -> Id =
+                std::mem::transmute(d_sync.imp);
+            let sync_data = f_sync(d_sync.receiver, s_sync, req2, &mut sync_resp, &mut sync_err);
+            assert!(sync_err.is_null() && !sync_resp.is_null() && !sync_data.is_null());
+            let s_sc = objc_rt::sel("statusCode");
+            let d_sc = pear_libobjc::message::lookup_for_send(sync_resp, s_sc);
+            let f_sc: extern "C" fn(Id, Sel) -> isize = std::mem::transmute(d_sc.imp);
+            assert_eq!(f_sc(d_sc.receiver, s_sc), 200);
+            assert_eq!(pear_foundation::rust_bytes_from_nsdata(sync_data).as_deref(), Some(&b"conn-sync-ok"[..]));
+
+            // 3. Asynchronous request completion block (resp, data, err)
+            #[repr(C)]
+            struct AsyncBlk {
+                isa: *const pear_libobjc::abi::ClassT,
+                flags: AtomicI32,
+                reserved: i32,
+                invoke: *const c_void,
+                descriptor: *const pear_libobjc::blocks::BlockDescriptor1,
+                state: *const Mutex<(bool, usize, usize, usize)>,
+                cv: *const Condvar,
+            }
+            static ASYNC_DESC: pear_libobjc::blocks::BlockDescriptor1 =
+                pear_libobjc::blocks::BlockDescriptor1 {
+                    reserved: 0,
+                    size: std::mem::size_of::<AsyncBlk>(),
+                };
+            extern "C" fn async_inv(b: *mut c_void, resp: Id, data: Id, err: Id) {
+                unsafe {
+                    let blk = &*(b as *const AsyncBlk);
+                    *(*blk.state).lock().unwrap() = (true, resp as usize, data as usize, err as usize);
+                    (*blk.cv).notify_all();
+                }
+            }
+            let st_a = Arc::new(Mutex::new((false, 0usize, 0usize, 0usize)));
+            let cv_a = Arc::new(Condvar::new());
+            let mut blk = AsyncBlk {
+                isa: pear_libobjc::blocks::NSGLOBALBLOCK_CLASS.ptr(),
+                flags: AtomicI32::new(1 << 28),
+                reserved: 0,
+                invoke: async_inv as *const c_void,
+                descriptor: &ASYNC_DESC,
+                state: Arc::as_ptr(&st_a),
+                cv: Arc::as_ptr(&cv_a),
+            };
+            let req3 = mk_req("/async");
+            let s_async = objc_rt::sel("sendAsynchronousRequest:queue:completionHandler:");
+            let d_async = pear_libobjc::message::lookup_for_send(conn_cls, s_async);
+            let f_async: extern "C" fn(Id, Sel, Id, Id, *const c_void) =
+                std::mem::transmute(d_async.imp);
+            f_async(
+                d_async.receiver,
+                s_async,
+                req3,
+                std::ptr::null_mut(),
+                &mut blk as *mut AsyncBlk as *const c_void,
+            );
+            let (done_a, resp_p, data_p, err_p) = {
+                let g = st_a.lock().unwrap();
+                let (g2, _) = cv_a
+                    .wait_timeout_while(g, Duration::from_secs(5), |s| !s.0)
+                    .unwrap();
+                *g2
+            };
+            assert!(done_a && err_p == 0 && resp_p != 0 && data_p != 0);
+            let d_sc2 = pear_libobjc::message::lookup_for_send(resp_p as Id, s_sc);
+            let f_sc2: extern "C" fn(Id, Sel) -> isize = std::mem::transmute(d_sc2.imp);
+            assert_eq!(f_sc2(d_sc2.receiver, s_sc), 200);
+            assert_eq!(
+                pear_foundation::rust_bytes_from_nsdata(data_p as Id).as_deref(),
+                Some(&b"conn-async-ok"[..])
+            );
+            let _ = srv.join();
         }
     }
 }
