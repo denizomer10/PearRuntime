@@ -3902,14 +3902,18 @@ extern "C" fn arr_reverse_object_enumerator(this: Id, _cmd: Sel) -> Id {
 }
 
 extern "C" fn dict_key_enumerator(this: Id, _cmd: Sel) -> Id {
-    let items = if this.is_null() {
+    let key_names: Vec<String> = if this.is_null() {
         Vec::new()
     } else {
         match store().lock().unwrap().get(&(this as usize)) {
-            Some(Backing::Dict(m)) => m.keys().map(|k| nsstring_from_rust(k) as usize).collect(),
+            Some(Backing::Dict(m)) => m.keys().cloned().collect(),
             _ => Vec::new(),
         }
     };
+    let items: Vec<usize> = key_names
+        .iter()
+        .map(|k| nsstring_from_rust(k) as usize)
+        .collect();
     let en = unsafe { alloc_with_backing(NSENUMERATOR_CLASS.ptr(), Backing::Arr(items)) };
     ENUM_CURSORS
         .lock()
@@ -3955,19 +3959,22 @@ extern "C" fn enum_all_objects(this: Id, _cmd: Sel) -> Id {
     let idx = {
         let mut g = ENUM_CURSORS.lock().unwrap();
         let entry = g.get_or_insert_with(HashMap::new).entry(this as usize).or_insert(0);
-        let cur = *entry;
-        cur
+        *entry
     };
-    let rest: Vec<usize> = match store().lock().unwrap().get(&(this as usize)) {
-        Some(Backing::Arr(v)) if idx < v.len() => {
-            let slice = v[idx..].to_vec();
-            if let Some(m) = ENUM_CURSORS.lock().unwrap().as_mut() {
-                m.insert(this as usize, v.len());
-            }
-            slice.into_iter().map(|p| retain(p as Id) as usize).collect()
+    let (rest_raw, total_len) = match store().lock().unwrap().get(&(this as usize)) {
+        Some(Backing::Arr(v)) => {
+            let len = v.len();
+            let slice = if idx < len { v[idx..].to_vec() } else { Vec::new() };
+            (slice, len)
         }
-        _ => Vec::new(),
+        _ => (Vec::new(), 0),
     };
+    if !rest_raw.is_empty() {
+        if let Some(m) = ENUM_CURSORS.lock().unwrap().as_mut() {
+            m.insert(this as usize, total_len);
+        }
+    }
+    let rest: Vec<usize> = rest_raw.into_iter().map(|p| retain(p as Id) as usize).collect();
     unsafe { alloc_with_backing(NSARRAY_CLASS.ptr(), Backing::Arr(rest)) }
 }
 
@@ -6019,6 +6026,76 @@ mod tests {
             assert!(!rust_str_from_nsstring(send0(err3, "localizedDescription"))
                 .unwrap_or_default()
                 .is_empty());
+        }
+    }
+
+    #[test]
+    fn phase5_19_dict_key_enumerator_and_all_objects_no_deadlock() {
+        init_foundation();
+        unsafe {
+            let dict = nsdict_from_pairs(vec![
+                ("Content-Type".into(), nsstring_from_rust("application/json")),
+                ("X-Test".into(), nsstring_from_rust("123")),
+                ("Server".into(), nsstring_from_rust("pear")),
+            ]);
+
+            // 1. Iterate all keys via keyEnumerator + nextObject without deadlocking store()
+            let ke1: Id = send0(dict, "keyEnumerator");
+            let mut got_keys = Vec::new();
+            loop {
+                let k: Id = send0(ke1, "nextObject");
+                if k.is_null() {
+                    break;
+                }
+                got_keys.push(rust_str_from_nsstring(k).unwrap());
+            }
+            got_keys.sort();
+            assert_eq!(got_keys, vec!["Content-Type", "Server", "X-Test"]);
+
+            // 2. Read 1 key then drain remaining 2 via allObjects
+            let ke2: Id = send0(dict, "keyEnumerator");
+            let first: Id = send0(ke2, "nextObject");
+            assert!(!first.is_null());
+            let rem_arr: Id = send0(ke2, "allObjects");
+            assert_eq!(cf_array_get_count(rem_arr), 2);
+            let after: Id = send0(ke2, "nextObject");
+            assert!(after.is_null());
+
+            // 3. Verify NSHTTPURLResponse allHeaderFields + keyEnumerator
+            let hdr_dict = nsdict_from_pairs(vec![
+                ("Content-Length".into(), nsstring_from_rust("3020")),
+                ("Content-Type".into(), nsstring_from_rust("text/plain")),
+            ]);
+            let u: Id = send1(
+                NSURL_CLASS.ptr() as Id,
+                "URLWithString:",
+                nsstring_from_rust("https://example.com/query_region_list"),
+            );
+            let resp_alloc: Id = send0(NSHTTPURLRESPONSE_CLASS.ptr() as Id, "alloc");
+            let s_init = sel("initWithURL:statusCode:HTTPVersion:headerFields:");
+            let d_init = lookup_for_send(resp_alloc, s_init);
+            let f_init: extern "C" fn(Id, Sel, Id, isize, Id, Id) -> Id =
+                std::mem::transmute(d_init.imp);
+            let resp = f_init(
+                d_init.receiver,
+                s_init,
+                u,
+                200,
+                nsstring_from_rust("HTTP/1.1"),
+                hdr_dict,
+            );
+            let all_hdrs: Id = send0(resp, "allHeaderFields");
+            let ke3: Id = send0(all_hdrs, "keyEnumerator");
+            let mut hdr_keys = Vec::new();
+            loop {
+                let k: Id = send0(ke3, "nextObject");
+                if k.is_null() {
+                    break;
+                }
+                hdr_keys.push(rust_str_from_nsstring(k).unwrap());
+            }
+            hdr_keys.sort();
+            assert_eq!(hdr_keys, vec!["Content-Length", "Content-Type"]);
         }
     }
 }
