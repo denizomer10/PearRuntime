@@ -1,269 +1,107 @@
-# PearRuntime — handoff for the next agent
+# PearRuntime — Development Handoff
 
-Last updated 2026-11-21. Read this first, then `docs/independence-plan.md`
-(the full plan: inventory, research, host boundary, milestones M1–M10,
-validation matrix, baseline). This file says what is done, what is half-done,
-and exactly where to pick up.
+**Last updated:** 2026-11-27 (post-Phase 5.19; ready for **Phase 5.20**)
 
-## Goal and ground rules
+Start here for active engineering work. Architecture & historical context live in:
+- [`docs/independence-plan.md`](independence-plan.md) (full dependency inventory, host boundary, M1–M10 + Phases 1–5.19)
+- [`docs/linux-metal-swift-roadmap.md`](linux-metal-swift-roadmap.md) (5-layer ARM64 Metal + Swift roadmap, Turkish)
+- [`docs/independent-runtime.md`](independent-runtime.md) (clean-room & licensing rules, Turkish)
+- [`docs/HANDOFF-2026-11-14.md`](HANDOFF-2026-11-14.md) (archived pre-Porting `PearHost` history: GTA VC DE, Minecraft)
 
-- **Goal:** PearRuntime becomes an independent iOS compatibility runtime:
-  32- and 64-bit iOS apps and games on macOS, later Linux and Windows,
-  without Mac Catalyst, without `/System/iOSSupport`, eventually without
-  dyld/libobjc/Apple frameworks. 32-bit is handled by PearLegacyEngine
-  (touchHLE fork, `third_party/legacy-engine`); this work is the 64-bit path.
-- **Rust first.** No game-specific hacks. Never claim independence without
-  evidence (a test, a probe, a comparison).
-- **No external crates.** The user chose to write our own (image decoders,
-  loader, ObjC runtime). The workspace has zero crates.io dependencies; keep
-  it that way unless the user says otherwise.
-- **Git:** `main` is the only branch in both repos (the work branch
-  `pearhost-rust-completion` was merged into `main` and deleted on
-  2026-11-22). Ask the user whether to work on `main` or on a branch of its
-  own for a task; **never push** without asking. Commit the runtime
-  submodule first (`runtime/`), then the parent (`git add runtime`), and
-  push in the same order (PearSilicon points to a PearRuntime commit, which
-  must already be on GitHub). Commit messages end with
-  `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
-- **The user's screen:** never capture the whole screen; game windows only
-  (`tools/host-winid.swift`).
-- The user writes Turkish; replies so far were in English.
+---
 
-## Clean-room rules (binding)
+## 1. Non-Negotiable Ground Rules
 
-`docs/independent-runtime.md` §2–3 (Turkish) governs all code:
-- **Allowed sources:** public SDK headers and `.tbd` stubs (interface only,
-  never copied into the repo), Apple's public documentation, Apple's open
-  source (`apple-oss-distributions/*`: objc4, dyld, xnu, CF…; APSL 2.0 — if
-  code is ever copied it lives under `third_party/<project>` with its
-  license), the analysed apps' own binaries (imports, selectors, observed
-  calls), black-box observation, and public specs.
-- **Forbidden:** disassembling/decompiling Apple binaries (iOSSupport, the
-  dyld shared cache), class-dump output, leaked source, notes derived from
-  them.
-- **Every file's header names its source** ("Clean-room: from …"). The
-  crates added in this work carry such lines (ABI layouts from objc4/dyld
-  open source and public headers, formats from their public specs).
+- **Clean-room only:** Follow [`docs/independent-runtime.md`](independent-runtime.md) §2–3 strictly. Never disassemble `/System/iOSSupport` or `dyld_shared_cache`, never commit leaked or decompiled material, and cite public docs/specs or observed app behavior in module headers.
+- **Rust first & zero `crates.io` deps in core runtime:** Keep the 12 pure-Rust runtime crates free of external `crates.io` dependencies. No game-specific hacks — fix underlying ABI, framework, or Metal/Foundation semantics cleanly and add targeted unit tests.
+- **Never commit `rust/Cargo.lock`:** An untracked/dirty pre-existing `M rust/Cargo.lock` may exist in the working tree; stage ONLY modified source/doc files (`git add <paths>`).
+- **Never delete `archive/2026-11-22`:** That tag preserves the pre-monorepo commit history of `PearLegacyEngine` and `PearLegacyJIT` referenced by older `PearSilicon` releases.
+- **Never run `pearruntime` under `lldb`** and never capture the user's whole screen (window-only probes via [`tools/host-winid.swift`](../tools/host-winid.swift)).
 
-Scope note: `independent-runtime.md` (2026-11-14) declared Linux/Vulkan
-out of scope; the user later asked for full independence (macOS, Linux,
-Windows), which `independence-plan.md` follows. The previous handoff is
-kept as `docs/HANDOFF-2026-11-14.md` (PearHost history: GTA VC DE reaching
-gameplay, Minecraft world loading, input/keyboard notes, missing-call
-report format); its ObjC `host/` layout no longer exists (ported to Rust).
+---
 
-## Repository map (runtime/)
+## 2. Active Workspace Map (27 Crates)
 
-| Path | What |
-|---|---|
-| `rust/crates/pear-host` | Host OS boundary: `HostPlatform` trait (windows, screen, display link, pasteboard, pickers, share, alerts, run loop, `surface()` → `NativeSurface`), `GuestEvents` sink (input, lifecycle), `NullHost`. No Apple deps; tested on Linux. |
-| `rust/crates/pear-host-macos` | The only AppKit user: `MacHost`, `PearBackend*` C exports, `PearHostView`, delegates. |
-| `rust/crates/pear-uikit` | PearRuntime's UIKit (built into `build/host/UIKit.framework`). `events.rs` (sink), `image_decode.rs` (UIImage via pear-image), `graphics.rs` (UIFont on CoreText, UILabel, UIImage). |
-| `rust/crates/pear-gles`, `pear-opengles` | OpenGLES.framework on PearANGLE; forwarders are aarch64 asm (Mach-O and ELF relocations). |
-| `rust/crates/pear-image` | Own decoders: inflate, PNG (+CgBI, Adam7, gAMA), JPEG (baseline/progressive, fancy upsampling). |
-| `rust/crates/pear-macho` | Mach-O parser: segments/sections, dylibs, fixups (dyld-info opcodes + chained), exports trie, initializers. |
-| `rust/crates/pear-dyld` | Own loader: maps an image below 2^47, applies fixups via a `Resolver`, TLV (`tlv_get_addr` thunk), initializers, exports. Fixtures in `fixtures/`. |
-| `rust/crates/pear-libobjc` | Own Objective-C runtime (Apple 64-bit ABI). Fixture in `fixtures/fixture.m`. |
-| `host/build-host.sh` | Builds `build/host/*.framework` (UIKit, OpenGLES, MetalKit, stubs). `host/UIFoundation.tbd`: UIKit re-exports UIFoundation (not AppKit). |
-| `tools/` | Probes and comparisons, listed below. |
-| `docs/independence-plan.md` | The plan; every finished step is recorded under its milestone with its evidence. |
-| `third_party/angle` | PearANGLE (ANGLE fork, Metal only). Build: `host/build-pearangle.sh --sync` the first time (Chromium deps into ignored folders), then without `--sync`. |
-| `third_party/legacy-engine`, `third_party/legacy-jit` | PearLegacyEngine (touchHLE fork, 32-bit) and PearLegacyJIT (Dynarmic fork). The engine finds the JIT at `../legacy-jit` by itself; bundled SDL/stb/openal-soft and their upstream commits: `vendor/VENDORED.txt`. |
-| `debug/` | PearDebug (Swift package; PearSilicon uses it by path). |
+| Layer | Crates (`rust/crates/`) | Notes |
+| --- | --- | --- |
+| **Loader & ABI** | `pear-macho`, `pear-dyld`, `pear-libobjc`, `pear-swift-rt`, `pear-runtime`, `pear-core` | Pure-Rust `arm64` Mach-O `@rpath` loader, Apple 64-bit ObjC ABI, Swift 5 interop, Darwin/C++ ABI, `pearruntime` CLI |
+| **Frameworks & Graphics** | `pear-foundation`, `pear-graphics`, `pear-image`, `pear-metal-vk`, `pear-keychain` | Foundation + curl-backed `NSURLSession`/`NSURLConnection`, PNG (`CgBI`)/JPEG decoders, Metal → Vulkan + `MTLB`/AIR → SPIR-V + Khronos ASTC + scanline rasterizer, Keychain |
+| **Host Platforms & Input** | `pear-host`, `pear-host-macos`, `pear-host-linux`, `pear-controller` | `HostPlatform` trait, AppKit backend (`MacHost`), Linux X11/Wayland backend, BLE/HID gamepads |
+| **Native `PearHost` (`build/host/`)** | `pear-objc`, `pear-uikit`, `pear-metalkit`, `pear-gles`, `pear-glkit`, `pear-nib`, `pear-host-frameworks`, `pear-empty-framework`, `pear-cxxcompat`, `pear-swift-support` | Zero-ObjC macOS `PearHost` frameworks + Metal-only `PearANGLE` (`third_party/angle`); note `pear-catalyst` & `pear-opengles` were removed |
+| **32-bit Legacy & JIT** | `pear-legacy-host`, `pear-jit` | `PearLegacyEngine` (`third_party/legacy-engine`) + Dynarmic JIT (`third_party/legacy-jit`) |
 
-### One repository for everything (2026-11-22)
+---
 
-PearANGLE, PearLegacyEngine, PearLegacyJIT and PearDebug live only here now;
-nothing builds from their former standalone repositories:
-`build-all.sh` and PearSilicon's `scripts/setup-legacy-engine.sh` /
-`build-app.sh` use `runtime/third_party/*`, and the shipped `SOURCE.txt`
-(GPL-3.0 engine) names this repository at the build's commit
-(`scripts/stage-legacy-licenses.sh`). The four standalone repositories
-were deleted on 2026-11-22. `main` was then reduced to a single commit; all
-earlier history — PearRuntime's own, and PearLegacyEngine's (trunk) and
-PearLegacyJIT's (master) with their original commit IDs, which releases up
-to v0.9.2 cite as Corresponding Source and PearSilicon's history points
-into — is kept under the tag **`archive/2026-11-22`. Never delete that tag.**
-Origins and licenses of everything in `third_party/`: `THIRD_PARTY_NOTICES.md`.
+## 3. Verified State at End of Phase 5.19 (`8a85b96`)
 
-PearSilicon (parent) launches 64-bit apps through PearHost
-(`PearHostPreparer.swift`, `AppLauncher.swift` — note the transitional
-`if true` there, M2 work).
+1. **12-Crate Pure-Rust Test Suite:** **68 / 68 tests pass** (`0` failures, `0` new warnings).
+2. **`GenshinImpact.app` (`v7.2.0`) Missing-Symbol Audit (`--list-missing-summary`):**
+   - `images=3`, `classes=1472`, **`unrealized=0`**, `categories=34`, `selectors=12556`, **`missing symbols (0)`**.
+3. **Headless Boot, Networking & Frame Capture (`PEAR_NET_TRACE=1`):**
+   - Boots Unity `il2cpp` past `LogoPageContext` into `Home LoadScene` → `LoginMainPageContext OnAgreement/OnPreInit/InitServerDispatch` → `NetworkManager ConnectGlobalDispatchServer`.
+   - `NSURLConnection` completes real HTTPS `GET https://dispatchosglobal.yuanshen.com/query_region_list?...` (`status=200`, `bytes=3020`) and triggers `NetworkManager OnConnectGlobalDispatch`.
+   - Renders `1280×720` in-game UI dialog (`distinct_colors=1254`): displays `"Network error / Failed to connect to the server 4204 / Confirm"`.
+4. **Key Recent Milestones (Phases 5.15 – 5.19):**
+   - **5.15 (`22ac940`):** Fixed ARC `+1` UAF in `-[PearMTLTexture newTextureViewWithPixelFormat:]` + view variants & `default_device_singleton()`.
+   - **5.16 (`761b6c6`):** Live `Arc<RwLock<Vec<u8>>>` texture view aliasing, `DrawTransform::{Matrix, RawNdc, Reject}` clip guards, division-free monomorphized `rasterize_textured_span<POT, BLEND, MODULATE>`.
+   - **5.17 (`d7bb7f7`):** Real `NSURLSession` / `NSURLSessionTask` / `NSHTTPURLResponse` / `NSError` HTTP/HTTPS stack in [`pear-foundation/src/url_session.rs`](../rust/crates/pear-foundation/src/url_session.rs).
+   - **5.18 (`801a9bd`):** Real `NSURLConnection` (delegate / sync / async) + `PEAR_NET_TRACE=1` telemetry across `NSURLSession`, `NSURLConnection`, `SecureTransport`, `CFHTTPMessage`, and `Network.framework`.
+   - **5.19 (`8a85b96`):** Fixed `store()` self-deadlock in `NSDictionary keyEnumerator` & `enum_all_objects` AB/BA lock ordering in [`pear-foundation/src/lib.rs`](../rust/crates/pear-foundation/src/lib.rs).
 
-## Status by milestone
+---
 
-| Milestone | State |
-|---|---|
-| M1 inventory/plan/baseline | Done (`docs/independence-plan.md`, `docs/runs/baseline-2026-11-21.md`). |
-| M2 retire Catalyst | **Done:** `AppLauncher` drops `if true` & Catalyst launch paths; `PackageInstaller` installs 64-bit apps straight into PearHost form; `AppDetailView` drops the Catalyst/PearHost toggle. |
-| M3 host trait | **Done** (steps 1–5): trait, AppKit moved to pear-host-macos, pasteboard/picker/share/a11y, `GuestEvents` sink, `NativeSurface`. |
-| M4 text/images | **Done:** UIFont on CoreText only (no AppKit in pear-uikit); UIKit re-exports UIFoundation; own PNG/JPEG decoders behind UIImage; `pear-graphics` crate provides portable RGBA `CGBitmapCanvas`, `CGColor`, `CGImage`, `CGRect` math, `CATransform3D`, and pure-Rust 5x7 bitmap text rasterizer (`draw_text`/`measure_text`) for non-macOS hosts. |
-| M5 GLES on Vulkan | **Done (build/surface ready):** `host/build-pearangle.sh --linux-vulkan` + `host/pearangle-linux-vulkan-args.gn` configured for arm64 Linux Vulkan; `pear-host` `NativeSurface::egl_window()` bridges Wayland/Xlib surfaces. |
-| M6 own Mach-O loader | **Done (steps 1–2 + TLV init):** `pear-macho` supports arm64e chained pointer formats (`1, 7, 9`); `pear-dyld` resolves re-exported symbols (`symbol_with_resolver`) and runs `S_THREAD_LOCAL_INIT_FUNCTION_POINTERS` per-thread TLV initializers (`tlv::register`); 6/6 `pear-dyld` & 2/2 `pear-macho` tests pass on macOS & Linux. |
-| M7 own ObjC runtime | **Done (steps 1–3):** 158/158 census symbols (including all 23 register variants); per-class lock-free ARM64 assembly cache, tagged pointers, Swift class flags (`bits & 3`), DWARF LSDA `___objc_personality_v0`, blocks, properties, `@synchronized`, associated objects, reflection, runtime classes; `fixture.m`, `fixture2.m`, and LSDA unit test pass on macOS & Linux. |
-| M8 Foundation/CF | **Done (core + census):** `pear-foundation` crate provides pure-Rust `NSString`, `NSMutableString`, `NSArray`, `NSMutableArray`, `NSDictionary`, `NSMutableDictionary`, `NSData`, `NSMutableData`, `NSNumber`, `NSBundle`, `NSNotificationCenter`, `NSRunLoop`, `NSDate`, `NSError`, `NSFileManager`, `NSURL`, `NSSet`, `NSUserDefaults`, `NSJSONSerialization`, `NSCharacterSet`, `NSLocale`, `NSURLRequest`/`NSMutableURLRequest`, `NSUUID`, `NSProcessInfo`, `___CFConstantStringClassReference`, and CoreFoundation C APIs on top of `pear-libobjc`; tested on macOS & Linux. |
-| M9 Linux host backend, M10 | **Done (Linux-first; Windows cancelled):** `pear-host-linux` implements `HostPlatform` with dynamic `libX11.so.6` `dlopen` window creation + headless fallback, `PEAR_HOST_SCREEN`, pasteboard, `xdg-open`, run loop; `pear-runtime` unifies `pear-macho`, `pear-dyld`, `pear-libobjc`, `pear-foundation`, `pear-graphics`, `pear-host`, `pear-image` and guest `UIKit`/`QuartzCore` classes; 30/30 workspace tests pass on macOS & arm64 Linux. |
+## 4. Exact Build, Test & Probe Commands
 
-## Census check script (for future app audits)
+### Run the 12-Crate Pure-Rust Test Suite
+**Do NOT use `cargo test --workspace`** (that pulls in macOS framework targets and fails in test harnesses). Always test the 12 portable crates explicitly:
 
-Census-driven: `docs/census/*.json` lists every libobjc symbol the 23 apps
-import. Step 1 provided 39 of 158. The script used (rerun it after each
-change; it reads `pub fn symbol` in `pear-libobjc/src/lib.rs`):
-
-```bash
-cd runtime && python3 - <<'EOF'
-import json, glob, re, collections
-have=set(re.findall(r'"(_[A-Za-z_$0-9]+)"', open('rust/crates/pear-libobjc/src/lib.rs').read().split('pub fn symbol')[1]))
-apps=collections.defaultdict(set)
-for f in glob.glob('docs/census/*.json'):
-    d=json.load(open(f)); lib=d.get('libraries',{}).get('libobjc')
-    if not lib: continue
-    app=f.split('/')[-1].rsplit('-',1)[0]
-    for s in lib.get('symbols',[]): apps[s].add(app)
-    for c in lib.get('classes',[]): apps['_OBJC_CLASS_$_'+c].add(app)
-for n,k in sorted(((len(v),k) for k,v in apps.items() if k not in have), reverse=True): print(n,k)
-EOF
+```sh
+cargo test --manifest-path rust/Cargo.toml \
+  -p pear-image -p pear-dyld -p pear-libobjc -p pear-foundation \
+  -p pear-graphics -p pear-metal-vk -p pear-swift-rt -p pear-host \
+  -p pear-host-linux -p pear-runtime -p pear-core -p pear-macho \
+  --lib --bins --tests
 ```
 
-(Register variants `_objc_retain_xN`/`_objc_release_xN` are matched in
-`message::register_variant`, so the script still lists them; they are done.)
+### Build & Run Standalone `pearruntime`
+> **CLI argument rule:** Pass the `.app` bundle or Mach-O path **before** any `--` flag.
 
-**Done in step 2 so far (builds; all tests pass on macOS and Linux):**
-- Methods are stable `MethodEntry { name, types, imp: AtomicUsize }`
-  (what a `Method` handle will point to); classes record `method_list`
-  (definition order), `ivars` (`IvarEntry`), `properties`, `image` name,
-  `building` flag. `runtime::lookup_method`, `own_method_entry`,
-  `register_dynamic`, `publish`, `all_classes`, `image_names` exist.
-- Pointer-format method lists now unique their selector names (bug fix:
-  older binaries' lookups would have missed).
-- `message.rs`: lookups return `Dispatch { imp, receiver }`; forwarding via
-  `+resolveInstanceMethod:`/`+resolveClassMethod:` then
-  `forwardingTargetForSelector:`; `objc_msgSendSuper`, `_objc_msgForward`;
-  `objc_retain_xN`/`objc_release_xN` (x1–x15, x19–x28).
+```sh
+cargo build --manifest-path rust/Cargo.toml --release -p pear-runtime --bin pearruntime
 
-**To do in step 2, in this order (each with a fixture check):**
-1. **Custom retain/release:** `objc_retain`/`objc_release`/`objc_autorelease`
-   bypass messages today; classes that override `-retain`/`-release`
-   (global blocks, singletons) must get the message. Compute "has custom RR"
-   per class (lookup of retain/release ≠ NSObject's) and send when true.
-2. **Blocks (libclosure, in a new `blocks.rs`):** `_Block_copy`,
-   `_Block_release`, `_Block_object_assign`, `_Block_object_dispose`,
-   byref copy/release, `_NSConcreteStackBlock/MallocBlock/GlobalBlock` as
-   real class objects (`__NSStackBlock__` etc. under `NSBlock` → NSObject,
-   with retain/release/copy methods), `objc_retainBlock`. These are
-   *libSystem* imports: resolvers must map them to pear-libobjc too.
-   `imp_implementationWithBlock` (+`imp_getBlock`/`imp_removeBlock`):
-   trampoline per block on a fresh RX page:
-   `mov x1, x0 (0xAA0003E1); ldr x0, +12 (0x58000060); ldr x16, [x0, #16] (0xF9400810); br x16 (0xD61F0200); .quad block`.
-3. **Properties / sync / associated objects (`props.rs`):**
-   `objc_getProperty`, `objc_setProperty` and its `_atomic`, `_nonatomic`,
-   `_atomic_copy`, `_nonatomic_copy` variants (striped locks), `objc_copyStruct`,
-   `objc_copyCppObjectAtomic`; `objc_sync_enter/exit` (recursive lock per
-   object); `objc_enumerationMutation` (abort with message);
-   `objc_set/get/removeAssociatedObjects` (policies 0, 1, 3, 01401, 01403;
-   released on dealloc — hook into `object::dispose`). NSObject also needs
-   `copy`/`mutableCopy` (→ `copyWithZone:`), `methodForSelector:`,
-   `doesNotRecognizeSelector:`, `forwardingTargetForSelector:` (nil),
-   `+resolveInstanceMethod:` (NO).
-4. **Reflection & runtime classes (`reflection.rs`):** `class_getName`,
-   `class_getInstanceMethod/ClassMethod`, `class_copyMethodList`,
-   `method_getName/getImplementation/setImplementation/getTypeEncoding/
-   getNumberOfArguments/copyArgumentType/copyReturnType/getArgumentType/
-   getReturnType/getDescription`, `method_exchangeImplementations`,
-   `class_getMethodImplementation`, `class_replaceMethod`,
-   `class_getInstanceVariable`, `ivar_getName/Offset/TypeEncoding`,
-   `class_copyIvarList`, `class_getInstanceSize`, `class_isMetaClass`,
-   `class_conformsToProtocol`, `class_addProtocol`, `class_copyProtocolList`,
-   `class_copyPropertyList`, `class_getProperty`, `property_getName/
-   getAttributes/copyAttributeList/copyAttributeValue`, `class_getImageName`,
-   `objc_copyClassNamesForImage`, `objc_copyImageNames`,
-   `objc_copyClassList`, `objc_getClassList`, `objc_getMetaClass`,
-   `objc_getRequiredClass`, `objc_getProtocol` (needs a protocol registry
-   filled from `__objc_protolist` in `register_image`), `protocol_getName`,
-   `protocol_getMethodDescription` (returns a 16-byte struct in x0/x1),
-   `protocol_copyMethodDescriptionList`, `protocol_conformsToProtocol`,
-   `sel_isEqual`, `object_getClassName`, `object_isClass`,
-   `object_getIvar/setIvar`, `object_getIndexedIvars`, `object_setClass`,
-   `class_createInstance`, `objc_constructInstance`,
-   `objc_destructInstance`, `objc_allocWithZone`, `_objc_rootAutorelease`,
-   `objc_allocateClassPair`/`class_addIvar`/`objc_registerClassPair`
-   (use `runtime::register_dynamic` + `publish`; such classes have no
-   `class_ro_t`, `bits = 0` — code that calls `runtime::ro()` must check for
-   null, as `call_load_methods` already does). Type encodings need a small
-   parser (qualifiers `rnNoORV`, `{}`, `()`, `[]`, `^`, `b<n>`, `@"Class"`,
-   `@?`, offset digits).
-5. **Exceptions:** for now `objc_exception_throw`/`rethrow`,
-   `objc_begin_catch/end_catch`, `objc_terminate` log and abort;
-   `_OBJC_EHTYPE_id`, `_objc_ehtype_vtable`, `__objc_empty_vtable` as
-   statics; `objc_setExceptionPreprocessor` stores and returns. Real
-   exceptions are a separate step: a real `__objc_personality_v0` (LSDA
-   parsing) plus an unwinder that knows the loaded images' unwind info
-   (`__unwind_info`/`__eh_frame` of pear-dyld images are invisible to
-   libgcc/libunwind on Linux).
-6. Extend the fixture: a second ObjC fixture (`fixtures/fixture2.m`,
-   rebuild with `build-fixtures.sh`) covering properties (atomic/nonatomic,
-   copy), `@synchronized`, associated objects, blocks (stack→heap, `__block`
-   captures, block properties), `imp_implementationWithBlock` +
-   `class_addMethod`, swizzling, reflection counts/offsets, a class made at
-   run time. Run on macOS **and** Linux.
-7. Then step 3: per-class message cache in assembly (every send currently
-   takes the Rust lookup with a global `RwLock<HashMap>` — correct but slow),
-   real exceptions, tagged pointers, Swift classes (`bits & 3`).
+# Missing symbol/class check
+rust/target/release/pearruntime build/host-apps/GenshinImpact.payload/Payload/GenshinImpact.app --list-missing-summary
 
-## How to build and verify
-
-```bash
-# Rust workspace (macOS)
-cd runtime/rust && cargo build && cargo test -p pear-macho -p pear-dyld -p pear-libobjc -p pear-image -p pear-host
-
-# Same on arm64 Linux (Apple `container`; if it says "XPC connection error":
-#   container system start --enable-kernel-install)
-container run --rm -v "$PWD":/src -w /src rust:1-bookworm bash -c \
-  'CARGO_TARGET_DIR=/tmp/t cargo test -q -p pear-macho -p pear-dyld -p pear-libobjc -p pear-image -p pear-host'
-
-# PearHost frameworks + probes (macOS)
-cd runtime && bash host/build-host.sh
-python3 tools/host-behavior-probe.py build/host --compare <earlier output>   # 51 facts (fonts, label pixels, EAGL, pasteboard…)
-python3 tools/host-event-probe.py build/host                                  # AppKit input → events() → UIView
-python3 tools/host-abi-census.py build/host --compare <earlier json>           # ObjC/C ABI parity
-find <app> -name '*.png' -o -name '*.jpg' | python3 tools/host-image-probe.py build/host   # UIImage vs ImageIO
-
-# Games (needs the external disk)
-tools/host-baseline.sh 25 burgershop     # one game; omit the filter for all 22
+# Headless boot + network trace + PPM frame dump (use a bounded timeout when probing UI loops)
+PEAR_NET_TRACE=1 PEAR_HEADLESS=1 PEAR_HEADLESS_FRAMES=450 PEAR_DUMP_FRAME=/tmp/genshin.ppm \
+  rust/target/release/pearruntime build/host-apps/GenshinImpact.payload/Payload/GenshinImpact.app
 ```
 
-Comparison tools for the loader/runtime/decoders (need the external disk):
-`tools/macho-fixups-compare.py` (pear-macho vs `dyld_info -fixups`),
-`pear-dyld --example load-check`, `pear-libobjc --example objc-register`,
-`pear-image --example imageio-compare | bench | decode-hash`.
-Write long outputs to files: zsh's multios makes `2>&1 >/dev/null | …`
-pipe stdout too.
+### Unified `PearHost` + `PearANGLE` + `PearLegacyEngine` Build & Probes
+```sh
+bash build-all.sh [--sync-angle] [--no-legacy]
+python3 tools/host-behavior-probe.py build/host --compare <prev.json>
+python3 tools/host-event-probe.py build/host
+python3 tools/host-abi-census.py build/host --compare <prev.json>
+```
 
-## Test data
+---
 
-External disk `/Volumes/Untitled/PearSilicon`: `ios-apps/` (22 decrypted
-apps), `Games/` (their data containers), `Work/host-apps/` (prepared copies
-and run logs). It **disconnects at times** — check `ls /Volumes` first; the
-last M7 check (objc-register on Linux) was skipped because of that.
+## 5. Next Priorities (Phase 5.20+)
 
-Known baseline (2026-11-21, unchanged through all steps): Burger Shop 2 and
-GTA VC render; GTA LCS stays alive with no window (since before M3 step 4;
-also with older builds — probably game state); Gutterball alive, window
-detection varies; 14 others reach launch and crash or miss symbols
-(YouTube: Swift UIKit symbol; Angry Birds Transformers:
-`UISceneWillDeactivateNotification`); Miku Flick is 32-bit (legacy engine).
+1. **Unblock Post-Dispatch Error `4204` (`OnConnectGlobalDispatch` → `query_cur_region`):**
+   - Inspect why Genshin Impact displays `4204` right after `query_region_list` succeeds (`200 OK`, `3020 B`).
+   - Top suspect: [`rust/crates/pear-runtime/src/security.rs`](../rust/crates/pear-runtime/src/security.rs) (`sec_key_copy_passthrough` currently copies bytes verbatim instead of performing real RSA decrypt/encrypt via `SecKeyRawDecrypt` / `SecKeyCreateDecryptedData`), or subsequent HTTPS/JSON dispatch handling after `query_region_list`.
+2. **Accelerate Software Rasterization & Advance Hardware Vulkan Rendering (`pear-metal-vk`):**
+   - `sample` profiling shows `UnityGfxDeviceWorker` spends ~90% of CPU inside `rasterize_textured_span` (`objc_metal.rs`). Add a 1:1 opaque scanline fast-path (`du_fp == 65536 && dv_fp == 0 && !BLEND && !MODULATE`) and optimize clear/blit passes, alongside hardware Vulkan / Lavapipe shader execution.
+3. **Linux ARM64 End-to-End Verification:**
+   - Re-verify `pearruntime` windowed Vulkan/X11 execution on ARM64 Linux (`pear-host-linux` + Mesa `lavapipe` / GPU driver).
 
-## Lessons that cost time
+---
 
-- Linux arm64 user space is 48-bit and maps high; Darwin code assumes
-  < 2^47 (objc4 masks). pear-dyld places images low; keep it.
-- `dyld_info` mislabels weak-coalescing binds and crashes on 4 big game
-  binaries; compare weak entries by address only.
-- clang folds constant `__attribute__((constructor))` bodies away: fixture
-  initializers must call an import.
-- macOS lets unhardened processes turn anonymous RW pages RX (no MAP_JIT
-  needed); hardened apps would need the dyld approach (map signed file).
-- ImageIO's JPEG decoder deviates from libjpeg-turbo by up to ~80 levels on
-  edges; pear-image matches libjpeg-turbo (checked against Chromium).
-- The in-app browser pane can serve as an independent reference decoder
-  (canvas `getImageData`).
+## 6. Hard-Won Technical Notes
+
+- **47-bit User VA Space (`objc4` compatibility):** Linux `aarch64` maps near `2^48`, whereas Apple Objective-C class-pointer bitmasks strip bits `>= 47`. [`pear-dyld`](../rust/crates/pear-dyld) intentionally maps images below `2^47`; preserve this invariant.
+- **No `sdiv` Inside Pixel Loops:** In [`pear-metal-vk/src/objc_metal.rs`](../rust/crates/pear-metal-vk/src/objc_metal.rs), monomorphized `#[inline(never)] rasterize_textured_span<POT, BLEND, MODULATE>` functions avoid LLVM emitting hardware `sdiv` instructions per pixel; inspect generated ARM64 (`otool -tV`) if modifying the rasterizer inner loop.
+- **Lock Ordering Around `pear-foundation` Store:** Never allocate NSObjects (`nsstring_from_rust`, `alloc_with_backing`) while holding `store().lock()`; snapshot keys/values and drop the store mutex first (`Phase 5.19`).
+- **Zsh `multios` Pitfall:** `cmd 2>&1 >/dev/null | grep ...` pipes stdout too under zsh; redirect explicitly to a log file when capturing traces.

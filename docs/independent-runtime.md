@@ -1,112 +1,96 @@
-# iOSSupport'suz PearRuntime: mimari ve temiz oda kuralları
+# iOSSupport'suz ve Bağımsız PearRuntime: Mimari ve Temiz Oda Kuralları
 
-Durum: 2026-11-14 itibarıyla ilk hedef (GTA: Vice City – Definitive Edition
-1.84, Unreal Engine 4, Metal) orijinal IPA'dan, Mac Catalyst dönüşümü ve
-iOSSupport olmadan oynanış sahnesine ulaşıyor; Minecraft (Bedrock, Metal,
-nib tabanlı açılış) ana ekrana ve dünya yüklemesine ulaşıyor. Güncel durum, çalıştırma adımları ve sıradaki işler için
-[HANDOFF.md](HANDOFF.md).
+**Güncelleme tarihi:** 2026-11-27
 
-## 1. Hedef ve mimari
+**Durum özeti:** PearRuntime bugün **üç paralel uyumluluk hattını** tek bir temiz-oda Rust çalışma alanı ([rust/Cargo.toml](../rust/Cargo.toml)) altında birleştirir:
+1. **Taşınabilir Bağımsız Çalışma Zamanı (`pearruntime` CLI — macOS & Linux ARM64):** Kendi çoklu-imaj Mach-O yükleyicisi ([`pear-dyld`](../rust/crates/pear-dyld)), Apple 64-bit Objective-C ABI'si ([`pear-libobjc`](../rust/crates/pear-libobjc)), Swift 5 çalışma zamanı ([`pear-swift-rt`](../rust/crates/pear-swift-rt)), saf-Rust `Foundation`/`CoreGraphics`/`NSURLSession` ([`pear-foundation`](../rust/crates/pear-foundation), [`pear-graphics`](../rust/crates/pear-graphics), [`pear-image`](../rust/crates/pear-image)) ve Metal → Vulkan/AIR/ASTC hattı ([`pear-metal-vk`](../rust/crates/pear-metal-vk)) ile `GenshinImpact.app` üzerinde `0` eksik sembol ve `0` gerçekleşmemiş sınıf ile Unity `il2cpp` açılışını, canlı HTTPS `query_region_list` (`200 OK`) isteğini ve `1280×720` kare çizimini tamamlar.
+2. **Yerel macOS `PearHost` Çerçeveleri (`build/host/`):** `/System/iOSSupport` ve Mac Catalyst kullanmadan, Apple silicon macOS üzerinde `GTA: Vice City – Definitive Edition` oyun içi sahnesine ve `Minecraft` dünya yüklemesine ulaşır.
+3. **32-bit `PearLegacyEngine` + `PearLegacyJIT`:** `armv6`/`armv7` iOS yapımları (ör. `Miku Flick`) için Dynarmic tabanlı yeniden derleyici ve uyumluluk motoru ([`third_party/legacy-engine`](../third_party/legacy-engine), [`third_party/legacy-jit`](../third_party/legacy-jit), [`pear-legacy-host`](../rust/crates/pear-legacy-host), [`pear-jit`](../rust/crates/pear-jit)).
 
-**Hedef (2026-11-14 itibarıyla):** önce macOS'ta, yalnızca Apple silicon ve
-yalnızca Metal ile sağlam bir altyapı. Linux, Vulkan, x86 ve PC arka uçları
-kapsam dışıdır; ilgili kod PearANGLE'dan da silindi.
+Güncel geliştirme devir notları ve doğrulama komutları için [HANDOFF.md](HANDOFF.md), tam göç ve bağımsızlık planı için [independence-plan.md](independence-plan.md), Linux ARM64 + Metal + Swift aşamaları için [linux-metal-swift-roadmap.md](linux-metal-swift-roadmap.md) belgelerine bakın.
 
+---
+
+## 1. Hedef ve Çok Katmanlı Mimari
+
+**Hedef:** Apple ikililerini Mac Catalyst dönüşümüne, `/System/iOSSupport` yığınına veya kapalı kaynaklı iOS çerçevelerine ihtiyaç duymadan; önce **macOS** ve **Linux ARM64**, ileride JIT destekli `x86_64` konaklar üzerinde temiz-oda Rust katmanlarıyla çalıştırmak. (Eski Mac Catalyst katmanları tamamen emekliye ayrılmış ve çalışma alanından kaldırılmıştır.)
+
+```text
+┌─────────────────────────── iOS / iPadOS Uygulaması (.app) ───────────────────────────┐
+│          64-bit arm64 Mach-O (+ @rpath/*.framework)   │     32-bit armv6/armv7       │
+├───────────────────────────┬───────────────────────────┼──────────────────────────────┤
+│ Taşınabilir Çalışma Zamanı│ Yerel macOS PearHost      │ 32-bit Legacy & JIT          │
+│ (`pearruntime` CLI)       │ (`build/host/*.framework`)│ (`PearLegacyEngine`)         │
+├───────────────────────────┼───────────────────────────┼──────────────────────────────┤
+│ • pear-macho / pear-dyld  │ • pear-uikit / pear-nib   │ • pear-legacy-host           │
+│ • pear-libobjc            │ • pear-metalkit           │ • pear-jit (Dynarmic)        │
+│ • pear-swift-rt           │ • pear-gles / pear-glkit  │ • third_party/legacy-engine  │
+│ • pear-runtime            │   (Metal-only PearANGLE)  │ • third_party/legacy-jit     │
+│ • pear-foundation         │ • pear-objc (statik ABI)  │                              │
+│ • pear-graphics/image     │ • pear-keychain           │                              │
+│ • pear-metal-vk           │ • pear-controller         │                              │
+├───────────────────────────┴───────────────────────────┴──────────────────────────────┤
+│ Ortak Konak Soyutlaması: pear-host (HostPlatform trait)                              │
+│   ↳ pear-host-macos (AppKit / QuartzCore / IOKit)                                    │
+│   ↳ pear-host-linux (X11 / Wayland / Vulkan / XDG)                                   │
+└──────────────────────────────────────────────────────────────────────────────────────┘
 ```
- ┌───────────────────────────── uygulama (iOS IPA) ─────────────────────────────┐
- │  arm64 iOS uygulaması                    │  32-bit iOS (armv6/armv7)          │
- ├──────────────────────────────────────────┼────────────────────────────────────┤
- │  PearHost (host/)                         │  PearLegacyEngine + PearLegacyJIT  │
- │   UIKit, MetalKit (UIView MTKView),       │   (touchHLE / Dynarmic çatalları,  │
- │   OpenGLES (EAGL) yeniden uygulamaları;   │    ARMv7 → arm64)                  │
- │   eksik çağrı raporlayıcısı               │                                    │
- ├──────────────────────────────────────────┴────────────────────────────────────┤
- │  macOS'un kendisi: libSystem, libobjc, CoreFoundation, Foundation, Metal,      │
- │  GameController, GameKit, StoreKit, AVFoundation … (iOSSupport hiç yüklenmez) │
- ├────────────────────────────────────────────────────────────────────────────────┤
- │  Grafik: Metal (doğrudan) ve OpenGL ES → PearANGLE (yalnızca Metal arka ucu)  │
- ├────────────────────────────────────────────────────────────────────────────────┤
- │  Pencere/girdi: AppKit arka ucu (host/uikit/backend/appkit)                   │
- └────────────────────────────────────────────────────────────────────────────────┘
-```
 
-Bugünkü Catalyst yolu (`rust/crates/pear-catalyst`, `build.sh`; tamamı Rust) duruyor ve
-PearSilicon'un varsayılanı olarak kalıyor. Yeni yol `host/` altında; uygulama
-başına seçilecek. PearANGLE'ın Catalyst derlemesi bu yüzden korunuyor.
+### İki 64-bit Yürütme Modeli Nasıl Çalışır?
 
-### Neden macOS platformu?
+- **Yerel macOS `PearHost` yolu (`tools/host-prepare.sh`):** Mach-O `LC_BUILD_VERSION` alanını **macOS** olarak yeniden etiketler; böylece sistem `dyld` çekirdek/sistem kütüphanelerini (`/System/Library/...`) doğrudan macOS'tan çözer ve `/System/iOSSupport` hiç yüklenmez. macOS'ta bulunmayan veya iOS ABI'sinden farklı olan çerçeveler (`UIKit`, `OpenGLES`, `MetalKit`, `GLKit`) Rust'tan statik Mach-O `__objc_classlist` verisi üreten [`pear-objc`](../rust/crates/pear-objc) ve `PearHost` görüntülerine yönlendirilir.
+- **Taşınabilir Bağımsız Yol (`pearruntime`):** Sistem `dyld` ve sistem `libobjc`/`Foundation` bağımlılığını da ortadan kaldırır. Misafir Mach-O imajını ve `@rpath` bağımlılıklarını [`pear-dyld`](../rust/crates/pear-dyld) haritalar, `objc_*` çağrılarını [`pear-libobjc`](../rust/crates/pear-libobjc) karşılar, Swift ABI sembollerini [`pear-swift-rt`](../rust/crates/pear-swift-rt) çözer ve grafik/ağ/güvenlik çağrıları [`pear-metal-vk`](../rust/crates/pear-metal-vk), [`pear-foundation`](../rust/crates/pear-foundation) ve [`pear-runtime`](../rust/crates/pear-runtime) üzerinden yürütülür. Böylece aynı çekirdek 12 crate Linux ARM64 ve macOS üzerinde özdeş biçimde derlenip test edilebilir.
 
-`tools/host-prepare.sh` uygulamanın Mach-O derleme sürümünü (LC_BUILD_VERSION)
-**macOS** olarak yeniden etiketler. Böylece dyld `/System/Library/...`
-yollarını macOS'un kendisinden çözer, `/System/iOSSupport` hiç devreye girmez.
-GameController, GameKit, StoreKit, AVFoundation, CoreMotion, UserNotifications
-gibi çerçevelerin macOS sürümleri aynı yolda bulunduğu için yeniden yazılması
-gerekmez (Linux'ta gerekir). macOS'ta karşılığı olmayanlar (UIKit, iAd,
-OpenGLES) ve macOS'taki karşılığı iOS ABI'sinden farklı olanlar (MetalKit:
-MTKView macOS'ta NSView) PearHost imajlarına yönlendirilir.
+---
 
-Uygulama, "iOS" yerine bizim sağladığımız bir platform üzerinde çalışır.
+## 2. Temiz Oda (Clean-Room) Kuralları
 
-## 2. Temiz oda kuralları
-
-Amaç: Apple kodunu kopyalamadan; arayüz ve gözlenen davranıştan uyumlu bir
-uygulama yazmak.
+Amaç: Apple'ın kapalı kaynaklı ikili kodlarını kopyalamadan veya tersine mühendislik uygulamadan; yalnızca kamuya açık arayüzlerden ve gözlemlenen kara kutu davranıştan uyumlu bir Rust uygulaması geliştirmek.
 
 **İzinli kaynaklar**
-- SDK'daki genel başlık dosyaları ve `.tbd` stub'ları: yalnızca arayüz bilgisi
-  (isim, imza, enum değeri, struct düzeni). Başlıklar depoya kopyalanmaz;
-  UIKit sınıflarımızın düzeni `rust/crates/pear-uikit/src/objc_classes.rs`'tedir.
-- Apple'ın genel belgeleri, WWDC oturumları.
-- Açık kaynak Apple kodu (`apple-oss-distributions/*`: xnu, dyld, objc4, CF,
-  Libc, libmalloc, …). Lisansı korunur (§3).
-- Analiz edilen uygulamanın kendi ikili dosyası: import listesi, selector
-  adları, çalışma zamanında yaptığı çağrılar (`tools/ios-import-census.py`,
-  eksik çağrı raporu).
-- Kendi test uygulamalarımızın gerçek iOS/iOSSupport üzerinde siyah kutu olarak
-  çalıştırılıp davranışının kaydedilmesi.
+- Kamuya açık SDK başlık dosyaları ve `.tbd` stub'ları: yalnızca arayüz bilgisi (sınıf/metot adı, imzalar, enum değerleri, struct yerleşimi). Başlık dosyaları depoya kopyalanmaz; UIKit sınıf yerleşimleri [`pear-uikit/src/objc_classes.rs`](../rust/crates/pear-uikit/src/objc_classes.rs), Metal/Foundation/Swift ABI yapıları ilgili crate'lerin kaynak dosyalarında tanımlanır.
+- Apple'ın kamuya açık geliştirici belgeleri, WWDC sunumları ve açık standartlar (Khronos Vulkan, SPIR-V, ASTC, PNG/JPEG/HTTP RFC'leri).
+- Açık kaynaklı Apple dağıtımları (`apple-oss-distributions/*`: `xnu`, `dyld`, `objc4`, `CF`, `Libc`, `libmalloc`, …) yalnızca **APSL 2.0** koşulları ve referans sınırları içinde (bkz. §3).
+- Çözümlenen misafir uygulamaların kendi import/selector envanteri ([`tools/ios-import-census.py`](../tools/ios-import-census.py), [`docs/census/`](census/) ve çalışma zamanı eksik-çağrı / `PEAR_MISSING_REPORT` JSONL çıktıları).
+- Kendi test uygulamalarımızın gerçek iOS/macOS üzerinde kara kutu olarak çalıştırılıp gözlemlenmesi.
 
-**Yasak (uygulayıcı için)**
-- `/System/iOSSupport` ve dyld shared cache içindeki Apple ikililerinin
-  disassembly/decompile'ı, `class-dump` çıktısı, özel metot gövdeleri.
+**Yasak (kesin sınır)**
+- `/System/iOSSupport` ve `dyld_shared_cache` içindeki Apple ikililerinin disassembly/decompile edilmesi, `class-dump` çıktıları veya özel metot gövdelerinin çıkarılması.
 - Sızdırılmış Apple kaynak kodu.
-- Bu tür materyalden türetilmiş notlar.
+- Bu tür materyalden türetilmiş tasarım notları veya kopya sabitler.
 
-**Uygulama**
-- Her dosyanın başında dayandığı kaynak yazılır (ör. "Clean-room: from the
-  public UIAlertController documentation").
-- Uygulamanın bir özel (private) anahtar/selector'a ihtiyaç duyduğu
-  görülürse, kaynağı **uygulamanın kendi davranışı** olarak not edilir (ör.
-  `UIDevice _feedbackSupportLevel`: GTA VC'nin KVC çağrısı, eksik çağrı
-  raporundan).
-- Tek geliştiricili düzende "spec ekibi" yoktur; bu yüzden ikili analiz hiç
-  yapılmaz, yalnızca siyah kutu gözlem yapılır.
+**Uygulama disiplini**
+- Yeni yazılan her temiz-oda modülün veya dosyanın başında dayandığı kaynak belirtilir (ör. `"Clean-room: from public Apple documentation / Khronos specification / observed app behavior"`).
+- Bir oyunun ihtiyaç duyduğu belgesiz bir anahtar veya selector saptandığında, kaynağı **uygulamanın gözlenen davranışı** olarak not edilir (ör. çalışma zamanı eksik-çağrı günlüğü veya `--list-missing` çıktısı).
+- Çekirdek çalışma zamanı crate'lerinde harici `crates.io` bağımlılığı tutulmaz (saf Rust + standart kütüphane ilkesi).
 
-## 3. Lisanslar
+---
 
-- PearRuntime: MIT. `host/` altındaki kod MIT ve tamamen bizim.
-- xnu, objc4, dyld, Libc, CF: **APSL 2.0** (dosya bazlı copyleft). Bu kodlar
-  kullanılacaksa `third_party/<proje>` altında, kendi lisans dosyasıyla, ayrı
-  tutulur; değiştirilen APSL dosyaların kaynağı yayımlanır. APSL 2.0, GPL ile
-  uyumsuzdur.
-- libdispatch, swift, swift-corelibs-foundation: Apache 2.0 (MIT ile uyumlu,
-  NOTICE korunur).
-- PearLegacyEngine MPL-2.0, PearLegacyJIT (Dynarmic) 0BSD/GPL bileşenleri
-  açısından ayrıca kontrol edilmeli.
-- PearANGLE: BSD-3 (ANGLE); dağıtılan üçüncü taraf lisansları `THIRD_PARTY_LICENSES.txt`.
+## 3. Lisanslar ve Üçüncü Taraf Sınırları
 
-## 4. xnu'nun rolü
+- **PearRuntime özgün Rust kodu:** [MIT Lisansı](../LICENSE). `rust/crates/*` altındaki tüm özgün crate'ler MIT lisanslıdır.
+- **APSL 2.0 (`xnu`, `objc4`, `dyld`, `Libc`, `CF`):** Yalnızca ABI/hata-kodu referansı olarak incelenir. Doğrudan kod alınması halinde `third_party/<proje>` altında kendi lisans dosyasıyla ayrı tutulur; çekirdek `rust/crates/*` içine APSL kodu karıştırılmaz (APSL 2.0, GPL ile uyumsuzdur).
+- **Apache-2.0 (`swift`, `swift-corelibs-foundation`, `swift-corelibs-libdispatch`):** MIT ile uyumludur (`NOTICE` korunur).
+- **PearANGLE (`third_party/angle`):** BSD-3-Clause; Metal-only arm64 ve Vulkan arka uçlarını içerir.
+- **PearLegacyEngine (`third_party/legacy-engine`) & PearLegacyJIT (`third_party/legacy-jit`):** MPL-2.0 / 0BSD / GPL-3.0 bileşenleri içerir; tam atıf ve bildirimler [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) içindedir.
 
-macOS hedefinde uygulama gerçek çekirdekle konuşur; xnu kaynakları sistem
-çağrısı davranışını anlamak için referanstır (ör. bir oyunun beklediği hata
-kodları, Mach port davranışı).
+---
 
-## 5. Yol haritası
+## 4. Konak ve Sistem Sınırı (`pear-host` & `pear-runtime`)
 
-| Aşama | Kapsam | Durum |
+- **macOS Hedefinde:** Uygulama `PearHost` kipinde çalışırken gerçek Darwin çekirdeğiyle konuşur; [`pear-host-macos`](../rust/crates/pear-host-macos) yalnızca AppKit, QuartzCore ve IOKit temasını üstlenir.
+- **Linux ARM64 ve Taşınabilir `pearruntime` Hedefinde:** [`pear-runtime`](../rust/crates/pear-runtime) Darwin `arm64` ABI farklarını (variadic çağrı düzeni, `errno` / sinyal numaraları, `stat`/`dirent`/`sockaddr` yerleşimleri, `os_unfair_lock`, `libdispatch`, Apple `libc++` `std::__1` uyumu, `NSURLSession`/`NSURLConnection` ağ yığını, `Security` katmanı) POSIX/Linux üzerine taşır; [`pear-host-linux`](../rust/crates/pear-host-linux) X11/Wayland/headless pencere ve yüzey yönetimini sağlar.
+
+---
+
+## 5. Yol Haritası Durumu (2026-11-27)
+
+| Aşama / Kilometre Taşı | Kapsam | Durum |
 | --- | --- | --- |
-| 0 | Sayım (census) ve eksik çağrı raporlayıcısı | bitti |
-| 1 | Oyunlar için UIKit çekirdeği (uygulama yaşam döngüsü, pencere, view, ekran, dokunma, uyarı) | GTA VC menüye ulaşıyor |
-| 2 | Oyun servisleri: girdi eşleme, pointer lock, sanal gamepad, depolama yolları; Catalyst modüllerinin host'a taşınması | sırada |
-| 3 | Genel UIKit: metin, kaydırma, tablo/koleksiyon, Auto Layout, gezinme | sonra |
-| 4 | SwiftUI | ayrı karar |
-| — | Linux / Vulkan / x86 | kapsam dışı (2026-11-14 kararı) |
+| **M1–M2** | Envanter, sayım (`census`), eksik-çağrı raporlayıcı ve Mac Catalyst'in kaldırılması | **Tamamlandı** |
+| **M3–M4** | `pear-host` sınırı (`pear-host-macos`), CoreText tabanlı `UIFont` ve saf-Rust [`pear-image`](../rust/crates/pear-image) / [`pear-graphics`](../rust/crates/pear-graphics) | **Tamamlandı** |
+| **M5–M8** | [`pear-macho`](../rust/crates/pear-macho), [`pear-dyld`](../rust/crates/pear-dyld), [`pear-libobjc`](../rust/crates/pear-libobjc), [`pear-foundation`](../rust/crates/pear-foundation) ve Vulkan-hazır `PearANGLE` | **Tamamlandı** |
+| **M9–M10** | [`pear-host-linux`](../rust/crates/pear-host-linux) + birleşik [`pear-runtime`](../rust/crates/pear-runtime) (Windows iptal; Linux-öncelikli) | **Tamamlandı** |
+| **Faz 1–4** | Çoklu-imaj `@rpath` yükleyici, [`pear-metal-vk`](../rust/crates/pear-metal-vk), [`pear-swift-rt`](../rust/crates/pear-swift-rt), `Security`/`Accelerate`/`Audio`/`UIKit` (`GenshinImpact.app` `0` eksik sembol) | **Tamamlandı** |
+| **Faz 5.1–5.19** | Unity `il2cpp` açılışı, Khronos ASTC LDR çözücü, tarama satırı rasterizer, gerçek `NSURLSession` / `NSURLConnection` HTTPS (`query_region_list` `200 OK` → `OnConnectGlobalDispatch`), `1280×720` UI çizimi | **Tamamlandı** |
+| **Faz 5.20+** | Dispatch sonrası `4204` / `SecKey` RSA akışının çözülmesi, 1:1 rasterizer hızlı yolu, tam Vulkan shader/GPU yürütmesi ve Linux ARM64 uçtan uca doğrulama | **Sürüyor** |
